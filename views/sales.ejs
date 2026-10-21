@@ -1,0 +1,15 @@
+<%- include('partials/head', { pageTitle: '営業モード ― ' + SERVICE_NAME }) %>
+<section class="hero sales-hero">
+  <span class="sales-badge">営業モード</span>
+  <h1>その場で<em>ホームページ診断</em></h1>
+  <p class="lead">お客様サイトのURLを入れると、すぐに全項目の結果が出ます。<br>そのまま画面を見せて商談にお使いください。</p>
+  <% if (error) { %><div class="alert"><%= error %></div><% } %>
+  <form class="scan-form" method="post" action="/sales/scan">
+    <input name="url" type="text" inputmode="url" autocomplete="off"
+           placeholder="example.co.jp または https://example.co.jp" required autofocus>
+    <button type="submit">今すぐ診断する</button>
+  </form>
+  <p class="note">※ お客様の許可を得たサイトを診断してください。攻撃的な検査は行いません。</p>
+  <p class="note"><a href="/sales/logout">ログアウト</a></p>
+</section>
+<%- include('partials/foot') %>

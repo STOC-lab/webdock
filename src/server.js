@@ -18,6 +18,7 @@ const PORT = Number(process.env.PORT || 3020);
 const SERVICE_NAME = process.env.SERVICE_NAME || 'WEBドック';
 const OPERATOR_NAME = process.env.OPERATOR_NAME || '株式会社エストック';
 const SECRET = process.env.WEBDOCK_SECRET || 'dev-insecure-secret-change-me';
+const SALES_PIN = process.env.SALES_PIN || 'stoc'; // 営業・商談版の合言葉。本番は必ず変更
 
 const app = express();
 app.set('view engine', 'ejs');
@@ -53,6 +54,25 @@ function clientIp(req) {
 }
 function domainOf(u) {
   try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+
+// ---- 営業・商談版(/sales)の合言葉認証 ----
+const SALES_COOKIE = crypto.createHmac('sha256', SECRET).update('sales-auth:' + SALES_PIN).digest('hex').slice(0, 32);
+function parseCookies(req) {
+  const out = {};
+  (req.headers.cookie || '').split(';').forEach((p) => {
+    const i = p.indexOf('=');
+    if (i > 0) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim());
+  });
+  return out;
+}
+function salesAuthed(req) {
+  return parseCookies(req).sales_auth === SALES_COOKIE;
+}
+// 重要度の高い順に並べる(要精密検査→要注意→判定不可→異常なし)
+const SEVERITY = { bad: 0, warn: 1, unknown: 2, ok: 3 };
+function sortBySeverity(results) {
+  return [...results].sort((a, b) => SEVERITY[a.status] - SEVERITY[b.status]);
 }
 
 app.get('/', (req, res) => res.render('index', { error: null }));
@@ -122,6 +142,52 @@ app.get('/karte/:id', async (req, res) => {
   if (!scan) return res.status(404).render('index', { error: '診断結果が見つかりませんでした。' });
   const company = COMPANY_INFO[req.query.c] ? req.query.c : null;
   res.render('karte', { scan, company, companyInfo: company ? COMPANY_INFO[company] : null });
+});
+
+// ===== 営業・商談版 =====
+
+// 入口(未認証ならPIN入力、認証済みならURL入力画面)
+app.get('/sales', (req, res) => {
+  if (!salesAuthed(req)) return res.render('sales_login', { error: null });
+  res.render('sales', { error: null });
+});
+
+// 合言葉の照合
+app.post('/sales/login', (req, res) => {
+  const pin = (req.body.pin || '').trim();
+  if (pin !== SALES_PIN) {
+    return res.status(401).render('sales_login', { error: '合言葉が違います。' });
+  }
+  // 署名付きクッキーを発行(12時間)
+  res.setHeader('Set-Cookie', `sales_auth=${SALES_COOKIE}; HttpOnly; SameSite=Lax; Max-Age=43200; Path=/sales`);
+  res.redirect('/sales');
+});
+
+app.get('/sales/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'sales_auth=; HttpOnly; Max-Age=0; Path=/sales');
+  res.redirect('/sales');
+});
+
+// その場診断 → フォームなしで即フルカルテ
+app.post('/sales/scan', async (req, res) => {
+  if (!salesAuthed(req)) return res.status(401).render('sales_login', { error: 'もう一度ログインしてください。' });
+  const ip = clientIp(req);
+  let input = (req.body.url || '').trim();
+  if (input && !/^https?:\/\//i.test(input)) input = 'https://' + input;
+  try {
+    const page = await fetchHomepage(input);
+    const { results, counts, score, grade } = await runChecks(page);
+    const scan = {
+      domain: domainOf(input), url: page.finalUrl,
+      score, grade, result: { results, counts, score, grade, finalUrl: page.finalUrl },
+    };
+    // 記録は残す(営業現地診断)。失敗しても画面は出す。
+    try { await db.saveScan({ ...scan, source: 'sales', ip }); } catch (e) { console.error('sales saveScan:', e.message); }
+    res.render('sales_result', { scan, items: sortBySeverity(results), companyInfo: COMPANY_INFO });
+  } catch (e) {
+    const msg = e && e.userSafe ? e.message : '診断中にエラーが発生しました。URLをご確認ください。';
+    res.status(400).render('sales', { error: msg });
+  }
 });
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));

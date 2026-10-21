@@ -1,0 +1,57 @@
+<%- include('partials/head', { pageTitle: '診断結果 ― 営業モード' }) %>
+<% const sc = scan.result; const problems = (sc.counts.bad||0)+(sc.counts.warn||0); %>
+
+<div class="sales-bar">
+  <span class="sales-badge">営業モード</span>
+  <a class="sales-again" href="/sales">別のサイトを診断</a>
+</div>
+
+<h1 class="page-title"><%= scan.domain %> の診断結果</h1>
+<%- include('partials/grade', { scan }) %>
+
+<% if (problems > 0) { %>
+<section class="sales-alert">
+  <strong>対策をおすすめする項目が <%= problems %> 件</strong> 見つかりました。
+  下の「要精密検査」「要注意」をご覧ください。
+</section>
+<% } %>
+
+<!-- 提案の出し分け(TOC/STOC切替) -->
+<section class="offer-switch">
+  <div class="offer-tabs">
+    <button type="button" class="offer-tab active" data-target="offer-TOC">訪問で対策(TOC)</button>
+    <button type="button" class="offer-tab" data-target="offer-STOC">オンライン/サイト(STOC)</button>
+  </div>
+  <div id="offer-TOC" class="offer-pane">
+    <h3>ご提案</h3>
+    <p><%= companyInfo.TOC.offer %></p>
+    <p class="contact">お問い合わせ: <strong><%= companyInfo.TOC.tel %></strong></p>
+  </div>
+  <div id="offer-STOC" class="offer-pane" hidden>
+    <h3>ご提案</h3>
+    <p><%= companyInfo.STOC.offer %></p>
+    <p class="contact">お問い合わせ: <strong><%= companyInfo.STOC.tel %></strong></p>
+  </div>
+</section>
+
+<section class="all-items">
+  <% items.forEach(function(item){ %>
+    <%- include('partials/item', { item }) %>
+  <% }) %>
+</section>
+
+<section class="karte-note">
+  <p>この結果は、ホームページを<strong>外から見える範囲</strong>で点検したものです。「要精密検査」は、実際の影響を詳しく調べる価値がある項目です。</p>
+</section>
+
+<script>
+  document.querySelectorAll('.offer-tab').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('.offer-tab').forEach(function(b){ b.classList.remove('active'); });
+      document.querySelectorAll('.offer-pane').forEach(function(p){ p.hidden = true; });
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.target).hidden = false;
+    });
+  });
+</script>
+<%- include('partials/foot') %>

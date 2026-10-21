@@ -107,6 +107,23 @@ a{color:var(--blue)}
 .about h2{font-size:17px;border-left:4px solid var(--blue);padding-left:10px;margin-top:22px}
 code{background:#eef2f8;padding:2px 6px;border-radius:5px;font-size:13px}
 
+/* ---- 営業モード ---- */
+.sales-badge{display:inline-block;background:#15243b;color:#fff;font-size:12px;font-weight:700;
+  padding:4px 12px;border-radius:999px;letter-spacing:.08em;margin-bottom:10px}
+.sales-hero{background:linear-gradient(160deg,#ffffff,#eaf0f8);border-color:#cdd8ea}
+.sales-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.sales-again{font-size:14px;font-weight:700;background:var(--blue);color:#fff;padding:8px 14px;border-radius:8px;text-decoration:none}
+.sales-again:hover{background:var(--blue-d)}
+.sales-alert{background:#fdf0e6;border:1px solid #f0cba3;border-left:5px solid var(--warn);
+  border-radius:12px;padding:14px 18px;margin:0 0 18px;font-size:16px}
+.offer-switch{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:16px 0 22px;box-shadow:var(--shadow)}
+.offer-tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.offer-tab{flex:1;min-width:160px;background:#eef2f8;color:var(--muted);border:1.5px solid var(--line);
+  border-radius:10px;padding:11px;font-size:15px;font-weight:700;cursor:pointer}
+.offer-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+.offer-pane h3{margin:.2em 0;font-size:16px;color:var(--blue-d)}
+.offer-pane .contact{font-size:17px;margin:8px 0 0}
+
 @media(max-width:620px){
   .points{grid-template-columns:1fr}
   .grid10{grid-template-columns:1fr}
