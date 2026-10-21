@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= typeof pageTitle !== 'undefined' ? pageTitle : SERVICE_NAME %></title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="/">
+    <span class="brand-mark">◉</span>
+    <span class="brand-name"><%= SERVICE_NAME %></span>
+    <span class="brand-sub">ホームページ健康診断</span>
+  </a>
+  <span class="brand-op"><%= OPERATOR_NAME %></span>
+</header>
+<main class="wrap">

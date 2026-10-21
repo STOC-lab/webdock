@@ -1,0 +1,46 @@
+<%- include('partials/head', { pageTitle: SERVICE_NAME + ' ― ホームページ健康診断' }) %>
+
+<section class="hero">
+  <h1>御社ホームページの<br><em>“健康状態”</em>を無料でチェック</h1>
+  <p class="lead">URLを入れるだけ。約30秒で、セキュリティの弱点を<strong>A〜E</strong>で判定します。<br>専門知識は一切不要です。</p>
+
+  <% if (error) { %><div class="alert"><%= error %></div><% } %>
+
+  <form class="scan-form" method="post" action="/scan">
+    <label class="sr-only" for="url">ホームページのURL</label>
+    <input id="url" name="url" type="text" inputmode="url" autocomplete="off"
+           placeholder="example.co.jp または https://example.co.jp" required>
+    <% if (TURNSTILE_SITEKEY) { %>
+      <div class="cf-turnstile" data-sitekey="<%= TURNSTILE_SITEKEY %>"></div>
+    <% } %>
+    <button type="submit">無料で診断する</button>
+  </form>
+  <p class="note">※ 診断できるのは自社サイトなど、ご自身が確認してよいサイトに限ります。</p>
+</section>
+
+<section class="points">
+  <div class="point"><span class="pi">1</span><h3>URLを入力</h3><p>会社のホームページのアドレスを貼り付けるだけ。</p></div>
+  <div class="point"><span class="pi">2</span><h3>その場で判定</h3><p>外から見える範囲を点検し、総合評価を表示します。</p></div>
+  <div class="point"><span class="pi">3</span><h3>カルテを受け取る</h3><p>詳しい結果と対処法は、メールでお届けします。</p></div>
+</section>
+
+<section class="checklist-intro">
+  <h2>チェックする10項目</h2>
+  <ul class="grid10">
+    <li>SSL証明書の有効期限</li>
+    <li>HTTPSへの自動転送</li>
+    <li>古い暗号方式(TLS)の利用</li>
+    <li>セキュリティ用ヘッダー設定</li>
+    <li>Cookieの保護設定</li>
+    <li>混在コンテンツ</li>
+    <li>CMSのバージョン露出</li>
+    <li>古いJavaScriptライブラリ</li>
+    <li>外部スクリプトの送信先</li>
+    <li>メールのなりすまし対策</li>
+  </ul>
+</section>
+
+<% if (TURNSTILE_SITEKEY) { %>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+<% } %>
+<%- include('partials/foot') %>

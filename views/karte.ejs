@@ -1,0 +1,29 @@
+<%- include('partials/head', { pageTitle: '診断カルテ ― ' + SERVICE_NAME }) %>
+<% const items = scan.result.results; %>
+
+<h1 class="page-title">ホームページ健康診断カルテ</h1>
+<%- include('partials/grade', { scan }) %>
+
+<section class="karte-note">
+  <p>この結果は、御社ホームページを<strong>外から見える範囲</strong>で点検したものです。「要精密検査」は、実際にどこまで影響があるかを詳しく調べる価値がある項目です。ご不明点はお気軽にご連絡ください。</p>
+</section>
+
+<section class="all-items">
+  <% items.forEach(function(item){ %>
+    <%- include('partials/item', { item }) %>
+  <% }) %>
+</section>
+
+<section class="cta">
+  <h2>「要精密検査」が気になる方へ</h2>
+  <% if (companyInfo) { %>
+    <p>担当者が、結果の見方と改善の進め方を無料でご説明します(<%= companyInfo.channel %>対応)。</p>
+    <p>ご提案できること: <strong><%= companyInfo.offer %></strong></p>
+    <p class="contact">お問い合わせ: <strong><%= companyInfo.tel %></strong></p>
+  <% } else { %>
+    <p><%= OPERATOR_NAME %>の担当者が、結果の見方と改善の進め方を無料でご説明します。</p>
+    <p class="contact">お問い合わせ: <strong>0120-830-046</strong></p>
+  <% } %>
+</section>
+
+<%- include('partials/foot') %>

@@ -1,0 +1,11 @@
+<% const labels = { ok:'異常なし', warn:'要注意', bad:'要精密検査', unknown:'判定不可' }; %>
+<div class="item item-<%= item.status %>">
+  <div class="item-head">
+    <span class="badge badge-<%= item.status %>"><%= labels[item.status] %></span>
+    <h3><%= item.title %></h3>
+  </div>
+  <p class="item-summary"><%= item.summary %></p>
+  <% if (item.why) { %><p class="item-why"><strong>なぜ重要か:</strong> <%= item.why %></p><% } %>
+  <% if (item.fix) { %><p class="item-fix"><strong>対処法:</strong> <%= item.fix %></p><% } %>
+  <% if (item.evidence) { %><p class="item-ev">根拠: <%= item.evidence %></p><% } %>
+</div>

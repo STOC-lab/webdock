@@ -1,0 +1,14 @@
+<% const g = scan.grade || '—'; const sc = scan.result; %>
+<section class="grade-block grade-<%= g %>">
+  <div class="grade-badge"><span class="g"><%= g %></span></div>
+  <div class="grade-meta">
+    <p class="grade-domain"><%= scan.domain %></p>
+    <p class="grade-score"><%= scan.score != null ? scan.score + ' / 100 点' : 'スコア算出不可' %></p>
+    <div class="counts">
+      <span class="c c-bad">要精密検査 <%= sc.counts.bad || 0 %></span>
+      <span class="c c-warn">要注意 <%= sc.counts.warn || 0 %></span>
+      <span class="c c-ok">異常なし <%= sc.counts.ok || 0 %></span>
+      <% if (sc.counts.unknown) { %><span class="c c-unknown">判定不可 <%= sc.counts.unknown %></span><% } %>
+    </div>
+  </div>
+</section>

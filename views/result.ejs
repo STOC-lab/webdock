@@ -1,0 +1,46 @@
+<%- include('partials/head', { pageTitle: '診断結果 ― ' + SERVICE_NAME }) %>
+<% const items = scan.result.results; const preview = items.slice(0,3); const rest = items.slice(3); %>
+
+<h1 class="page-title">簡易診断の結果</h1>
+<%- include('partials/grade', { scan }) %>
+
+<section class="preview">
+  <h2>主要項目(抜粋)</h2>
+  <% preview.forEach(function(item){ %>
+    <%- include('partials/item', { item }) %>
+  <% }) %>
+</section>
+
+<section class="locked">
+  <div class="locked-list" aria-hidden="true">
+    <% rest.forEach(function(item){ %>
+      <div class="item item-locked">
+        <div class="item-head"><span class="badge">？</span><h3><%= item.title %></h3></div>
+        <p class="item-summary blur">診断結果はカルテでご確認いただけます</p>
+      </div>
+    <% }) %>
+  </div>
+
+  <div class="lead-card">
+    <h2>残り<%= rest.length %>項目の詳しい「カルテ」を無料でお受け取りください</h2>
+    <p>各項目の<strong>危険度・なぜ重要か・具体的な直し方</strong>をまとめた診断カルテを、その場で表示します。</p>
+    <% if (typeof leadError !== 'undefined' && leadError) { %><div class="alert"><%= leadError %></div><% } %>
+    <form class="lead-form" method="post" action="/lead">
+      <input type="hidden" name="scan_id" value="<%= scan.id %>">
+      <label>会社名<input name="company" required placeholder="株式会社○○"></label>
+      <label>ご担当者名<input name="contact_name" required placeholder="山田 太郎"></label>
+      <label>所在地(都道府県)
+        <select name="prefecture" required>
+          <option value="" disabled selected>選択してください</option>
+          <% prefectures.forEach(function(p){ %><option value="<%= p %>"><%= p %></option><% }) %>
+        </select>
+      </label>
+      <label>メールアドレス<input name="email" type="email" required placeholder="you@example.co.jp"></label>
+      <label>電話番号<input name="phone" required placeholder="079-000-0000"></label>
+      <button type="submit">カルテを見る(無料)</button>
+      <p class="note">ご入力いただいた内容は、診断結果のご説明・ご連絡のために利用します。</p>
+    </form>
+  </div>
+</section>
+
+<%- include('partials/foot') %>

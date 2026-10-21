@@ -1,0 +1,17 @@
+<%- include('partials/head', { pageTitle: 'このサービスについて ― ' + SERVICE_NAME }) %>
+<h1 class="page-title">このサービスについて</h1>
+<section class="about">
+  <p><%= SERVICE_NAME %> は、<%= OPERATOR_NAME %> が提供する無料のホームページ点検サービスです。</p>
+  <h2>何を見ていますか?</h2>
+  <p>入力されたURLのトップページに、通常のブラウザと同じようにアクセスし、<strong>外から見える情報だけ</strong>(通信の暗号化設定、各種セキュリティヘッダー、公開されているバージョン情報、メールのなりすまし対策の有無など)を確認します。</p>
+  <h2>やらないこと</h2>
+  <ul>
+    <li>サイトへの侵入テストや攻撃(不正アクセスにあたる行為)は一切行いません。</li>
+    <li>ログインの試行やパスワードの推測は行いません。</li>
+    <li>診断時のアクセスは <code>WEBDock-Scanner/1.0</code> として正直に名乗ります。</li>
+  </ul>
+  <h2>ご利用上のお願い</h2>
+  <p>診断は、ご自身が管理する、または確認の許可を得たサイトに対してのみご利用ください。</p>
+  <p class="contact">お問い合わせ: <strong>0120-830-046</strong></p>
+</section>
+<%- include('partials/foot') %>
