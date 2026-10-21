@@ -305,6 +305,16 @@ async function runChecks(page) {
   ];
   const mail = await checkMailSpoofing(page);
   const results = [...sync, mail];
+
+  // 解決方法の区分: site=ホームページのリニューアルで解消 / dns=ドメイン(メール)設定が別途必要
+  const REMEDY = {
+    cert: 'site', https_redirect: 'site', tls_version: 'site',
+    headers: 'site', cookies: 'site', mixed: 'site',
+    cms: 'site', js_libs: 'site', ext_scripts: 'site',
+    mail: 'dns',
+  };
+  results.forEach((r) => { r.remedy = REMEDY[r.key] || 'site'; });
+
   const counts = results.reduce((a, r) => { a[r.status] = (a[r.status] || 0) + 1; return a; }, {});
   const { score, grade } = scoreOf(results);
   return { results, counts, score, grade };

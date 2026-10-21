@@ -9,10 +9,25 @@
 <h1 class="page-title"><%= scan.domain %> の診断結果</h1>
 <%- include('partials/grade', { scan }) %>
 
+<% const flagged = items.filter(function(i){ return i.status==='bad'||i.status==='warn'; });
+   const siteN = flagged.filter(function(i){ return i.remedy==='site'; }).length;
+   const dnsN  = flagged.filter(function(i){ return i.remedy==='dns'; }).length; %>
 <% if (problems > 0) { %>
 <section class="sales-alert">
   <strong>対策をおすすめする項目が <%= problems %> 件</strong> 見つかりました。
-  下の「要精密検査」「要注意」をご覧ください。
+</section>
+<section class="remedy-summary">
+  <p class="rs-title">この結果はこうすれば良くなります</p>
+  <% if (siteN > 0) { %>
+    <div class="rs-row rs-site"><span class="rs-dot">🔵</span>
+      <span><strong><%= siteN %>件</strong> は <strong>ホームページのリニューアル</strong>で解消できます</span>
+    </div>
+  <% } %>
+  <% if (dnsN > 0) { %>
+    <div class="rs-row rs-dns"><span class="rs-dot">🟠</span>
+      <span><strong><%= dnsN %>件</strong> は <strong>メール(ドメイン)の設定</strong>が別途必要です<br><small>※ サイトを作り直しても直りません。DNSの設定で対応します</small></span>
+    </div>
+  <% } %>
 </section>
 <% } %>
 

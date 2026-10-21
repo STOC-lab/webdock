@@ -107,6 +107,17 @@ a{color:var(--blue)}
 .about h2{font-size:17px;border-left:4px solid var(--blue);padding-left:10px;margin-top:22px}
 code{background:#eef2f8;padding:2px 6px;border-radius:5px;font-size:13px}
 
+/* ---- 解決方法タグ ---- */
+.item-remedy{display:inline-block;margin:8px 0 2px;padding:6px 12px;border-radius:8px;font-size:14px;font-weight:700}
+.remedy-site{background:#e7f0fd;color:var(--blue-d);border:1px solid #bcd6f5}
+.remedy-dns{background:#fdf0e1;color:#9a5a12;border:1px solid #f0cd99}
+.remedy-summary{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 20px;box-shadow:var(--shadow)}
+.rs-title{margin:0 0 10px;font-weight:800;font-size:16px}
+.rs-row{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;margin:6px 0;font-size:15px}
+.rs-site{background:#eef5fe} .rs-dns{background:#fdf4e8}
+.rs-dot{font-size:18px;line-height:1.4}
+.rs-row small{color:var(--muted)}
+
 /* ---- 営業モード ---- */
 .sales-badge{display:inline-block;background:#15243b;color:#fff;font-size:12px;font-weight:700;
   padding:4px 12px;border-radius:999px;letter-spacing:.08em;margin-bottom:10px}
