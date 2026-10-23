@@ -107,6 +107,17 @@ a{color:var(--blue)}
 .about h2{font-size:17px;border-left:4px solid var(--blue);padding-left:10px;margin-top:22px}
 code{background:#eef2f8;padding:2px 6px;border-radius:5px;font-size:13px}
 
+/* ---- 健康診断風の判定・読みやすさ強化 ---- */
+.item-head{flex-wrap:wrap}
+.judge{display:inline-flex;align-items:baseline;gap:4px;padding:4px 12px;border-radius:8px;border:2px solid currentColor;line-height:1.1}
+.judge small{font-size:13px;font-weight:700}
+.judge b{font-size:24px;font-weight:900}
+.judge-ok{color:var(--ok)} .judge-warn{color:#b8770f} .judge-bad{color:var(--bad)} .judge-unknown{color:var(--unknown)}
+.item .badge{font-size:14.4px;padding:4px 12px}            /* 要精密検査など 1.2倍 */
+.item .item-summary{font-size:1.2em;margin:10px 0 6px}      /* 指摘の一言 1.2倍 */
+.item .item-why{color:#15243b;font-size:15.5px;font-weight:500;line-height:1.8}
+.item .item-why strong{color:#15243b;font-weight:800}
+
 /* ---- 解決方法タグ ---- */
 .item-remedy{display:inline-block;margin:8px 0 2px;padding:6px 12px;border-radius:8px;font-size:14px;font-weight:700}
 .remedy-site{background:#e7f0fd;color:var(--blue-d);border:1px solid #bcd6f5}
