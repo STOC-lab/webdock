@@ -1,0 +1,20 @@
+# ===== WEBドック推奨セキュリティ設定 ここから =====
+# 貼る場所: public_html/.htaccess の「一番上」(# BEGIN WordPress より上)
+
+# 1) http でのアクセスを https へ常時転送
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteCond %{HTTPS} !on
+RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+</IfModule>
+
+# 2) セキュリティ用ヘッダー + PHPバージョン表示の削除
+<IfModule mod_headers.c>
+Header always set Strict-Transport-Security "max-age=31536000"
+Header always set X-Frame-Options "SAMEORIGIN"
+Header always set X-Content-Type-Options "nosniff"
+Header always set Content-Security-Policy "upgrade-insecure-requests; frame-ancestors 'self'"
+Header always unset X-Powered-By
+Header unset X-Powered-By
+</IfModule>
+# ===== WEBドック推奨セキュリティ設定 ここまで =====

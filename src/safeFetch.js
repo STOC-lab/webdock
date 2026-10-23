@@ -141,6 +141,8 @@ function fetchOneHop(u, pinnedIp, deadline) {
       },
       timeout: Math.min(remaining, 10000),
       servername: u.hostname,    // SNI
+      // 接続の使い回し・TLSセッション再開を無効化(再開時は証明書情報が空になるため)
+      agent: false,
       // 証明書エラーも「診断結果」として知りたいので検証は無効化し、結果はauthorizedで判定
       rejectUnauthorized: false,
     };

@@ -140,9 +140,10 @@ function checkMixedContent(page) {
   }
   const body = page.body || '';
   const m = body.match(/(?:src|href)\s*=\s*["']http:\/\/[^"']+/gi) || [];
-  // データ系・自サイト以外の実リソースのみ対象(http:のみ)
   const count = m.length;
-  const ev = `本文中の http:// リソース参照: ${count}件`;
+  const urls = [...new Set(m.map((s) => s.replace(/^(?:src|href)\s*=\s*["']/i, '')))];
+  const shown = urls.slice(0, 5).join(' / ');
+  const ev = `本文中の http:// リソース参照: ${count}件` + (count ? `(${shown}${urls.length > 5 ? ' ほか' : ''})` : '');
   if (count === 0) return { ...t, status: 'ok', summary: '暗号化されない読み込みは見つかりませんでした', why: '', fix: '', evidence: ev };
   if (count <= 3) return { ...t, status: 'warn', summary: `暗号化されない読み込みが一部あります(${count}件)`, why: '一部の画像やスクリプトがhttpのままで、「保護されていない通信」警告の原因になります。', fix: '制作会社にhttp://の読み込みをhttps://へ直すよう依頼してください。', evidence: ev };
   return { ...t, status: 'bad', summary: `暗号化されない読み込みが多数あります(${count}件)`, why: 'ページ内に暗号化されない読み込みが多く、安全警告や改ざんのリスクがあります。', fix: 'すべての読み込みをhttps://へ統一するよう依頼してください。', evidence: ev };
@@ -157,7 +158,8 @@ function checkCmsExposure(page) {
   const found = [];
   const gen = body.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i);
   if (gen) found.push(`generatorタグ: ${gen[1]}`);
-  const wpVer = body.match(/\bver=(\d+\.\d+(?:\.\d+)?)/);
+  // WordPress本体のバージョンが分かる wp-includes 配下の ?ver= のみを対象(プラグインのver=は対象外)
+  const wpVer = body.match(/wp-includes\/[^"'\s]+\?ver=(\d+\.\d+(?:\.\d+)?)/);
   const isWp = /wp-content|wp-includes/i.test(body);
   if (isWp && wpVer) found.push(`WordPress関連バージョン: ${wpVer[1]}`);
   if (h['x-powered-by']) found.push(`X-Powered-By: ${h['x-powered-by']}`);
