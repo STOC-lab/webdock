@@ -233,4 +233,40 @@ async function fetchHomepage(raw) {
   };
 }
 
-module.exports = { fetchHomepage, resolveSafely, isBlockedIp, validateUrl, USER_AGENT };
+/**
+ * 公開ファイルの先頭だけを安全に取得する(JSライブラリの版数コメントを読む用)。
+ * 既存と同じURL検査・名前解決検査・IP固定を通す。リダイレクトは追わない。失敗時は ''。
+ */
+async function fetchHead(raw, maxBytes = 4096, timeoutMs = 5000) {
+  let u, ip;
+  try {
+    u = validateUrl(raw);
+    ip = await resolveSafely(u.hostname);
+  } catch { return ''; }
+  return new Promise((resolve) => {
+    const isHttps = u.protocol === 'https:';
+    const lib = isHttps ? https : http;
+    let done = false;
+    const finish = (s) => { if (!done) { done = true; resolve(s); } };
+    const req = lib.request({
+      host: ip, port: u.port ? Number(u.port) : (isHttps ? 443 : 80),
+      method: 'GET', path: u.pathname + u.search,
+      headers: { Host: u.host, 'User-Agent': USER_AGENT, Range: `bytes=0-${maxBytes - 1}`, Connection: 'close' },
+      servername: u.hostname, rejectUnauthorized: false, agent: false, timeout: timeoutMs,
+    }, (res) => {
+      if (res.statusCode >= 300) { res.destroy(); return finish(''); }
+      const chunks = []; let total = 0;
+      res.on('data', (c) => {
+        chunks.push(c); total += c.length;
+        if (total >= maxBytes) { res.destroy(); finish(Buffer.concat(chunks).toString('utf8', 0, maxBytes)); }
+      });
+      res.on('end', () => finish(Buffer.concat(chunks).toString('utf8')));
+      res.on('error', () => finish(Buffer.concat(chunks).toString('utf8')));
+    });
+    req.on('timeout', () => { req.destroy(); finish(''); });
+    req.on('error', () => finish(''));
+    req.end();
+  });
+}
+
+module.exports = { fetchHomepage, fetchHead, resolveSafely, isBlockedIp, validateUrl, USER_AGENT };

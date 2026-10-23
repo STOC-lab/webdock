@@ -8,10 +8,6 @@
 const dns = require('dns').promises;
 const { URL } = require('url');
 
-// 既知の古いJavaScriptライブラリ(ファイル名からバージョンを拾える範囲)
-const OLD_LIB_RULES = [
-  { name: 'jQuery', re: /jquery[-.]?(\d+)\.(\d+)(?:\.(\d+))?(?:\.min)?\.js/i, safeMajorMinor: [3, 5] },
-];
 
 function daysBetween(a, b) {
   return Math.round((a.getTime() - b.getTime()) / (1000 * 60 * 60 * 24));
@@ -177,25 +173,80 @@ function checkCmsExposure(page) {
   };
 }
 
-function checkOldJsLibs(page) {
+// 既知の脆弱性が修正された最初の版(これ未満を「古い」と判定)
+const LIB_SAFE = {
+  'jQuery': [3, 5, 0],      // CVE-2020-11022/11023 (XSS)
+  'jQuery UI': [1, 13, 0],  // CVE-2021-41182 ほか (XSS)
+  'Bootstrap': [3, 4, 1],   // CVE-2019-8331 (XSS) ※4系は4.3.1以上
+};
+function verLess(v, safe) {
+  const a = v.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== safe[i]) return (a[i] || 0) < safe[i]; }
+  return false;
+}
+function isOld(name, ver) {
+  if (name === 'Bootstrap' && /^4\./.test(ver)) return verLess(ver, [4, 3, 1]);
+  if (name === 'Bootstrap' && /^[5-9]\./.test(ver)) return false;
+  return verLess(ver, LIB_SAFE[name]);
+}
+// script src からライブラリ名を判定
+function libNameOf(src) {
+  const s = src.toLowerCase();
+  if (/migrate/.test(s)) return null;
+  if (/jquery-?ui|jqueryui/.test(s)) return 'jQuery UI';
+  if (/bootstrap[^/]*\.js|\/bootstrap\/|bootstrap@/.test(s)) return 'Bootstrap';
+  if (/(^|\/)jquery([-.@][\d.]+)?(\.min|\.slim|\.slim\.min)?\.js|\/jquery\/\d|jquery@\d/.test(s)) return 'jQuery';
+  return null;
+}
+// URL(パス・?ver=)から版数を取り出す
+function verFromUrl(src) {
+  const path = src.split(/[?#]/)[0];
+  const m = path.match(/(?:[\/@-]|jquery|bootstrap|ui)v?(\d+\.\d+(?:\.\d+)?)(?=[\/.-]|$)/i);
+  if (m) return m[1];
+  const q = src.match(/[?&]ver=(\d+\.\d+(?:\.\d+)?)/);
+  return q ? q[1] : null;
+}
+// ファイル先頭のコメントから版数を読む
+function verFromHead(name, text) {
+  const re = {
+    'jQuery': /jQuery(?: JavaScript Library)? v?(\d+\.\d+\.\d+)/,
+    'jQuery UI': /jQuery UI - v?(\d+\.\d+\.\d+)/,
+    'Bootstrap': /Bootstrap v?(\d+\.\d+\.\d+)/,
+  }[name];
+  const m = re && text.match(re);
+  return m ? m[1] : null;
+}
+
+async function checkOldJsLibs(page) {
   const t = { key: 'js_libs', title: '古いJavaScriptライブラリ' };
   const body = page.body || '';
+  const srcs = [...body.matchAll(/<script[^>]+src\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]);
   const findings = [];
-  for (const rule of OLD_LIB_RULES) {
-    const m = body.match(rule.re);
-    if (m) {
-      const major = Number(m[1]);
-      const minor = Number(m[2] || 0);
-      const [sMaj, sMin] = rule.safeMajorMinor;
-      const old = major < sMaj || (major === sMaj && minor < sMin);
-      findings.push({ name: rule.name, ver: `${m[1]}.${m[2] || 0}${m[3] ? '.' + m[3] : ''}`, old });
+  const seen = new Set();
+  let headReads = 0;
+  for (const raw of srcs) {
+    const name = libNameOf(raw);
+    if (!name || seen.has(name)) continue;
+    let abs;
+    try { abs = new URL(raw, page.finalUrl).toString(); } catch { continue; }
+    let ver = verFromUrl(abs);
+    let how = 'URL';
+    if (!ver && headReads < 3) {
+      headReads++;
+      const { fetchHead } = require('./safeFetch');
+      const head = await fetchHead(abs);
+      ver = verFromHead(name, head);
+      how = 'ファイル先頭';
     }
+    if (!ver) continue;
+    seen.add(name);
+    findings.push({ name, ver, old: isOld(name, ver), how });
   }
   if (!findings.length) {
-    return { ...t, status: 'unknown', summary: 'バージョン付きの既知ライブラリは検出されませんでした', evidence: 'ファイル名からの判定のため、未検出でも使用していないとは限りません' };
+    return { ...t, status: 'unknown', summary: 'jQuery・Bootstrap等の主要ライブラリは確認できませんでした', evidence: 'ページから読み込まれる主要ライブラリが見つからない、または版数を特定できませんでした' };
   }
   const olds = findings.filter((f) => f.old);
-  const ev = findings.map((f) => `${f.name} ${f.ver}${f.old ? '(古い)' : ''}`).join(' / ');
+  const ev = findings.map((f) => `${f.name} ${f.ver}${f.old ? '(古い・既知の脆弱性あり)' : ''}`).join(' / ');
   if (!olds.length) return { ...t, status: 'ok', summary: '検出したライブラリは新しいバージョンでした', why: '', fix: '', evidence: ev };
   return {
     ...t, status: 'warn',
@@ -302,10 +353,11 @@ async function runChecks(page) {
     checkCookies(page),
     checkMixedContent(page),
     checkCmsExposure(page),
-    checkOldJsLibs(page),
     checkExternalScripts(page),
   ];
+  const jsLibs = await checkOldJsLibs(page);
   const mail = await checkMailSpoofing(page);
+  sync.splice(7, 0, jsLibs); // 表示順を従来どおりに
   const results = [...sync, mail];
 
   // 解決方法の区分: site=ホームページのリニューアルで解消 / dns=ドメイン(メール)設定が別途必要
