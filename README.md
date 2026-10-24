@@ -118,3 +118,55 @@ tail -f nohup.out
 - `outreach-config.json`: 差出人会社・担当者名・電話・所在地・実績(`所在地`は `【所在地】` のままなので要入力。`実績` が空なら該当行は自動で消える)
 
 テスト: `npm run test:batch`(ネットワーク不要)
+
+## 問い合わせフォーム事前調査(フォーム探し)
+
+営業先の公式サイトを通常の訪問者と同じように見て(トップページ+問い合わせページ候補を最大3つ、1サイト最大4ページ)、問い合わせフォームの有無とURL、公開されているメールアドレス(mailto等)、InstagramプロフィールURLを記録するバックグラウンド処理です。送信時間帯に関係なくいつでも動かせます。**フォームの送信・入力は一切しません**(ページを取得して読むだけ)。取得は既存の安全な取得処理(`src/safeFetch.js`)を使うため、URL・IPの安全規則もそのまま適用されます。robots.txtで禁止されている候補ページは取得しません。
+
+結果は営業DB(`stoc_sales`)の既存テーブルに書き込みます。
+- `store_contact_channels`: `inquiry_status`(`url_found` / `no_form`)、確認日時、メール・Instagramの発見状況。`sent` `confirmed` `failed` は上書きしません。
+- `contact_channel_candidates`: 見つかった問い合わせURL(`inquiry_url`)とメール(`email`)を `source='finder'` で追加。以前finderが記録した別URLは `is_active=0` にします(他の登録元の行は触りません)。
+
+### 1. 権限を絞ったDBユーザーを作る
+
+```sql
+CREATE USER 'stoc_finder'@'localhost' IDENTIFIED BY '（強いパスワード）';
+GRANT SELECT ON stoc_sales.stores TO 'stoc_finder'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON stoc_sales.store_contact_channels TO 'stoc_finder'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON stoc_sales.contact_channel_candidates TO 'stoc_finder'@'localhost';
+```
+
+`.env` に次を設定します(未設定の項目は括弧内の既定値)。
+
+```
+FINDER_DB_HOST=127.0.0.1
+FINDER_DB_PORT=3306
+FINDER_DB_USER=stoc_finder
+FINDER_DB_PASS=（上で決めたパスワード）
+FINDER_DB_NAME=stoc_sales
+```
+
+### 2. 最初はお試し実行(DBには書き込まない)
+
+```
+node cli/find-forms.js --dry-run --limit 50 --out data/forms-sample.csv
+```
+
+`data/forms-sample.csv`(Excelで開けます)を開き、「結果」「問い合わせURL」「種類」「画像認証」を目で確認します。問題なければ本番へ進みます。
+
+### 3. 本番実行
+
+```
+node cli/find-forms.js --limit 2000                         # 2000件だけDBへ書き込み
+pm2 start cli/find-forms.js --name form-finder -- --loop    # 常駐。500件ずつ処理し、対象がなくなると30分待って再確認
+```
+
+主なオプション: `--concurrency 5`(同時処理数)、`--prefecture 兵庫県`(都道府県で絞る)、`--recheck-days 90`(「フォームなし」を再調査するまでの日数)、`--error-retry-days 7`(エラーで状態が決まらなかったサイトを再試行するまでの日数)。同じドメインの店舗(チェーン店など)は1回だけ調べて全店舗に反映します。Ctrl+C(SIGINT)で新規の取得を止め、処理中のものが終わってから終了します。
+
+### 4. 件数の確認
+
+```
+mysql stoc_sales -e "SELECT inquiry_status, COUNT(*) FROM store_contact_channels GROUP BY inquiry_status;"
+```
+
+テスト: `npm run test:finder`(ネットワーク・DB不要)
