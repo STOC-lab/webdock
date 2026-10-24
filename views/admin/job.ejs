@@ -1,0 +1,44 @@
+<%- include('_head') %>
+<section class="adm-card" id="job" data-url="<%= BASE %>/jobs/<%= job.id %>/json" data-running="<%= job.status === 'running' ? '1' : '' %>">
+  <h1>#<%= job.id %> <%= job.title %></h1>
+  <p>状態: <span class="adm-badge adm-<%= job.status %>" id="status"><%= job.status === 'running' ? '実行中…' : job.status === 'success' ? '成功' : '失敗' %></span>
+    <span class="adm-help" id="times">開始 <%= fmtTime(job.startedAt) %><%= job.endedAt ? ' ／ 終了 ' + fmtTime(job.endedAt) : '' %></span></p>
+  <div id="dl"><% if (job.downloadUrl) { %>
+    <a class="adm-btn adm-link" href="<%= job.downloadUrl %>">CSVをダウンロード(<%= job.exportFile %>)</a>
+    <div class="adm-warn">出した店には「出力済み」の印が付いています。ダウンロードしてから画面を離れてください。</div>
+  <% } %></div>
+  <h3>実行のようす(最新500行)</h3>
+  <pre class="adm-log" id="log"><%= job.log.join('\n') %></pre>
+  <p><a href="<%= BASE %>/">状況へ戻る</a></p>
+</section>
+<script>
+(function () {
+  var box = document.getElementById('job');
+  if (!box.dataset.running) return;
+  var names = { running: '実行中…', success: '成功', failed: '失敗' };
+  function fmt(ms) { return ms ? new Date(ms).toLocaleString('ja-JP') : ''; }
+  function tick() {
+    fetch(box.dataset.url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      var log = document.getElementById('log');
+      log.textContent = j.log.join('\n');
+      log.scrollTop = log.scrollHeight;
+      var st = document.getElementById('status');
+      st.textContent = names[j.status] || j.status;
+      st.className = 'adm-badge adm-' + j.status;
+      document.getElementById('times').textContent = '開始 ' + fmt(j.startedAt) + (j.endedAt ? ' ／ 終了 ' + fmt(j.endedAt) : '');
+      if (j.status === 'running') { setTimeout(tick, 2000); return; }
+      if (j.downloadUrl) {
+        var dl = document.getElementById('dl');
+        dl.textContent = '';
+        var a = document.createElement('a');
+        a.className = 'adm-btn adm-link'; a.href = j.downloadUrl; a.textContent = 'CSVをダウンロード(' + j.exportFile + ')';
+        var w = document.createElement('div');
+        w.className = 'adm-warn'; w.textContent = '出した店には「出力済み」の印が付いています。ダウンロードしてから画面を離れてください。';
+        dl.appendChild(a); dl.appendChild(w);
+      }
+    }).catch(function () { setTimeout(tick, 4000); });
+  }
+  setTimeout(tick, 2000);
+})();
+</script>
+<%- include('_foot') %>

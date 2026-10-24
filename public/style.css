@@ -152,3 +152,44 @@ code{background:#eef2f8;padding:2px 6px;border-radius:5px;font-size:13px}
   .hero h1{font-size:24px}
   .grade-block{flex-direction:column;text-align:center}
 }
+
+/* ---- 倉庫の管理画面(/admin/warehouse) ---- */
+.adm-header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:12px 16px;background:#15243b;color:#fff}
+.adm-title{color:#fff;font-weight:800;font-size:18px;text-decoration:none}
+.adm-nav{display:flex;flex-wrap:wrap;gap:6px;flex:1}
+.adm-nav a{color:#cfe0f7;text-decoration:none;padding:8px 12px;border-radius:8px;font-size:15px}
+.adm-nav a.on,.adm-nav a:hover{background:#2a3f63;color:#fff}
+.adm-logout button{background:transparent;color:#cfe0f7;border:1px solid #4a6190;border-radius:8px;padding:7px 12px;cursor:pointer}
+.adm-wrap{max-width:960px;margin:0 auto;padding:20px 16px 48px}
+.adm-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin:0 0 18px}
+.adm-card h1{font-size:22px;margin:0 0 6px}
+.adm-card h2{font-size:18px;margin:0 0 8px}
+.adm-card h3{font-size:16px;margin:22px 0 8px;border-left:4px solid var(--blue);padding-left:8px}
+.adm-narrow{max-width:420px;margin:40px auto}
+.adm-help{display:block;font-size:13px;color:var(--muted);margin:2px 0 8px;font-weight:400}
+.adm-big{font-size:18px}.adm-big strong{font-size:30px;color:var(--blue-d)}
+.adm-input{width:100%;padding:12px 14px;font-size:16px;border:1.5px solid var(--line);border-radius:10px;background:#fff;margin:6px 0;font-family:inherit}
+.adm-short{width:140px;display:inline-block}
+.adm-btn{display:inline-block;background:var(--blue);color:#fff;border:0;border-radius:10px;padding:16px 22px;font-size:17px;font-weight:700;cursor:pointer;text-decoration:none;margin:6px 6px 6px 0}
+.adm-btn:hover{background:var(--blue-d)}
+.adm-btn:disabled{opacity:.5;cursor:default}
+.adm-btn2{background:#fff;color:var(--blue-d);border:2px solid var(--blue)}
+.adm-btn2:hover{background:#eef4fe}
+.adm-link{color:#fff}
+.adm-mini{background:#eef2f8;border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+.adm-actions{margin-top:20px}
+.adm-warn{background:#fdf0e6;border:1px solid #f0cba3;border-left:5px solid var(--warn);border-radius:10px;padding:12px 14px;margin:12px 0;font-size:14px}
+.adm-notice{background:#e8f6ee;border:1px solid #b9e0c9;border-radius:10px;padding:12px 14px;margin:0 0 16px}
+.adm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:4px 8px}
+.adm-check,.adm-radio{display:block;padding:6px 0;font-size:16px}
+.adm-check input,.adm-radio input{width:20px;height:20px;vertical-align:middle;margin-right:6px}
+.adm-sub{margin:8px 0 8px 26px}
+.adm-scroll{overflow-x:auto}
+.adm-table{border-collapse:collapse;width:100%;font-size:14px;white-space:nowrap}
+.adm-table th,.adm-table td{border-bottom:1px solid var(--line);padding:6px 10px;text-align:right}
+.adm-table th:first-child,.adm-table td:first-child{text-align:left}
+.adm-table th{background:#eef2f8}
+.adm-list{list-style:none;padding:0;margin:0}.adm-list li{padding:8px 0;border-bottom:1px solid var(--line)}
+.adm-badge{display:inline-block;border-radius:999px;padding:2px 12px;font-size:13px;font-weight:700;color:#fff;background:var(--unknown)}
+.adm-running{background:var(--warn)}.adm-success{background:var(--ok)}.adm-failed{background:var(--bad)}
+.adm-log{background:#0f1a2b;color:#d7e3f5;border-radius:10px;padding:12px;max-height:480px;overflow:auto;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all}

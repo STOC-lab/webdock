@@ -1,0 +1,79 @@
+<%- include('_head') %>
+<%
+  var f = form || {};
+  var sel = toArr(f.pref);
+  function toArr(v) { return v === undefined ? [] : Array.isArray(v) ? v : [v]; }
+  var preset = f.preset === 'b2b' ? 'b2b' : 'meo';
+  var size = f.size || 'none';
+  var formFound = form && Object.keys(form).length ? !!f.form_found : true;
+%>
+<section class="adm-card">
+  <h1>取り出し(営業管理に入れるCSVを作る)</h1>
+  <p class="adm-help">倉庫から、まだ営業管理に入っていない店を選んでCSV(Shift_JIS)にします。</p>
+  <form method="post" action="<%= BASE %>/export" id="exform">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+
+    <h3>1. どの県?</h3>
+    <p><button type="button" class="adm-mini" id="selall">全部選ぶ</button> <button type="button" class="adm-mini" id="selnone">全部外す</button></p>
+    <div class="adm-grid">
+      <% prefectures.forEach(function (p) { %>
+      <label class="adm-check"><input type="checkbox" name="pref" value="<%= p %>" <%= sel.indexOf(p) >= 0 ? 'checked' : '' %>> <%= p %></label>
+      <% }) %>
+    </div>
+
+    <h3>2. 何用?</h3>
+    <label class="adm-radio"><input type="radio" name="preset" value="meo" <%= preset === 'meo' ? 'checked' : '' %>> MEO用(飲食・美容など)<span class="adm-help">除外ルールをかけて、業種は絞りません。</span></label>
+    <label class="adm-radio"><input type="radio" name="preset" value="b2b" <%= preset === 'b2b' ? 'checked' : '' %>> 工場・建設用(UTM・PC PATROL)<span class="adm-help">主業種で絞り、除外ルールはかけません。</span></label>
+    <div id="b2bbox" class="adm-sub">
+      <label>主業種のキーワード(カンマ区切り)</label>
+      <textarea class="adm-input" name="main_category" rows="3"><%= f.main_category || defaultMain %></textarea>
+    </div>
+
+    <h3>3. 絞り込み</h3>
+    <label class="adm-check"><input type="checkbox" name="form_found" value="1" <%= formFound ? 'checked' : '' %>> フォームが見つかった店だけ</label>
+    <p class="adm-help">会社の規模:</p>
+    <label class="adm-radio"><input type="radio" name="size" value="exclude_large" <%= size === 'exclude_large' ? 'checked' : '' %>> 大きい会社を外す<span class="adm-help">規模が未調査・不明の会社は残ります。</span></label>
+    <label class="adm-radio"><input type="radio" name="size" value="small_only" <%= size === 'small_only' ? 'checked' : '' %>> 小規模と確認できた会社だけ</label>
+    <label class="adm-radio"><input type="radio" name="size" value="none" <%= size === 'none' ? 'checked' : '' %>> 絞らない</label>
+    <p class="adm-help">※ 規模で絞るには、先に「会社の規模チェック」を済ませておく必要があります。</p>
+    <label>上限件数 <input class="adm-input adm-short" type="number" name="limit" min="1" value="<%= f.limit || 5000 %>"></label>
+
+    <div class="adm-actions">
+      <button class="adm-btn adm-btn2" type="submit" name="action" value="report">件数を確認(CSVは作らない)</button>
+      <button class="adm-btn" type="submit" name="action" value="make" id="makebtn">CSVを作る</button>
+    </div>
+    <div class="adm-warn">「CSVを作る」を押すと、出した店には「出力済み」の印が付き、次回からは出ません。作ったCSVは必ずダウンロードしてから画面を離れてください(下の一覧からあとでもダウンロードできます)。</div>
+  </form>
+</section>
+<section class="adm-card">
+  <h2>作ったCSV</h2>
+  <% if (!exports.length) { %><p class="adm-help">まだありません。</p><% } else { %>
+  <ul class="adm-list">
+    <% exports.forEach(function (x) { %>
+    <li><a href="<%= BASE %>/exports/<%= x.name %>"><%= x.name %></a> <span class="adm-help"><%= fmtSize(x.size) %> ・ <%= fmtTime(x.mtime) %></span></li>
+    <% }) %>
+  </ul>
+  <% } %>
+</section>
+<script>
+(function () {
+  var form = document.getElementById('exform');
+  var box = document.getElementById('b2bbox');
+  function sync() { box.style.display = form.preset.value === 'b2b' ? '' : 'none'; }
+  Array.prototype.forEach.call(form.preset, function (r) {
+    r.addEventListener('change', function () {
+      sync();
+      // 工場・建設用は「大きい会社を外す」、MEO用は「絞らない」を初期値にする
+      form.size.value = r.value === 'b2b' ? 'exclude_large' : 'none';
+    });
+  });
+  sync();
+  function all(v) { Array.prototype.forEach.call(form.querySelectorAll('input[name=pref]'), function (c) { c.checked = v; }); }
+  document.getElementById('selall').onclick = function () { all(true); };
+  document.getElementById('selnone').onclick = function () { all(false); };
+  document.getElementById('makebtn').addEventListener('click', function (e) {
+    if (!confirm('CSVを作ると、出した店に「出力済み」の印が付き、次回からは出なくなります。作りますか?')) e.preventDefault();
+  });
+})();
+</script>
+<%- include('_foot') %>

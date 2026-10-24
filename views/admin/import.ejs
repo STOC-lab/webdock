@@ -1,0 +1,21 @@
+<%- include('_head') %>
+<section class="adm-card">
+  <h1>取り込み</h1>
+  <p class="adm-help">収集ツールでできた <code>gmp_〇〇.csv</code>(またはそれをまとめた .zip)を選ぶと、倉庫に取り込みます。取り込みの最後に、営業管理に同じ店があれば自動でひも付けます。</p>
+  <form method="post" action="<%= BASE %>/import" enctype="multipart/form-data" id="upform">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <label class="adm-check"><input type="checkbox" name="dry_run" value="1"> ドライラン(取り込まずに確認だけ)</label>
+    <p class="adm-help">チェックすると倉庫には書き込まず、ファイルごとの件数だけ表示します。最初はこれで試すと安心です。</p>
+    <input class="adm-input" type="file" name="files" multiple accept=".csv,.zip" required>
+    <p class="adm-help">1ファイル <%= maxMb %>MBまで・<%= maxFiles %>個まで。大きいときは分けてください。</p>
+    <button class="adm-btn" type="submit" id="upbtn">アップロードして取り込む</button>
+    <p class="adm-help" id="upmsg" hidden>送信中です。完了するまでこのページを閉じないでください…</p>
+  </form>
+</section>
+<script>
+document.getElementById('upform').addEventListener('submit', function () {
+  document.getElementById('upbtn').disabled = true;
+  document.getElementById('upmsg').hidden = false;
+});
+</script>
+<%- include('_foot') %>

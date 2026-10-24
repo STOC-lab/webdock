@@ -1,0 +1,10 @@
+<%- include('_head') %>
+<section class="adm-card">
+  <h1>営業管理とつなぐ</h1>
+  <p class="adm-help">営業管理に取り込んだ後に押してください。倉庫で見つけたフォームURL・メールを営業管理へ引き継ぎます。</p>
+  <form method="post" action="<%= BASE %>/link">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <button class="adm-btn" type="submit">フォームURL・メールを営業管理へ引き継ぐ</button>
+  </form>
+</section>
+<%- include('_foot') %>

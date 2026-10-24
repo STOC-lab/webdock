@@ -16,15 +16,18 @@
     "wh:rules": "node cli/warehouse-rules.js",
     "test:rules": "node test/rules.test.js",
     "test:warehouse": "node test/warehouse.test.js",
-    "test:warehouse-db": "echo テスト専用サーバーでのみ: WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js"
+    "test:warehouse-db": "echo テスト専用サーバーでのみ: WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js",
+    "test:admin": "node test/admin.test.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "adm-zip": "^0.6.1",
     "dotenv": "^18.0.8",
     "ejs": "^7.0.2",
     "express": "^5.3.0",
+    "multer": "^2.5.0",
     "mysql2": "^3.24.6",
     "nodemailer": "^10.1.7"
   }

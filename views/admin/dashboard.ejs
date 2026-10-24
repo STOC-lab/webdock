@@ -1,0 +1,37 @@
+<%- include('_head') %>
+<section class="adm-card">
+  <h1>倉庫の状況</h1>
+  <p class="adm-help">倉庫にある店舗の数です(1分ごとに更新)。</p>
+  <% if (!stats.ok) { %>
+    <div class="alert"><%= stats.message %></div>
+  <% } else { %>
+    <p class="adm-big">全部で <strong><%= stats.total.toLocaleString('ja-JP') %></strong> 件</p>
+    <div class="adm-scroll">
+    <table class="adm-table">
+      <thead><tr><th>都道府県</th><th>件数</th><th>URLあり</th><th>営業管理に登録済み</th><th>フォームあり</th>
+        <% if (stats.sizeAvailable) { %><th>規模チェック済み</th><th>小規模</th><th>大きい</th><% } %></tr></thead>
+      <tbody>
+      <% stats.rows.forEach(function (r) { %>
+        <tr><td><%= r.prefecture %></td><td><%= r.total.toLocaleString('ja-JP') %></td><td><%= r.web.toLocaleString('ja-JP') %></td>
+          <td><%= r.linked.toLocaleString('ja-JP') %></td><td><%= r.form.toLocaleString('ja-JP') %></td>
+          <% if (stats.sizeAvailable) { %><td><%= r.sizeChecked.toLocaleString('ja-JP') %></td><td><%= r.small.toLocaleString('ja-JP') %></td><td><%= r.large.toLocaleString('ja-JP') %></td><% } %></tr>
+      <% }) %>
+      </tbody>
+    </table>
+    </div>
+    <% if (!stats.sizeAvailable) { %><p class="adm-help">会社の規模の列がまだ無いため、規模の件数は表示していません。</p><% } %>
+  <% } %>
+</section>
+<section class="adm-card">
+  <h2>最近の作業</h2>
+  <% if (!jobs.length) { %><p class="adm-help">まだ作業はありません。</p><% } else { %>
+  <ul class="adm-list">
+    <% jobs.forEach(function (j) { %>
+    <li><a href="<%= BASE %>/jobs/<%= j.id %>">#<%= j.id %> <%= j.title %></a>
+      <span class="adm-badge adm-<%= j.status %>"><%= j.status === 'running' ? '実行中' : j.status === 'success' ? '成功' : '失敗' %></span>
+      <span class="adm-help"><%= fmtTime(j.startedAt) %></span></li>
+    <% }) %>
+  </ul>
+  <% } %>
+</section>
+<%- include('_foot') %>

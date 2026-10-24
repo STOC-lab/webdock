@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>倉庫の管理画面</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="adm">
+<header class="adm-header">
+  <a class="adm-title" href="<%= BASE %>">倉庫の管理画面</a>
+  <% if (authed) { %>
+  <nav class="adm-nav">
+    <a href="<%= BASE %>/" class="<%= nav === 'status' ? 'on' : '' %>">状況</a>
+    <a href="<%= BASE %>/import" class="<%= nav === 'import' ? 'on' : '' %>">取り込み</a>
+    <a href="<%= BASE %>/export" class="<%= nav === 'export' ? 'on' : '' %>">取り出し</a>
+    <a href="<%= BASE %>/link" class="<%= nav === 'link' ? 'on' : '' %>">営業管理とつなぐ</a>
+  </nav>
+  <form method="post" action="<%= BASE %>/logout" class="adm-logout">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <button type="submit">ログアウト</button>
+  </form>
+  <% } %>
+</header>
+<main class="adm-wrap">
+<% if (error) { %><div class="alert"><%= error %><% if (typeof runningId !== 'undefined' && runningId) { %> <a href="<%= BASE %>/jobs/<%= runningId %>">実行中の作業を見る</a><% } %></div><% } %>
+<% if (notice) { %><div class="adm-notice"><%= notice %></div><% } %>

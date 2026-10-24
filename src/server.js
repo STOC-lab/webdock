@@ -13,6 +13,7 @@ const db = require('./db');
 const { verifyTurnstile } = require('./turnstile');
 const { notifyLead } = require('./notify');
 const { PREFECTURES, routeByPrefecture, COMPANY_INFO } = require('./regions');
+const { registerAdminWarehouse } = require('./adminWarehouse');
 
 const PORT = Number(process.env.PORT || 3020);
 const SERVICE_NAME = process.env.SERVICE_NAME || 'WEBドック';
@@ -25,7 +26,7 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, '..', 'views'));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
-app.set('trust proxy', true);
+app.set('trust proxy', 'loopback'); // 同じ機械のnginxだけを信用(外から直接つないだ相手のX-Forwarded-Forは無視)
 app.locals.SERVICE_NAME = SERVICE_NAME;
 app.locals.OPERATOR_NAME = OPERATOR_NAME;
 app.locals.TURNSTILE_SITEKEY = process.env.TURNSTILE_SITEKEY || '';
@@ -189,6 +190,9 @@ app.post('/sales/scan', async (req, res) => {
     res.status(400).render('sales', { error: msg });
   }
 });
+
+// 倉庫の管理画面(WAREHOUSE_ADMIN_PASS と ADMIN_ALLOW_IPS の両方が設定されたときだけ有効。未設定なら /admin は404)
+registerAdminWarehouse(app);
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 

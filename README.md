@@ -330,6 +330,41 @@ node cli/warehouse-promote.js --out data/promote.csv --prefecture 兵庫県 --sm
 
    読み取りは目安です。表記ゆれで外れることがあるので、最初は dry-run のCSVで `従業員数` の文字(`employeesText` 相当)と会社概要URLを目で確認してください。テストは `npm run test:size`(DB不要)。
 
+### 倉庫の管理画面(ブラウザで操作 / `/admin/warehouse`)
+
+取り込み・CSV作成・営業管理とのひも付け・件数確認を、コマンドなしでブラウザからできます。**会社のIPアドレスからしか開けません**(それ以外は 404)。
+
+`.env` に次を追加します(**2つとも**設定したときだけ有効。どちらかが空なら `/admin` は全部 404):
+
+```
+WAREHOUSE_ADMIN_PASS=（8文字以上の合言葉）
+ADMIN_ALLOW_IPS=（会社のグローバルIP。複数ならカンマ区切り）
+# 省略可（既定値）
+WAREHOUSE_UPLOAD_DIR=/var/data/gmp/uploads
+WAREHOUSE_EXPORT_DIR=/var/www/webdock/data/exports
+```
+
+アップロードは大きいので、nginx の `/admin/` だけ上限を上げます(`express.urlencoded` の上限はアップロードに関係しません)。会社のIP制限は nginx 側にも二重にかけます:
+
+```nginx
+location /admin/ {
+  allow 203.0.113.10;   # ← 会社のIPに書き換える
+  deny all;
+  client_max_body_size 300m;
+  proxy_read_timeout 600s;
+  proxy_pass http://127.0.0.1:3020;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $remote_addr;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+- アプリは「同じ機械(127.0.0.1)のnginxから来た接続」の `X-Real-IP` だけを信用します。外から直接つないだ相手が `X-Forwarded-For` を偽っても無視されます(それでもポート3020は外に公開しないでください)。
+- 初回だけ: `npm install`、`mkdir -p /var/data/gmp/uploads`(アプリを動かすユーザーが書き込める権限)、`pm2 restart webdock --update-env`、`nginx -t && systemctl reload nginx`。
+- 取り込みは、`gmp_*.csv` または .zip をアップロード → 自動で `warehouse-import` を実行(最後に営業管理とのひも付けも自動)。「営業管理とつなぐ」ボタンは、営業管理へCSVを入れた後にフォームURL・メールを引き継ぐ処理です。
+- テスト: `npm run test:admin`(DB不要)
+
 ### 収集ツールの元ファイル(14列)の取り込みと閉業店の扱い
 
 収集ツールが出力した14列の元ファイル(`緯度（世界測地系）`・`経度（世界測地系）`・`開閉店情報`・`掲載元URL` を含む)は、加工せずそのまま `--root` に置いて取り込めます。列は見出しの名前で判定します。`開閉店情報` は取り込みのたびに最新の内容へ更新され(空欄なら空に戻る)、業種は全体を `category`、先頭の1つを `category_main` に保存します。営業管理へ入れるCSVの業種は、リスツールでの整形と同じく**先頭の1つだけ**を出力します。**リスツールでの整形は不要です**(元ファイルをそのまま取り込めば、整形に当たる処理は倉庫側で行います)。
