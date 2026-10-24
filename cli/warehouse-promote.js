@@ -21,13 +21,14 @@ const { makePool } = require('./warehouse-import');
 const HEADERS = ['屋号', '業種', '郵便番号', '住所', '電話番号', '評価', '口コミ数', 'Googleマイビジネス登録有無', '登録URL', 'GMAP', '写真枚数'];
 
 function parseArgs(argv) {
-  const o = { out: null, prefecture: [], category: [], hasWebsite: false, excludeClosed: true, formFound: false, limit: 5000, mark: false, rules: undefined, dedupePhone: undefined, reportOnly: false, excludeLarge: false, smallOnly: false };
+  const o = { out: null, prefecture: [], category: [], mainCategory: [], hasWebsite: false, excludeClosed: true, formFound: false, limit: 5000, mark: false, rules: undefined, dedupePhone: undefined, reportOnly: false, excludeLarge: false, smallOnly: false };
   const list = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') o.out = argv[++i];
     else if (a === '--prefecture') o.prefecture = list(argv[++i]);
     else if (a === '--category') o.category = list(argv[++i]);
+    else if (a === '--main-category') o.mainCategory = list(argv[++i]);
     else if (a === '--has-website') o.hasWebsite = true;
     else if (a === '--exclude-closed') o.excludeClosed = true;
     else if (a === '--include-closed') o.excludeClosed = false;
@@ -55,6 +56,11 @@ function buildQuery(o) {
   if (o.category.length) {
     where.push('(' + o.category.map(() => 'category LIKE ?').join(' OR ') + ')');
     for (const c of o.category) params.push('%' + c.replace(/[\\%_]/g, '\\$&') + '%');
+  }
+  if (o.mainCategory.length) {
+    // 主業種(category_main)だけで絞る(工場・建設向け。副業種で飲食店などが混ざらない)
+    where.push('(' + o.mainCategory.map(() => 'category_main LIKE ?').join(' OR ') + ')');
+    for (const c of o.mainCategory) params.push('%' + c.replace(/[\\%_]/g, '\\$&') + '%');
   }
   if (o.hasWebsite) where.push("website_url IS NOT NULL AND website_url <> ''");
   if (o.excludeClosed) where.push("(business_status IS NULL OR (business_status NOT LIKE '%閉業%' AND business_status NOT LIKE '%閉店%'))");

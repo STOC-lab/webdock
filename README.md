@@ -322,7 +322,9 @@ node cli/warehouse-promote.js --out data/promote.csv --prefecture 兵庫県 --sm
 ```
 
    **工場・建設など(WEBドック・UTM用)を出すときは `--no-rules` を付けてください。** 既定の「問い合わせ営業」ルールはMEO用で、製造業者・金属加工業・運送会社・倉庫・卸売業・工場などを除外するためです。例:
-   `node cli/warehouse-promote.js --out data/b2b.csv --prefecture 兵庫県 --category 製造,建設,工事 --small-only --no-rules`
+   `node cli/warehouse-promote.js --out data/b2b.csv --prefecture 兵庫県 --main-category 製造,加工,建設,工事,工務店 --small-only --no-rules`
+
+   find-forms の `--category` は主業種(category_main)で絞ります(副業種まで見ると飲食店などが混ざるため)。promote で主業種だけで絞るときは `--main-category`(従来の `--category` は副業種も含めて探します)。
 
    上場の判定は「上場市場」「証券コード」などの項目欄(と文中の「証券コード:1234」)だけを読みます。文章中の「東証」は取引先紹介のことが多いため読みません。
 

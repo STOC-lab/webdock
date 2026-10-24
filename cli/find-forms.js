@@ -242,7 +242,8 @@ function categoryClause(category, params) {
   const cats = (Array.isArray(category) ? category : String(category || '').split(',')).map((x) => String(x).trim()).filter(Boolean);
   if (!cats.length) return '';
   for (const c of cats) params.push('%' + c.replace(/[\\%_]/g, '\\$&') + '%');
-  return '\n  AND (' + cats.map(() => 'category LIKE ?').join(' OR ') + ')';
+  // 主業種(category_main)だけで絞る。category には副業種も並ぶため、飲食店などが「加工」「製造」で混ざる
+  return '\n  AND (' + cats.map(() => 'category_main LIKE ?').join(' OR ') + ')';
 }
 
 /**

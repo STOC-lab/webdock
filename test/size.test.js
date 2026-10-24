@@ -191,7 +191,7 @@ const noRobots = async () => '';
   let q = ff.buildWarehouseSizeTargetQuery({ prefecture: '兵庫県', category: ['製造', '建設'], limit: 100 });
   eq(q.params, [['兵庫県'], '%製造%', '%建設%', 100], 'size query params');
   ok(/FROM stoc_master\.shops/.test(q.sql) && /size_checked_at IS NULL/.test(q.sql), 'size query targets unchecked');
-  ok(/\(category LIKE \? OR category LIKE \?\)/.test(q.sql), 'size query category OR');
+  ok(/\(category_main LIKE \? OR category_main LIKE \?\)/.test(q.sql), 'size query category OR');
   ok(!/form_status/.test(q.sql), 'size query ignores form_status');
   q = ff.buildWarehouseSizeTargetQuery({ prefecture: null, category: [], limit: 10 });
   ok(!/prefecture IN/.test(q.sql) && !/category/.test(q.sql) && q.params.length === 1, 'size query no filters');
@@ -199,7 +199,7 @@ const noRobots = async () => '';
   eq(q.params[1], '%100\\%\\_off%', 'size query escapes wildcards');
   q = ff.buildWarehouseTargetQuery({ recheckDays: 90, errorRetryDays: 7, prefecture: '兵庫県', limit: 500, retryNeedsBrowser: false, category: ['製造', '建設'] });
   eq(q.params, [['兵庫県'], '%製造%', '%建設%', 7, 90, 500], 'warehouse query with category params');
-  ok(/category LIKE \? OR category LIKE \?/.test(q.sql), 'warehouse query category');
+  ok(/category_main LIKE \? OR category_main LIKE \?/.test(q.sql), 'warehouse query category');
   q = ff.buildWarehouseTargetQuery({ recheckDays: 90, errorRetryDays: 7, prefecture: '兵庫県', limit: 500, retryNeedsBrowser: false });
   eq(q.params, [['兵庫県'], 7, 90, 500], 'warehouse query unchanged without category');
 
@@ -249,6 +249,7 @@ const noRobots = async () => '';
   /* ---- warehouse-promote ---- */
   const pq = (args) => promote.buildQuery(promote.parseArgs(['--out', 'x.csv', ...args]));
   ok(!/size_class/.test(pq([]).sql), 'promote: no size filter by default');
+  { const q = pq(['--main-category', '製造,建設']); ok(/\(category_main LIKE \? OR category_main LIKE \?\)/.test(q.sql), 'promote: --main-category'); eq(q.params, ['%製造%', '%建設%'], 'promote: --main-category params'); }
   ok(/size_class IS NULL OR size_class <> 'large'/.test(pq(['--exclude-large']).sql), 'promote: --exclude-large');
   ok(/size_class = 'small'/.test(pq(['--small-only']).sql), 'promote: --small-only');
   ok(/size_class = 'small'/.test(pq(['--small-only', '--exclude-large']).sql) && !/<> 'large'/.test(pq(['--small-only', '--exclude-large']).sql), 'promote: small-only wins');

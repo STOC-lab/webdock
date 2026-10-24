@@ -19,7 +19,7 @@ SET @s = (SELECT IF(COUNT(*) = 0, 'ALTER TABLE stoc_master.shops ADD COLUMN list
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- size_class
-SET @s = (SELECT IF(COUNT(*) = 0, 'ALTER TABLE stoc_master.shops ADD COLUMN size_class ENUM('small','large','unknown') NULL AFTER listed', 'SELECT 1')
+SET @s = (SELECT IF(COUNT(*) = 0, 'ALTER TABLE stoc_master.shops ADD COLUMN size_class ENUM(''small'',''large'',''unknown'') NULL AFTER listed', 'SELECT 1')
   FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'shops' AND COLUMN_NAME = 'size_class');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
