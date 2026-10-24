@@ -10,6 +10,7 @@
     "test:batch": "node test/batch.test.js",
     "find-forms": "node cli/find-forms.js",
     "test:finder": "node test/finder.test.js",
+    "test:size": "node test/size.test.js",
     "wh:import": "node cli/warehouse-import.js",
     "wh:promote": "node cli/warehouse-promote.js",
     "wh:rules": "node cli/warehouse-rules.js",

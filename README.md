@@ -287,6 +287,42 @@ node cli/warehouse-import.js --link-only --carry-forms
 
    `stoc_store_id` で紐付いた `url_found` の店舗について、`contact_channel_candidates` に `source='finder'` で追加し、`store_contact_channels` の `inquiry_status` を `url_found` にします(`sent` `confirmed` `failed` は上書きしません。メール・Instagramも未設定のときだけ)。何度実行しても結果は同じです。権限が足りないときは必要な `GRANT` を表示します。通常の取り込み(`--root`)に `--carry-forms` を付けると、取り込みの最後に同じ処理をします。
 
+
+### 会社の規模チェック(従業員数・資本金・上場)
+
+従業員が多い会社にはIT担当者がいて成約しにくいため、各社のホームページの「会社概要」ページから従業員数・資本金・上場の記載を読み取り、倉庫に記録して、取り込みCSVから大きい会社を外せます。ページを見る(GET)だけで、フォームの送信はしません。robots.txt を守り、フォーム探しで取得済みのページを使い回すので、1サイトの追加取得は最大2ページです。
+
+1. 一度だけ、倉庫に列と索引を足します(何度実行しても安全。先に002が必要)。
+
+```
+mysql < sql/warehouse_migrate_003.sql
+```
+
+2. 規模もあわせて調べます(`--with-size`)。お試しはCSVだけ出す dry-run:
+
+```
+node cli/find-forms.js --source warehouse --prefecture 兵庫県 --category 製造,建設,工事 --with-size --dry-run --limit 50 --out data/size-sample.csv
+```
+
+   - `--category` は業種(`category`)にいずれかの語を含む店舗だけ(カンマ区切り・OR)。通常の倉庫モードでも使えます。
+   - `--max-employees 20`(既定20): この人数以下を `small`、超えると `large`、会社概要から人数が読めなければ上場・資本金1億円以上で `large`、それ以外は `unknown`。
+   - 結果は `employees` / `capital_yen` / `listed` / `size_class` / `size_note` / `profile_url` / `size_checked_at` 列へ。dry-run のCSVには 従業員数・資本金・上場・規模・会社概要URL の列が付きます。
+
+3. フォーム探しは済んでいて規模だけ調べたいときは `--size-only`(`size_checked_at` が空でホームページのある店舗が対象。`form_*` 列は触りません。`--loop` / `--limit` / `--dry-run` / `--concurrency` も同様に使えます):
+
+```
+node cli/find-forms.js --source warehouse --prefecture 兵庫県 --category 製造,建設,工事 --size-only --loop
+```
+
+4. 営業アプリ用CSVを作るときに規模で絞ります(CSVの形式は変わりません):
+
+```
+node cli/warehouse-promote.js --out data/promote.csv --prefecture 兵庫県 --exclude-large   # 大きい会社(large)を外す。未調査・不明は残る
+node cli/warehouse-promote.js --out data/promote.csv --prefecture 兵庫県 --small-only      # 小規模(small)と確認できた会社だけ
+```
+
+   読み取りは目安です。表記ゆれで外れることがあるので、最初は dry-run のCSVで `従業員数` の文字(`employeesText` 相当)と会社概要URLを目で確認してください。テストは `npm run test:size`(DB不要)。
+
 ### 収集ツールの元ファイル(14列)の取り込みと閉業店の扱い
 
 収集ツールが出力した14列の元ファイル(`緯度（世界測地系）`・`経度（世界測地系）`・`開閉店情報`・`掲載元URL` を含む)は、加工せずそのまま `--root` に置いて取り込めます。列は見出しの名前で判定します。`開閉店情報` は取り込みのたびに最新の内容へ更新され(空欄なら空に戻る)、業種は全体を `category`、先頭の1つを `category_main` に保存します。営業管理へ入れるCSVの業種は、リスツールでの整形と同じく**先頭の1つだけ**を出力します。**リスツールでの整形は不要です**(元ファイルをそのまま取り込めば、整形に当たる処理は倉庫側で行います)。

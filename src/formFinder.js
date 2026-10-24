@@ -606,7 +606,7 @@ async function findContact(websiteUrl, opts = {}) {
 module.exports = {
   extractLinks, scoreContactLink, detectForm, extractEmails, extractInstagram,
   findContact, NON_OWN_SITE_HOSTS, FORM_SERVICES, isNonOwnSite, isFormServiceUrl,
-  parseRobots, isDisallowed, hostOf, MAX_PAGES,
+  parseRobots, isDisallowed, hostOf, MAX_PAGES, stripTags, decodeEntities,
   parseNonOwnTerms, loadNonOwnTerms, defaultTermsFile, nonOwnReason, matchesBuiltinNonOwn, matchesNonOwnList,
   isJsBuilder, isOrgPage, decodeCfEmail, decodeCfEmails,
 };

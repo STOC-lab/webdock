@@ -5,6 +5,8 @@
  *   node cli/warehouse-promote.js --out data/promote_20261024.csv --prefecture 東京都,神奈川県
  *        [--category 美容院,ネイル] [--has-website] [--include-closed] [--form-found] [--limit 5000] [--mark]
  *        [--rules 問い合わせ営業 | --no-rules] [--dedupe-phone | --no-dedupe-phone] [--report-only]
+ *        [--exclude-large | --small-only]   (会社規模: sql/warehouse_migrate_003.sql と find-forms --with-size/--size-only が必要)
+ * --exclude-large は size_class='large'(従業員が多い会社)を外す(未調査・不明は残す)。--small-only は size_class='small' だけ。
  * 除外ルール(rules/<名前>.json、cli/warehouse-rules.js で作成)は書き出し時にJSで適用する(倉庫には全件残る)。
  * --limit は ルール除外・電話番号重複除去のあとの件数。--report-only はCSVを書かず件数だけ表示。
  * 対象: stoc_store_id IS NULL(営業アプリに未登録)かつ promoted_at IS NULL(未出力)
@@ -19,7 +21,7 @@ const { makePool } = require('./warehouse-import');
 const HEADERS = ['屋号', '業種', '郵便番号', '住所', '電話番号', '評価', '口コミ数', 'Googleマイビジネス登録有無', '登録URL', 'GMAP', '写真枚数'];
 
 function parseArgs(argv) {
-  const o = { out: null, prefecture: [], category: [], hasWebsite: false, excludeClosed: true, formFound: false, limit: 5000, mark: false, rules: undefined, dedupePhone: undefined, reportOnly: false };
+  const o = { out: null, prefecture: [], category: [], hasWebsite: false, excludeClosed: true, formFound: false, limit: 5000, mark: false, rules: undefined, dedupePhone: undefined, reportOnly: false, excludeLarge: false, smallOnly: false };
   const list = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -37,6 +39,8 @@ function parseArgs(argv) {
     else if (a === '--dedupe-phone') o.dedupePhone = true;
     else if (a === '--no-dedupe-phone') o.dedupePhone = false;
     else if (a === '--report-only') o.reportOnly = true;
+    else if (a === '--exclude-large') o.excludeLarge = true;
+    else if (a === '--small-only') o.smallOnly = true;
     else throw new Error('不明なオプション: ' + a);
   }
   if (!o.out && !o.reportOnly) throw new Error('--out <出力CSV> を指定してください');
@@ -55,10 +59,20 @@ function buildQuery(o) {
   if (o.hasWebsite) where.push("website_url IS NOT NULL AND website_url <> ''");
   if (o.excludeClosed) where.push("(business_status IS NULL OR (business_status NOT LIKE '%閉業%' AND business_status NOT LIKE '%閉店%'))");
   if (o.formFound) where.push("form_status = 'url_found'");
+  if (o.smallOnly) where.push("size_class = 'small'");
+  else if (o.excludeLarge) where.push("(size_class IS NULL OR size_class <> 'large')");
   const sql = `SELECT id, form_status, name, category, category_main, postal, address_raw, phone, rating, review_count, gbp_registered, website_url, gmap_url, photo_count
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;
   return { sql, params };
+}
+
+/** 会社規模の絞り込み(--exclude-large / --small-only)で外れる件数を数えるSQL。ルール除外・limit の前の件数 */
+function buildSizeExcludedCountQuery(o) {
+  const { sql, params } = buildQuery({ ...o, excludeLarge: false, smallOnly: false });
+  const cond = o.smallOnly ? "(size_class IS NULL OR size_class <> 'small')" : "size_class = 'large'";
+  const count = sql.replace(/^SELECT[\s\S]*?\nFROM/, 'SELECT COUNT(*) AS n\nFROM').replace(/\nORDER BY[\s\S]*$/, '') + ' AND ' + cond;
+  return { sql: count, params };
 }
 
 /** ルールJSONを読む。name===undefined なら既定(問い合わせ営業があれば使う)、null なら無効。 */
@@ -89,7 +103,14 @@ async function selectRows(pool, o, rules, log) {
   const { sql, params } = buildQuery(o);
   const check = rules ? compileRules(rules) : null;
   const dedupe = o.dedupePhone === undefined ? !!(rules && (rules.dedupeColumns || []).includes('電話番号')) : o.dedupePhone;
-  const st = { withForm: 0, scanned: 0, excluded: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null };
+  const st = { withForm: 0, scanned: 0, excluded: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null, sizeExcluded: null };
+  if (o.excludeLarge || o.smallOnly) {
+    try {
+      const c = buildSizeExcludedCountQuery(o);
+      const [r] = await pool.query(c.sql, c.params);
+      st.sizeExcluded = Number(r[0].n);
+    } catch { st.sizeExcluded = null; }
+  }
   const seen = new Set();
   const out = [];
   for (let off = 0; out.length < o.limit; off += PAGE) {
@@ -125,6 +146,7 @@ async function selectRows(pool, o, rules, log) {
 function printStats(st, log = console.error) {
   log(`ルール: ${st.rules || '(なし)'} / 電話番号重複除去: ${st.dedupe ? 'ON' : 'OFF'}`);
   log(`走査した行: ${st.scanned}`);
+  if (st.sizeExcluded !== null && st.sizeExcluded !== undefined) log(`会社規模で除外: ${st.sizeExcluded}(ルール除外の前の件数)`);
   log(`ルールで除外: ${st.excluded}`);
   const top = [...st.byKeyword.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
   for (const [k, n] of top) log(`  ${k} : ${n}`);
@@ -174,4 +196,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { parseArgs, buildQuery, loadRules, selectRows, rowToCsv, HEADERS };
+module.exports = { parseArgs, buildQuery, buildSizeExcludedCountQuery, loadRules, selectRows, rowToCsv, HEADERS };
