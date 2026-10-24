@@ -19,6 +19,10 @@ const NON_OWN_SITE_HOSTS = [
   'instagram.com', 'facebook.com', 'line.me', 'lin.ee', 'twitter.com', 'x.com',
   'tiktok.com', 'youtube.com', 'ameblo.jp', 'beauty.hotpepper.jp', 'hotpepper.jp',
   'tabelog.com', 'minne.com', 'google.com', 'goo.gl', 'maps.app.goo.gl',
+  // ブログサービス: サービス側のコメント欄・ファン申請などのフォームしか無く、お問い合わせ窓口ではない
+  'exblog.jp', 'hatenablog.com', 'hatenablog.jp', 'hateblo.jp', 'hatenadiary.jp', 'hatenadiary.com',
+  'livedoor.blog', 'blog.jp', 'livedoor.jp', 'blog.livedoor.jp', 'fc2.com', 'blog.goo.ne.jp',
+  'seesaa.net', 'jugem.jp', 'note.com', 'blogspot.com', 'muragon.com', 'blog.so-net.ne.jp', 'cocolog-nifty.com',
 ];
 
 /** 許可する外部フォームサービス(ホスト, 任意のパス接頭辞) */
@@ -144,6 +148,8 @@ function detectForm(html) {
     // WordPressのコメント欄は除外
     const action = (getAttr(m[1], 'action') || '').toLowerCase();
     if (action.includes('wp-comments-post')) continue;
+    // コメント欄・ファン申請・トラックバックのフォームはお問い合わせではない(送ると公開されるおそれ)
+    if (/comment|trackback|fan_?(apply|request)|fanform/i.test(action)) continue;
     // 検索のみ(テキスト入力1つで名前が s|q|keyword|search)
     if (!hasTextarea) {
       const textInputs = inputs.filter((t, i) => ['text', 'search'].includes(types[i]));
