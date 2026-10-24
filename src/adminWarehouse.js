@@ -223,14 +223,14 @@ function registerAdminWarehouse(app, deps = {}) {
   const allowIps = (deps.allowIps !== undefined ? deps.allowIps : process.env.ADMIN_ALLOW_IPS || '')
     .split(',').map(normIp).filter(Boolean);
   if (!password || !allowIps.length) {
-    // 合言葉か許可IPのどちらかが未設定なら機能ごと無効(存在しないものとして404)
+    // パスワードか許可IPのどちらかが未設定なら機能ごと無効(存在しないものとして404)
     app.use('/admin', (req, res) => res.status(404).type('text/plain').send('Not Found'));
     return { enabled: false };
   }
   const secret = deps.secret || process.env.WEBDOCK_SECRET || 'dev-insecure-secret-change-me';
   if (!deps.secret && !process.env.WEBDOCK_SECRET) console.warn('[admin] WEBDOCK_SECRET が未設定です。必ず設定してください。');
   if (password.length < 8) console.warn('[admin] WAREHOUSE_ADMIN_PASS が短すぎます(8文字以上を推奨)。');
-  const key = crypto.createHmac('sha256', secret).update('admin-key:' + password).digest(); // 合言葉を変えると全員ログアウト
+  const key = crypto.createHmac('sha256', secret).update('admin-key:' + password).digest(); // パスワードを変えると全員ログアウト
   const uploadDir = path.resolve(deps.uploadDir || process.env.WAREHOUSE_UPLOAD_DIR || '/var/data/gmp/uploads');
   const exportDir = path.resolve(deps.exportDir || process.env.WAREHOUSE_EXPORT_DIR || path.join(__dirname, '..', 'data', 'exports'));
   const jobs = deps.jobs || createJobRunner();
@@ -339,7 +339,7 @@ function registerAdminWarehouse(app, deps = {}) {
     const pass = String((req.body && req.body.password) || '');
     if (!safeEqual(pass, password)) {
       const arr = failsOf(ip); arr.push(Date.now()); fails.set(ip, arr);
-      return page(req, res, 'login', { error: '合言葉が違います。' }, 401);
+      return page(req, res, 'login', { error: 'パスワードが違います。' }, 401);
     }
     fails.delete(ip);
     res.setHeader('Set-Cookie', cookieHeader(req, makeSession(), SESSION_MS / 1000));
