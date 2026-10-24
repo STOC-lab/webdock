@@ -72,7 +72,7 @@ function* readBlocks(file) {
 async function processFile(file, root, batchSize, onBatch, stats) {
   const rel = path.relative(root, file);
   const folder = path.basename(path.dirname(file));
-  let map = null, delim = null;
+  let map = null, delim = null, hasBs = false;
   let batch = [];
   for (const text of readBlocks(file)) {
     let rows;
@@ -82,6 +82,7 @@ async function processFile(file, root, batchSize, onBatch, stats) {
       rows = wh.parseDelimited(text, delim);
       if (!rows.length) continue;
       map = wh.mapHeader(rows.shift());
+      hasBs = map.business_status !== undefined;
       if (map.name === undefined) throw new Error('ヘッダに「屋号」列がありません');
     } else {
       rows = wh.parseDelimited(text, delim);
@@ -93,27 +94,28 @@ async function processFile(file, root, batchSize, onBatch, stats) {
       if (rec.name.length > 255) rec.name = rec.name.slice(0, 255);
       rec.fallback_key = rec.cid ? null : wh.fallbackKey(rec);
       batch.push(rec);
-      if (batch.length >= batchSize) { await onBatch(batch); batch = []; }
+      if (batch.length >= batchSize) { await onBatch(batch, hasBs); batch = []; }
     }
   }
-  if (batch.length) await onBatch(batch);
+  if (batch.length) await onBatch(batch, hasBs);
 }
 
-const COLS = ['cid', 'fallback_key', 'name', 'category', 'postal', 'address_raw', 'address', 'prefecture', 'phone', 'rating', 'review_count', 'gbp_registered', 'website_url', 'gmap_url', 'photo_count', 'place_id', 'lat', 'lng', 'source_file'];
+const COLS = ['cid', 'fallback_key', 'name', 'category', 'category_main', 'postal', 'address_raw', 'address', 'prefecture', 'phone', 'rating', 'review_count', 'gbp_registered', 'business_status', 'website_url', 'gmap_url', 'photo_count', 'place_id', 'lat', 'lng', 'source_file'];
 const clip = (v, n) => (typeof v === 'string' && v.length > n ? v.slice(0, n) : v);
-const LIMITS = { cid: 20, name: 255, category: 100, postal: 10, address_raw: 500, address: 500, prefecture: 10, phone: 30, gbp_registered: 10, website_url: 1000, gmap_url: 1000, place_id: 100, source_file: 300 };
+const LIMITS = { cid: 20, name: 255, category: 500, category_main: 100, business_status: 50, postal: 10, address_raw: 500, address: 500, prefecture: 10, phone: 30, gbp_registered: 10, website_url: 1000, gmap_url: 1000, place_id: 100, source_file: 300 };
 const fillIfEmpty = (c) => `${c} = IF(${c} IS NULL OR ${c} = '', VALUES(${c}), ${c})`;
 const newer = (c) => `${c} = COALESCE(VALUES(${c}), ${c})`;
 
-function upsertSql(n) {
+function upsertSql(n, hasBs) {
   const ph = '(' + COLS.map(() => '?').join(',') + ',NOW(),NOW())';
   return `INSERT INTO stoc_master.shops (${COLS.join(',')},first_seen_at,last_seen_at) VALUES ${Array(n).fill(ph).join(',')}
 ON DUPLICATE KEY UPDATE last_seen_at = NOW(),
   ${newer('rating')}, ${newer('review_count')}, ${newer('photo_count')}, ${newer('lat')}, ${newer('lng')},
-  ${['website_url', 'phone', 'category', 'postal', 'address_raw', 'address', 'prefecture', 'place_id', 'gmap_url', 'gbp_registered'].map(fillIfEmpty).join(',\n  ')}`;
+  ${hasBs ? 'business_status = VALUES(business_status)' : 'business_status = business_status'},
+  ${['website_url', 'phone', 'category', 'category_main', 'postal', 'address_raw', 'address', 'prefecture', 'place_id', 'gmap_url', 'gbp_registered'].map(fillIfEmpty).join(',\n  ')}`;
 }
 
-async function upsertBatch(pool, recs, stats) {
+async function upsertBatch(pool, recs, stats, hasBs) {
   const params = [];
   for (const r of recs) for (const c of COLS) params.push(LIMITS[c] ? clip(r[c], LIMITS[c]) : r[c]);
   // 既存件数を事前に数えて新規/更新を判定(affectedRowsは同一秒の再実行で0になり、DB間差もあるため)
@@ -122,7 +124,7 @@ async function upsertBatch(pool, recs, stats) {
   let existing = 0;
   if (cids.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE cid IN (?)', [cids]); existing += Number(x.n); }
   if (fbs.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE fallback_key IN (?)', [fbs]); existing += Number(x.n); }
-  await pool.query(upsertSql(recs.length), params);
+  await pool.query(upsertSql(recs.length, hasBs), params);
   const inserted = cids.length + fbs.length - existing;
   stats.inserted += inserted;
   stats.updated += recs.length - inserted;
@@ -188,9 +190,9 @@ async function main() {
       const st = { rows: 0, inserted: 0, updated: 0, skipped: 0 };
       const withCid = { n: 0 };
       try {
-        await processFile(file, root, o.batch, async (recs) => {
+        await processFile(file, root, o.batch, async (recs, hasBs) => {
           for (const r of recs) if (r.cid) withCid.n++;
-          if (pool) await upsertBatch(pool, recs, st);
+          if (pool) await upsertBatch(pool, recs, st, hasBs);
         }, st);
       } catch (e) {
         errors.push(`${path.relative(root, file)}: ${e.message}`);

@@ -85,6 +85,17 @@ function run(script, args) {
   ].map((r) => r.map((c) => (/[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c)).join(',')).join('\n') + '\n';
   fs.writeFileSync(path.join(dir, '東京都', 'b.csv'), '﻿' + csv);
 
+  // 14列の元データ(収集ツールの出力そのまま)
+  fs.mkdirSync(path.join(dir, '大阪府'));
+  const H14 = '屋号\t業種\t郵便番号\t住所\t電話番号\t評価\t口コミ件数\t緯度（世界測地系）\t経度（世界測地系）\t開閉店情報\tGoogleマイビジネス登録有無\t登録URL\t掲載元URL\t写真枚数';
+  const U14 = (cid) => `https://www.google.co.jp/maps/place/data=!4m7!3m6!1s0x60008d00781a628f:${cid}!8m2!3d35.6894807!4d139.6916863!2z!16s`;
+  const t14 = [H14,
+    ['大阪の店A', 'ラーメン店、居酒屋', '530-0001', '大阪府大阪市北区1−1', '06-1', '4.2', '30', '34.7', '135.5', '', '有り', '', U14('0xaaaa000000000001'), '3'],
+    ['大阪の閉業店', 'ラーメン店', '530-0002', '大阪府大阪市北区2−2', '06-2', '4.0', '10', '34.7', '135.5', '閉業', '有り', '', U14('0xaaaa000000000002'), '1'],
+    ['大阪の臨時休業店', 'カフェ', '530-0003', '大阪府大阪市北区3−3', '06-3', '3.0', '5', '34.7', '135.5', '臨時休業', '有り', '', U14('0xaaaa000000000003'), '1'],
+  ].map((r) => (Array.isArray(r) ? r.join('\t') : r)).join('\r\n') + '\r\n';
+  fs.writeFileSync(path.join(dir, '大阪府', 'raw14.tsv'), w.encodeShiftJis(t14));
+
   // 営業アプリ側に cid2 の店舗と、finder用の店舗
   await q("INSERT INTO stoc_sales.stores (name, cid) VALUES ('MERRY(既存)', '0x11cbe625c422d660')");
 
@@ -99,7 +110,7 @@ function run(script, args) {
   r = run('cli/warehouse-import.js', ['--root', dir, '--batch', '2']);
   eq(r.code, 0, 'import exit: ' + r.err);
   let rows = await q('SELECT * FROM stoc_master.shops ORDER BY id');
-  eq(rows.length, 5, 'rows after import (cid1,cid2,nocid,tokyo,quoted)');
+  eq(rows.length, 8, 'rows after import (5 + 3 raw 14-col)');
   const by = (n) => rows.find((x) => x.name === n);
   const s1 = by('slow style live bar 音の泉');
   eq([s1.cid, s1.fallback_key, Number(s1.rating), s1.review_count, s1.photo_count, s1.website_url, s1.place_id, s1.prefecture], ['0xe9a994bb6fdb93c5', null, 4.9, 20, 80, 'http://onsen.example.jp', 'ChIJxx', '兵庫県'], 'duplicate cid merged (newer rating, filled website)');
@@ -115,21 +126,36 @@ function run(script, args) {
   eq(merry.stoc_store_id, 1, 'link step set stoc_store_id');
   eq((await q('SELECT COUNT(*) n FROM stoc_master.shops WHERE stoc_store_id IS NOT NULL'))[0].n, 1, 'only one linked');
   let run1 = (await q('SELECT * FROM stoc_master.import_runs ORDER BY id'))[0];
-  eq([run1.files, Number(run1.rows_read), Number(run1.inserted), Number(run1.updated), Number(run1.skipped), !!run1.finished_at], [2, 7, 5, 1, 1, true], 'import_runs row');
+  eq([run1.files, Number(run1.rows_read), Number(run1.inserted), Number(run1.updated), Number(run1.skipped), !!run1.finished_at], [3, 10, 8, 1, 1, true], 'import_runs row');
   const firstSeen = s1.first_seen_at.getTime();
 
   // --- 冪等性 ---
   r = run('cli/warehouse-import.js', ['--root', dir]);
   eq(r.code, 0, 're-import exit');
-  eq((await q('SELECT COUNT(*) n FROM stoc_master.shops'))[0].n, 5, 'idempotent row count');
+  eq((await q('SELECT COUNT(*) n FROM stoc_master.shops'))[0].n, 8, 'idempotent row count');
   const run2 = (await q('SELECT * FROM stoc_master.import_runs ORDER BY id'))[1];
-  eq([Number(run2.inserted), Number(run2.updated)], [0, 6], 'second run: 0 inserted, 6 updated');
+  eq([Number(run2.inserted), Number(run2.updated)], [0, 9], 'second run: 0 inserted, 9 updated');
   eq((await q('SELECT first_seen_at FROM stoc_master.shops WHERE id = ?', [s1.id]))[0].first_seen_at.getTime(), firstSeen, 'first_seen_at kept');
 
   // --- link-only ---
   await q("UPDATE stoc_master.shops SET stoc_store_id = NULL");
   r = run('cli/warehouse-import.js', ['--link-only']);
   eq((await q('SELECT COUNT(*) n FROM stoc_master.shops WHERE stoc_store_id = 1'))[0].n, 1, 'link-only restores link');
+
+  const o14 = rows.find((x) => x.name === '大阪の店A');
+  eq([o14.category_main, o14.category, o14.business_status, o14.prefecture, Number(o14.lat), o14.review_count], ['ラーメン店', 'ラーメン店、居酒屋', null, '大阪府', 34.7, 30], '14-col import fields');
+  eq(rows.find((x) => x.name === '大阪の閉業店').business_status, '閉業', 'business_status stored');
+  // 再取り込みで開閉店情報が最新に追従(空→NULL)
+  const f14 = path.join(dir, '大阪府', 'raw14.tsv');
+  fs.writeFileSync(f14, w.encodeShiftJis(t14.replace('\t閉業\t', '\t\t')));
+  run('cli/warehouse-import.js', ['--root', dir]);
+  eq((await q("SELECT business_status FROM stoc_master.shops WHERE name = '大阪の閉業店'"))[0].business_status, null, 'status cleared by newer file');
+  fs.writeFileSync(f14, w.encodeShiftJis(t14));
+  run('cli/warehouse-import.js', ['--root', dir]);
+  eq((await q("SELECT business_status FROM stoc_master.shops WHERE name = '大阪の閉業店'"))[0].business_status, '閉業', 'status restored');
+  // 開閉店列のないファイルでは触らない
+  run('cli/warehouse-import.js', ['--root', path.join(dir, '東京都')]);
+  eq((await q("SELECT business_status FROM stoc_master.shops WHERE name = '大阪の閉業店'"))[0].business_status, '閉業', 'file without column leaves status');
 
   // --- promote ---
   const out = path.join(dir, 'out', 'promote.csv');
@@ -148,6 +174,16 @@ function run(script, args) {
   eq((await q('SELECT COUNT(*) n FROM stoc_master.shops WHERE promoted_at IS NOT NULL'))[0].n, 4, 'marked 4');
   r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '兵庫県,東京都']);
   eq(w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(out)), ',').length, 1, 'second promote: header only');
+  // 閉業の扱い(大阪府)
+  const outO = path.join(dir, 'out', 'osaka.csv');
+  run('cli/warehouse-promote.js', ['--out', outO, '--prefecture', '大阪府']);
+  let ol = w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outO)), ',');
+  eq(ol.slice(1).map((l) => l[0]).sort(), ['大阪の店A', '大阪の臨時休業店'], 'closed excluded by default, 臨時休業 kept');
+  eq(ol[0].length, 11, 'osaka 11 cols');
+  eq(ol.find((l) => l[0] === '大阪の店A')[1], 'ラーメン店、居酒屋', 'full category string in export');
+  run('cli/warehouse-promote.js', ['--out', outO, '--prefecture', '大阪府', '--include-closed']);
+  ol = w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outO)), ',');
+  eq(ol.length, 4, '--include-closed includes closed');
   // filters
   await q('UPDATE stoc_master.shops SET promoted_at = NULL');
   r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '東京都', '--category', '美容,ネイル', '--has-website', '--limit', '5']);

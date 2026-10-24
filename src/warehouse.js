@@ -65,10 +65,11 @@ const HEADER_ALIASES = {
   address: ['住所'],
   phone: ['電話番号'],
   rating: ['評価'],
-  review_count: ['口コミ数'],
+  review_count: ['口コミ数', '口コミ件数'],
+  business_status: ['開閉店情報'],
   gbp_registered: ['googleマイビジネス登録有無'],
   website_url: ['登録url'],
-  gmap_url: ['gmap'],
+  gmap_url: ['gmap', '掲載元url'],
   photo_count: ['写真枚数'],
   place_id: ['place id', 'place_id', 'placeid'],
   cid: ['cid'],
@@ -80,6 +81,9 @@ function mapHeader(cells) {
   cells.forEach((c, i) => {
     const key = String(c || '').replace(/^﻿/, '').trim().toLowerCase();
     if (!key) return;
+    // 緯度（世界測地系）など、前方一致で緯度・経度とみなす
+    if (key.startsWith('緯度') && map.lat === undefined) { map.lat = i; return; }
+    if (key.startsWith('経度') && map.lng === undefined) { map.lng = i; return; }
     for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
       if (aliases.includes(key) && map[field] === undefined) map[field] = i;
     }
@@ -138,6 +142,13 @@ function cleanLatLng(latV, lngV) {
   return { lat, lng };
 }
 
+/** 業種(「、」「,」区切りの一覧)の先頭項目 */
+function categoryMain(cat) {
+  if (!cat) return null;
+  const first = String(cat).split(/[、,，]/)[0].trim();
+  return first ? first.slice(0, 100) : null;
+}
+
 function toRecord(cells, map, sourceFile, folderName) {
   const get = (f) => {
     const i = map[f];
@@ -156,6 +167,7 @@ function toRecord(cells, map, sourceFile, folderName) {
     cid,
     name: get('name'),
     category: get('category'),
+    category_main: categoryMain(get('category')),
     postal: get('postal'),
     address_raw: addressRaw,
     address,
@@ -164,6 +176,7 @@ function toRecord(cells, map, sourceFile, folderName) {
     rating: toNum(get('rating'), false),
     review_count: toNum(get('review_count'), true),
     gbp_registered: get('gbp_registered'),
+    business_status: get('business_status'),
     website_url: get('website_url'),
     gmap_url: gmap,
     photo_count: toNum(get('photo_count'), true),
@@ -214,5 +227,5 @@ function encodeShiftJis(str) {
 
 module.exports = {
   PREFECTURES, decodeBuffer, detectDelimiter, parseDelimited, mapHeader, extractCid, normalizeCid,
-  normalizeAddress, prefectureOf, normalizePhone, toRecord, cleanLatLng, fallbackKey, encodeShiftJis,
+  normalizeAddress, prefectureOf, normalizePhone, toRecord, categoryMain, cleanLatLng, fallbackKey, encodeShiftJis,
 };

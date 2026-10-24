@@ -3,7 +3,7 @@
 /**
  * 倉庫 → 営業アプリ取り込み用CSV(Shift_JIS・カンマ区切り・11列)を作る
  *   node cli/warehouse-promote.js --out data/promote_20261024.csv --prefecture 東京都,神奈川県
- *        [--category 美容院,ネイル] [--has-website] [--form-found] [--limit 5000] [--mark]
+ *        [--category 美容院,ネイル] [--has-website] [--include-closed] [--form-found] [--limit 5000] [--mark]
  * 対象: stoc_store_id IS NULL(営業アプリに未登録)かつ promoted_at IS NULL(未出力)
  */
 
@@ -15,7 +15,7 @@ const { makePool } = require('./warehouse-import');
 const HEADERS = ['屋号', '業種', '郵便番号', '住所', '電話番号', '評価', '口コミ数', 'Googleマイビジネス登録有無', '登録URL', 'GMAP', '写真枚数'];
 
 function parseArgs(argv) {
-  const o = { out: null, prefecture: [], category: [], hasWebsite: false, formFound: false, limit: 5000, mark: false };
+  const o = { out: null, prefecture: [], category: [], hasWebsite: false, excludeClosed: true, formFound: false, limit: 5000, mark: false };
   const list = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -23,6 +23,8 @@ function parseArgs(argv) {
     else if (a === '--prefecture') o.prefecture = list(argv[++i]);
     else if (a === '--category') o.category = list(argv[++i]);
     else if (a === '--has-website') o.hasWebsite = true;
+    else if (a === '--exclude-closed') o.excludeClosed = true;
+    else if (a === '--include-closed') o.excludeClosed = false;
     else if (a === '--form-found') o.formFound = true;
     else if (a === '--limit') o.limit = Math.floor(Number(argv[++i]));
     else if (a === '--mark') o.mark = true;
@@ -42,6 +44,7 @@ function buildQuery(o) {
     for (const c of o.category) params.push('%' + c.replace(/[\\%_]/g, '\\$&') + '%');
   }
   if (o.hasWebsite) where.push("website_url IS NOT NULL AND website_url <> ''");
+  if (o.excludeClosed) where.push("(business_status IS NULL OR (business_status NOT LIKE '%閉業%' AND business_status NOT LIKE '%閉店%'))");
   if (o.formFound) where.push("form_status = 'url_found'");
   const sql = `SELECT id, name, category, postal, address_raw, phone, rating, review_count, gbp_registered, website_url, gmap_url, photo_count
 FROM stoc_master.shops WHERE ${where.join(' AND ')}

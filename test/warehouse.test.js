@@ -84,6 +84,22 @@ eq(llRec('35.689481', '139.691686'), [null, null], 'latlng bogus rounded');
 eq(llRec('35.6894807', '139.7'), [35.6894807, 139.7], 'latlng near-bogus kept');
 eq([r1.lat, r1.lng], [null, null], 'no lat/lng from GMAP url');
 
+// 14-column raw collector output
+const H14 = '屋号\t業種\t郵便番号\t住所\t電話番号\t評価\t口コミ件数\t緯度（世界測地系）\t経度（世界測地系）\t開閉店情報\tGoogleマイビジネス登録有無\t登録URL\t掲載元URL\t写真枚数'.split('\t');
+const m14 = w.mapHeader(H14);
+eq([m14.review_count, m14.lat, m14.lng, m14.business_status, m14.gbp_registered, m14.website_url, m14.gmap_url, m14.photo_count], [6, 7, 8, 9, 10, 11, 12, 13], 'map 14');
+eq(w.mapHeader(['経度 (JGD)', '緯度[x]']).lat, 1, 'startsWith lat');
+const URL14 = 'https://www.google.co.jp/maps/place/data=!4m7!3m6!1s0x60008d00781a628f:0x18a4e7aa1b2e20be!8m2!3d35.6894807!4d139.6916863!2z!16s';
+const row14 = 'あんぶれら食堂\tファミリー レストラン、定食屋、居酒屋、和食店、レストラン、洋食レストラン\t658-0051\t兵庫県神戸市東灘区住吉本町１丁目４−３ 網代ビル 2階\t070-2331-5142\t4.4\t54\t34.7205325\t135.2609344\t\t有り\t\t' + URL14 + '\t72';
+const c14 = w.parseDelimited(row14, '\t')[0];
+eq(c14.length, 14, 'row14 cells');
+const r14 = w.toRecord(c14, m14, 'f.tsv', '兵庫県');
+eq([r14.cid, r14.lat, r14.lng, r14.business_status, r14.category_main, r14.review_count, r14.photo_count, r14.website_url, r14.prefecture], ['0x18a4e7aa1b2e20be', 34.7205325, 135.2609344, null, 'ファミリー レストラン', 54, 72, null, '兵庫県'], 'record 14');
+eq(r14.address, '兵庫県神戸市東灘区住吉本町１丁目４−３ 網代ビル 2階', 'minus sign untouched');
+c14[9] = '閉業';
+eq(w.toRecord(c14, m14, 'f', 'x').business_status, '閉業', 'business_status');
+eq([w.categoryMain('A,B'), w.categoryMain(' ， B'), w.categoryMain(null)], ['A', null, null], 'categoryMain');
+
 // fallbackKey
 const fk = w.fallbackKey({ phone: '078-242-0124', name: 'A' });
 eq(fk, w.fallbackKey({ phone: '0782420124', name: 'A' }), 'fallback phone-format independent');
