@@ -194,7 +194,7 @@ ON DUPLICATE KEY UPDATE
   instagram_status = IF(VALUES(instagram_url) IS NOT NULL AND (instagram_url IS NULL OR instagram_url = '') AND (instagram_status IS NULL OR instagram_status = 'unknown'), 'found', instagram_status),
   instagram_url = IF(VALUES(instagram_url) IS NOT NULL AND (instagram_url IS NULL OR instagram_url = ''), VALUES(instagram_url), instagram_url)`;
 
-  return async function write(store, r) {
+  async function writeOnce(store, r) {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
@@ -232,6 +232,19 @@ ON DUPLICATE KEY UPDATE
       throw e;
     } finally {
       conn.release();
+    }
+  }
+
+  // 並列実行時にInnoDBがデッドロック(1213)/ロック待ち超過(1205)でトランザクションを中止することがあるため、短く待って再試行する
+  return async function write(store, r) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await writeOnce(store, r);
+      } catch (e) {
+        const retriable = e && (e.errno === 1213 || e.errno === 1205);
+        if (!retriable || attempt >= 4) throw e;
+        await new Promise((res) => setTimeout(res, 50 * attempt + Math.floor(Math.random() * 100)));
+      }
     }
   };
 }
@@ -293,4 +306,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { processStores, parseArgs, buildTargetQuery, csvField, csvLine, csvRow, CSV_COLUMNS, normalizeUrl };
+module.exports = { makeDbWriter, fetchTargets, createPool, processStores, parseArgs, buildTargetQuery, csvField, csvLine, csvRow, CSV_COLUMNS, normalizeUrl };

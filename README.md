@@ -170,3 +170,72 @@ mysql stoc_sales -e "SELECT inquiry_status, COUNT(*) FROM store_contact_channels
 ```
 
 テスト: `npm run test:finder`(ネットワーク・DB不要)
+
+## 倉庫(全国データ)
+
+営業アプリ(`stoc_sales`)を軽く保つため、全国の収集データ(約400万件)は別DB `stoc_master`(倉庫)にすべて置き、営業に使う分だけをCSVで営業アプリの既存CSV取り込み画面から入れます。倉庫の店舗は Google の CID で重複判定します(CIDがない行は 電話番号+屋号 のハッシュで判定)。
+
+### 1. 初回セットアップ(1回だけ)
+
+```
+mysql < sql/warehouse_schema.sql
+```
+
+`sql/warehouse_schema.sql` の末尾にあるコメントのSQLを、パスワードを決めて root で実行し、専用ユーザー `stoc_wh` を作ります(`stoc_master` の全権限と `stoc_sales.stores` の参照のみ)。`.env` に次を追加します。
+
+```
+WH_DB_HOST=127.0.0.1
+WH_DB_PORT=3306
+WH_DB_USER=stoc_wh
+WH_DB_PASS=（決めたパスワード）
+```
+
+### 2. データをサーバーへ上げる(Windows の PowerShell)
+
+```
+Compress-Archive -Path 'H:\…\全国データ\*' -DestinationPath "$HOME\Desktop\gmp_all.zip"
+scp "$HOME\Desktop\gmp_all.zip" root@162.43.32.37:/var/data/gmp/
+```
+
+サーバー側(日本語ファイル名の文字化けを防ぐため `-O cp932` を付けます):
+
+```
+mkdir -p /var/data/gmp && cd /var/data/gmp && unzip -q -O cp932 gmp_all.zip -d all
+```
+
+### 3. 取り込み
+
+まずお試し(DBには書き込まず、ファイルごとの件数だけ表示):
+
+```
+cd /path/to/webdock
+npm run wh:import -- --root /var/data/gmp/all --dry-run
+```
+
+問題なければ本番(何度実行しても二重登録されず、既存店舗は最終確認日時などが更新されます):
+
+```
+npm run wh:import -- --root /var/data/gmp/all
+```
+
+取り込みの最後に、営業アプリに同じCIDの店舗があれば `stoc_store_id` が自動で入ります(単独実行: `--link-only`)。件数の確認:
+
+```
+mysql stoc_master -e "SELECT prefecture, COUNT(*) FROM shops GROUP BY prefecture;"
+mysql stoc_master -e "SELECT COUNT(*) AS 全件, SUM(stoc_store_id IS NOT NULL) AS 営業アプリ登録済み, SUM(promoted_at IS NOT NULL) AS 出力済み FROM shops;"
+mysql stoc_master -e "SELECT * FROM import_runs ORDER BY id DESC LIMIT 5;"
+```
+
+### 4. 営業アプリへ入れるCSVを作る
+
+営業アプリに未登録(`stoc_store_id` が空)かつ未出力の店舗だけを、口コミ数の多い順に書き出します。出力は元データと同じ11列(Shift_JIS・カンマ区切り)なので、営業アプリの既存CSV取り込み画面にそのまま使えます。
+
+```
+npm run wh:promote -- --out data/promote_20261024.csv --prefecture 東京都,神奈川県 --category 美容院,ネイル --has-website --limit 5000 --mark
+```
+
+- `--category` は部分一致(カンマ区切りはOR)、`--has-website` はホームページありのみ、`--form-found` は問い合わせフォーム発見済みのみ
+- `--mark` を付けると書き出した店舗に出力済みの印が付き、次回以降は重複して出力されません(付けなければ何度でも同じ結果を出せます)
+- できた CSV を営業アプリの CSV取り込み画面からアップロードします
+
+テスト: `npm run test:warehouse`(DB不要)、DBテストは **stoc_master と stoc_sales を削除して作り直すため、本番サーバーでは絶対に実行しないこと**(テスト専用環境で `WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js`。本番サーバー上・実データがある場合は自動で中止する安全装置あり)
