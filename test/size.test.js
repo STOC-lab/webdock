@@ -83,7 +83,9 @@ const noRobots = async () => '';
 
   /* ---- classifySize ---- */
   eq(classifySize({ employees: 20 }), 'small', 'classify 20 small');
-  eq(classifySize({ employees: 21 }), 'large', 'classify 21 large');
+  eq(classifySize({ employees: 30 }), 'small', 'classify 30 small (既定30)');
+  eq(classifySize({ employees: 31 }), 'large', 'classify 31 large');
+  eq(classifySize({ employees: 21 }, { maxEmployees: 20 }), 'large', 'classify 21 large when max 20');
   eq(classifySize({ employees: 30 }, { maxEmployees: 50 }), 'small', 'classify custom max');
   eq(classifySize({ employees: 5, listed: true, capitalYen: 9e9 }), 'small', 'employees win');
   eq(classifySize({ employees: null, listed: true }), 'large', 'listed -> large');
@@ -151,7 +153,7 @@ const noRobots = async () => '';
   // robots.txt
   log = [];
   r = await findCompanySize(TOP, { pages: [{ url: TOP, body: topHtml }], fetchPage: fakeSite({ 'https://shop.jp/company/': profHtml, 'https://shop.jp/recruit/': page('<p>従業員数 30名</p>') }, log), fetchRobots: async () => 'User-agent: *\nDisallow: /company' });
-  eq([log, r.employees, r.sizeClass], [['https://shop.jp/recruit/'], 30, 'large'], 'robots disallow skips, recruit page used');
+  eq([log, r.employees, r.sizeClass], [['https://shop.jp/recruit/'], 30, 'small'], 'robots disallow skips, recruit page used');
 
   // 規模が大きい
   r = await findCompanySize(TOP, { pages: [{ url: TOP, body: tbl('従業員数', '150名') }], fetchPage: fakeSite({}), fetchRobots: noRobots });
@@ -180,7 +182,7 @@ const noRobots = async () => '';
   let o = ff.parseArgs(['--source', 'warehouse', '--prefecture', '兵庫県', '--category', '製造, 建設,工事', '--with-size', '--max-employees', '30']);
   eq([o.category, o.withSize, o.sizeOnly, o.maxEmployees], [['製造', '建設', '工事'], true, false, 30], 'parse with-size/category/max');
   o = ff.parseArgs(['--source', 'warehouse', '--size-only']);
-  eq([o.sizeOnly, o.withSize, o.maxEmployees], [true, false, 20], 'parse size-only default max 20');
+  eq([o.sizeOnly, o.withSize, o.maxEmployees], [true, false, 30], 'parse size-only default max 30');
   let threw = false; try { ff.parseArgs(['--size-only']); } catch { threw = true; }
   ok(threw, '--size-only needs warehouse');
   threw = false; try { ff.parseArgs(['--category', '製造']); } catch { threw = true; }

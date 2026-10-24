@@ -223,7 +223,7 @@ function cutAtNextLabel(win) {
 }
 
 /* ---------- 規模の判定 ---------- */
-function classifySize(info, { maxEmployees = 20, largeCapitalYen = 100000000 } = {}) {
+function classifySize(info, { maxEmployees = 30, largeCapitalYen = 100000000 } = {}) {
   if (!info) return 'unknown';
   if (Number.isFinite(info.employees)) return info.employees <= maxEmployees ? 'small' : 'large';
   if (info.listed) return 'large';

@@ -32,7 +32,7 @@ const LOOP_SLEEP_MS = 30 * 60 * 1000;
 
 /* ---------- 引数 ---------- */
 function parseArgs(argv) {
-  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false, source: 'stores', retryNeedsBrowser: false, category: [], withSize: false, sizeOnly: false, maxEmployees: 20 };
+  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false, source: 'stores', retryNeedsBrowser: false, category: [], withSize: false, sizeOnly: false, maxEmployees: 30 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -355,7 +355,7 @@ WHERE id = ?`;
  * --with-size: フォーム探しで取得したページを記録して、会社概要の読み取りに使い回す(追加取得は最大2ページ)。
  * --size-only: 規模だけ調べる(トップ+会社概要候補)。結果の status は 'size'。
  */
-function makeFinder({ withSize = false, sizeOnly = false, maxEmployees = 20, fetchPage = fetchHomepage, fetchRobots, maxRecordBytes = 3000000 } = {}) {
+function makeFinder({ withSize = false, sizeOnly = false, maxEmployees = 30, fetchPage = fetchHomepage, fetchRobots, maxRecordBytes = 3000000 } = {}) {
   const robotsOpt = fetchRobots ? { fetchRobots } : {};
   if (sizeOnly) {
     return async (url) => {

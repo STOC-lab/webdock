@@ -305,7 +305,7 @@ node cli/find-forms.js --source warehouse --prefecture 兵庫県 --category 製�
 ```
 
    - `--category` は業種(`category`)にいずれかの語を含む店舗だけ(カンマ区切り・OR)。通常の倉庫モードでも使えます。
-   - `--max-employees 20`(既定20): この人数以下を `small`、超えると `large`、会社概要から人数が読めなければ上場・資本金1億円以上で `large`、それ以外は `unknown`。
+   - `--max-employees 30`(既定30。2026-10 社内方針: 30名くらいまでが対象): この人数以下を `small`、超えると `large`、会社概要から人数が読めなければ上場・資本金1億円以上で `large`、それ以外は `unknown`。
    - 結果は `employees` / `capital_yen` / `listed` / `size_class` / `size_note` / `profile_url` / `size_checked_at` 列へ。dry-run のCSVには 従業員数・資本金・上場・規模・会社概要URL の列が付きます。
 
 3. フォーム探しは済んでいて規模だけ調べたいときは `--size-only`(`size_checked_at` が空でホームページのある店舗が対象。`form_*` 列は触りません。`--loop` / `--limit` / `--dry-run` / `--concurrency` も同様に使えます):
