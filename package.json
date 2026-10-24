@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node test/unit.js"
+    "test": "node test/unit.js",
+    "batch": "node cli/batch-scan.js",
+    "test:batch": "node test/batch.test.js"
   },
   "keywords": [],
   "author": "",

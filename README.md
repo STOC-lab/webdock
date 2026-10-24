@@ -80,3 +80,41 @@ server {
 ## 次段階の構想
 - 精密検査(有料): ドメイン所有確認(DNS TXT)+同意取得済みサイト限定で、能動的な診断を提供
 - TOC営業管理への見込み客自動登録・閲覧トラッキング
+
+## 一括診断(問い合わせ営業用)
+営業DBから書き出した店舗リストを、既存の10項目診断で順番に点検し、問い合わせフォーム用の文面つきCSVを作る。公開情報だけを見るので、サイトへの侵入や攻撃は行わない。
+
+### 1. 入力リストを作る(サーバー上)
+```
+mysql stoc_sales -B -e "SELECT id AS store_id, name, website_url AS url, prefecture, category FROM stores WHERE inquiry_url_confirmed=1 AND website_url IS NOT NULL AND website_url<>'' AND status NOT IN ('失注','契約')" > /var/www/webdock/data/targets.tsv
+```
+タブ区切り(1行目は列名)。CSVも可。`NULL` と空欄は空として扱う。列名は `store_id|id|店舗ID`、`name|店名|会社名|shop_name`、`url|website_url|ウェブサイト`、`prefecture|都道府県`、`category|業種` に対応。
+
+### 2. 実行する
+```
+nohup node cli/batch-scan.js --in data/targets.tsv --out data/result.csv --resume &
+tail -f nohup.out
+```
+- `--concurrency 5`(同時実行数)、`--limit N`(先頭N件だけ)、`--template west|east|auto`(auto=都道府県で西/東を自動選択)
+- 終わった行から順に追記される。中断(Ctrl+C / kill -INT)しても完了分は残り、`--resume` を付けて再実行すると出力済みの store_id を飛ばして続きから進む。`--resume` なしだと上書き。
+- 同じドメインは1回だけ診断して結果を使い回す。1サイト45秒でタイムアウト。
+- 進捗は20件ごとに「[完了/全体] 送信推奨 n件 / エラー m件 / 残り約X分」と表示。
+- 出力は `result.csv`(UTF-8 BOM付き・Excelで開ける)と、診断の全項目を含む `result.csv.jsonl`。
+
+### 3. 出力列の意味
+- `store_id` `店名` `都道府県` `業種` `URL`: 入力そのまま。`ドメイン`: wwwを除いたホスト名
+- `判定`: 総合評価 A〜E(診断不能は空)。`点数`: 総合点
+- `証明書` `https転送` `暗号方式` `ヘッダー` `Cookie` `混在` `CMS露出` `JSライブラリ` `外部スクリプト` `なりすまし対策`: 10項目の判定。A=問題なし、C=要注意、D=要対策、—=確認不能
+- `指摘種別`: 文面に使う指摘1点(https / dmarc / old_parts / headers / mixed)。優先順はこの順で、該当なしは空
+- `指摘` `困ること`: 文面に差し込む文言
+- `送信推奨`: はい=指摘があり総合判定がC・D・Eのもの。いいえ=送らない
+- `本文`: 送信推奨が「はい」の行だけ、問い合わせフォームにそのまま貼れる文面
+- `エラー`: 診断できなかった理由(URLなし等)。`診断日時`: 日本時間
+
+### 4. 文面の編集
+`templates/` のファイルを編集する(再実行で反映)。
+- `findings.json`: 指摘ごとの「指摘」「困ること」の文言
+- `outreach-west.txt` / `outreach-east.txt`: 西日本・東日本の本文。`{会社名}` などの `{}` 部分が差し込み項目
+- `outreach-config.json`: 差出人会社・担当者名・電話・所在地・実績(`所在地`は `【所在地】` のままなので要入力。`実績` が空なら該当行は自動で消える)
+
+テスト: `npm run test:batch`(ネットワーク不要)
