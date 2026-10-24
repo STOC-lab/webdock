@@ -10,10 +10,12 @@ const SERVICE_NAME = process.env.SERVICE_NAME || 'WEBドック';
 async function notifyLead(lead) {
   // 対応会社ごとに通知先を分ける。未設定時は共通の LEAD_NOTIFY_TO にフォールバック。
   const fallback = process.env.LEAD_NOTIFY_TO || 'kit@stoc.co.jp';
+  // TOC宛ては TOC_NOTIFY_TO、STOC(訪問・全国)宛ては STOC_NOTIFY_TO
   const to = lead.assignedCompany === 'TOC'
     ? (process.env.TOC_NOTIFY_TO || fallback)
     : (process.env.STOC_NOTIFY_TO || fallback);
-  const companyLabel = lead.assignedCompany === 'TOC' ? 'TOC(近県・訪問)' : 'STOC(全国・オンライン)';
+  const { COMPANY_INFO } = require('./regions');
+  const companyLabel = (COMPANY_INFO[lead.assignedCompany] || {}).label || '-';
   const subject = `【${SERVICE_NAME}／${lead.assignedCompany || '-'}】新規診断申込: ${lead.company}(${lead.prefecture || '-'})`;
   const lines = [
     `${SERVICE_NAME}に新しい診断申込がありました。`,
@@ -28,9 +30,11 @@ async function notifyLead(lead) {
     `総合評価 : ${lead.grade || '-'}(${lead.score != null ? lead.score + '点' : '-'})`,
     `診断ID   : ${lead.scanId}`,
     '',
-    lead.assignedCompany === 'TOC'
-      ? '→ TOCにて訪問・UTM/PC PATROL等のご提案を。早めの架電をおすすめします。'
-      : '→ STOCにてZoom商談・MEO対策付きサイトのご提案を。早めの架電をおすすめします。',
+    ({
+      STOCV: '→ STOCにて訪問・UTM/PC PATROL中心のご提案を。早めの架電をおすすめします。',
+      TOC: '→ TOCにて訪問・UTMのご提案を。早めの架電をおすすめします。',
+      STOC: '→ STOCにてZoom商談・MEO対策付きサイトのご提案を。早めの架電をおすすめします。',
+    })[lead.assignedCompany] || '早めの架電をおすすめします。',
   ];
   const text = lines.join('\n');
 

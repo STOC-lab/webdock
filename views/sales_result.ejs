@@ -34,19 +34,17 @@
 <!-- 提案の出し分け(TOC/STOC切替) -->
 <section class="offer-switch">
   <div class="offer-tabs">
-    <button type="button" class="offer-tab active" data-target="offer-TOC">訪問で対策(TOC)</button>
-    <button type="button" class="offer-tab" data-target="offer-STOC">オンライン/サイト(STOC)</button>
+    <% ['STOCV','TOC','STOC'].forEach(function(k, i){ %>
+      <button type="button" class="offer-tab<%= i===0 ? ' active' : '' %>" data-target="offer-<%= k %>"><%= companyInfo[k].label %></button>
+    <% }) %>
   </div>
-  <div id="offer-TOC" class="offer-pane">
-    <h3>ご提案</h3>
-    <p><%= companyInfo.TOC.offer %></p>
-    <p class="contact">お問い合わせ: <strong><%= companyInfo.TOC.tel %></strong></p>
+  <% ['STOCV','TOC','STOC'].forEach(function(k, i){ %>
+  <div id="offer-<%= k %>" class="offer-pane"<%= i===0 ? '' : ' hidden' %>>
+    <h3>ご提案(<%= companyInfo[k].channel %>)</h3>
+    <p><%= companyInfo[k].offer %></p>
+    <p class="contact">お問い合わせ: <strong><%= companyInfo[k].tel %></strong></p>
   </div>
-  <div id="offer-STOC" class="offer-pane" hidden>
-    <h3>ご提案</h3>
-    <p><%= companyInfo.STOC.offer %></p>
-    <p class="contact">お問い合わせ: <strong><%= companyInfo.STOC.tel %></strong></p>
-  </div>
+  <% }) %>
 </section>
 
 <section class="all-items">
