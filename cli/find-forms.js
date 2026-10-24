@@ -8,6 +8,8 @@
  *   node cli/find-forms.js --loop                                             (500件ずつ処理し続ける)
  *
  * オプション: --concurrency 5  --prefecture 兵庫県  --recheck-days 90  --error-retry-days 7
+倉庫モード: node cli/find-forms.js --source warehouse --prefecture 大阪府 [--loop] [--retry-needs-browser]
+            (stoc_master.shops を対象にし、結果は shops の form_* 列へ書く。接続は WH_DB_* )
  * フォームの送信は一切しない(ページを見るだけ)。
  */
 
@@ -21,7 +23,7 @@ const LOOP_SLEEP_MS = 30 * 60 * 1000;
 
 /* ---------- 引数 ---------- */
 function parseArgs(argv) {
-  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false };
+  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false, source: 'stores', retryNeedsBrowser: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -33,8 +35,11 @@ function parseArgs(argv) {
     else if (a === '--prefecture') o.prefecture = next();
     else if (a === '--recheck-days') o.recheckDays = Number(next());
     else if (a === '--error-retry-days') o.errorRetryDays = Number(next());
+    else if (a === '--source') o.source = next();
+    else if (a === '--retry-needs-browser') o.retryNeedsBrowser = true;
     else throw new Error('不明なオプション: ' + a);
   }
+  if (o.source !== 'stores' && o.source !== 'warehouse') throw new Error('--source は stores か warehouse を指定してください');
   for (const k of ['limit', 'concurrency', 'recheckDays', 'errorRetryDays']) {
     if (!Number.isFinite(o[k]) || o[k] < 1) throw new Error(`--${k} の値が不正です`);
     o[k] = Math.floor(o[k]);
@@ -175,8 +180,80 @@ WHERE s.website_url IS NOT NULL AND s.website_url <> ''
   return { sql, params };
 }
 
+/* ---------- 倉庫モード(stoc_master.shops) ---------- */
+function createWarehousePool() {
+  const mysql = require('mysql2/promise');
+  return mysql.createPool({
+    host: process.env.WH_DB_HOST || '127.0.0.1',
+    port: Number(process.env.WH_DB_PORT || 3306),
+    user: process.env.WH_DB_USER,
+    password: process.env.WH_DB_PASS,
+    charset: 'utf8mb4',
+    connectionLimit: 3,
+  });
+}
+
+/**
+ * 倉庫の調査対象。(prefecture, form_status) 索引で都道府県の範囲に絞ってから並べ替える。
+ * 調査すると form_status / form_checked_at が変わって対象から外れるので、ループしても同じ行を繰り返さない。
+ * needs_browser は retryNeedsBrowser のときだけ再試行する。
+ */
+function buildWarehouseTargetQuery({ recheckDays, errorRetryDays, prefecture, limit, retryNeedsBrowser }) {
+  const params = [];
+  const prefs = String(prefecture || '').split(',').map((x) => x.trim()).filter(Boolean);
+  let sql = `
+SELECT id, name, website_url, prefecture, review_count
+FROM stoc_master.shops
+WHERE website_url IS NOT NULL AND website_url <> ''`;
+  if (prefs.length) { sql += '\n  AND prefecture IN (?)'; params.push(prefs); }
+  sql += `
+  AND (
+    (form_status = 'unknown' AND form_checked_at IS NULL)
+    OR (form_status IN (${retryNeedsBrowser ? "'error','needs_browser'" : "'error'"}) AND form_checked_at < NOW() - INTERVAL ? DAY)
+    OR (form_status = 'no_form' AND form_checked_at < NOW() - INTERVAL ? DAY)
+  )
+ORDER BY review_count IS NULL, review_count DESC, id
+LIMIT ?`;
+  params.push(errorRetryDays, recheckDays, limit);
+  return { sql, params };
+}
+
+const clipStr = (v, n) => (typeof v === 'string' && v.length > n ? v.slice(0, n) : v);
+
+/** finderの結果 -> shops の更新値。finderの 'unknown'(JS生成サイト等)は 'needs_browser' として記録する。 */
+function resultToShopUpdate(r) {
+  const found = r.status === 'url_found' && r.inquiryUrl && r.inquiryUrl.length <= 1000;
+  const status = found ? 'url_found' : r.status === 'no_form' ? 'no_form' : r.status === 'unknown' ? 'needs_browser'
+    : 'error';
+  const email = (r.emails || []).find((e) => e && e.length <= 255) || null;
+  const note = r.status === 'url_found' && !found ? 'フォームURLが長すぎます' : r.note;
+  return {
+    form_status: status,
+    form_url: found ? r.inquiryUrl : null,
+    form_kind: found ? clipStr(r.kind === 'external' ? 'external' : 'onsite', 20) : null,
+    form_captcha: found ? (r.hasCaptcha ? 1 : 0) : null,
+    form_note: note ? clipStr(String(note), 100) : null,
+    email,
+    instagram_url: r.instagram && r.instagram.length <= 500 ? r.instagram : null,
+  };
+}
+
+function makeWarehouseWriter(pool) {
+  const SQL = `
+UPDATE stoc_master.shops SET
+  form_status = ?, form_url = ?, form_kind = ?, form_captcha = ?, form_note = ?, form_checked_at = NOW(),
+  email = IF((email IS NULL OR email = '') AND ? IS NOT NULL, ?, email),
+  instagram_url = IF((instagram_url IS NULL OR instagram_url = '') AND ? IS NOT NULL, ?, instagram_url)
+WHERE id = ?`;
+  return async function write(shop, r) {
+    const u = resultToShopUpdate(r);
+    await pool.execute(SQL, [u.form_status, u.form_url, u.form_kind, u.form_captcha, u.form_note,
+      u.email, u.email, u.instagram_url, u.instagram_url, shop.id]);
+  };
+}
+
 async function fetchTargets(pool, opts, limit) {
-  const { sql, params } = buildTargetQuery({ ...opts, limit });
+  const { sql, params } = opts.source === 'warehouse' ? buildWarehouseTargetQuery({ ...opts, limit }) : buildTargetQuery({ ...opts, limit });
   // LIMIT のプレースホルダは query() で埋め込む(execute だと型で失敗する環境があるため)
   const [rows] = await pool.query(sql, params);
   return rows;
@@ -263,8 +340,9 @@ async function main() {
   });
   const shouldStop = () => stopping;
 
-  const pool = createPool();
-  const writer = opts.dryRun ? makeCsvWriter(opts.out) : makeDbWriter(pool);
+  const wh = opts.source === 'warehouse';
+  const pool = wh ? createWarehousePool() : createPool();
+  const writer = opts.dryRun ? makeCsvWriter(opts.out) : wh ? makeWarehouseWriter(pool) : makeDbWriter(pool);
   const finder = (url) => findContact(url);
   let lastPrinted = 0;
   const makeProgress = (offset) => (s) => {
@@ -308,4 +386,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { makeDbWriter, fetchTargets, createPool, processStores, parseArgs, buildTargetQuery, csvField, csvLine, csvRow, CSV_COLUMNS, normalizeUrl };
+module.exports = { buildWarehouseTargetQuery, resultToShopUpdate, makeWarehouseWriter, createWarehousePool, makeDbWriter, fetchTargets, createPool, processStores, parseArgs, buildTargetQuery, csvField, csvLine, csvRow, CSV_COLUMNS, normalizeUrl };

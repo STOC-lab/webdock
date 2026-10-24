@@ -297,6 +297,118 @@ function run(script, args) {
   eq((await cand(id1, 'inquiry_url')).map((x) => [x.value, x.is_active]), [['http://f1.example.jp/contact', 1], ['http://f1.example.jp/inquiry', 0]], 'old URL reactivated');
   await pool.end();
 
+  // ===== 倉庫でのフォーム探し(migrate_002 / 倉庫モード / 引き継ぎ) =====
+  const mig2 = fs.readFileSync(path.join(ROOT, 'sql/warehouse_migrate_002.sql'), 'utf8');
+  // 旧スキーマに戻してから2回適用(冪等)
+  await q('ALTER TABLE stoc_master.shops DROP COLUMN form_note, DROP COLUMN form_kind, DROP COLUMN form_captcha, DROP INDEX idx_pref_form');
+  await q("ALTER TABLE stoc_master.shops MODIFY form_status ENUM('unknown','url_found','no_form','error') NOT NULL DEFAULT 'unknown'");
+  await q(mig2);
+  await q(mig2);
+  const colsOf = async () => (await q("SELECT COLUMN_NAME c, COLUMN_TYPE t FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='stoc_master' AND TABLE_NAME='shops' AND COLUMN_NAME IN ('form_note','form_kind','form_captcha','form_status') ORDER BY c"));
+  const cols = await colsOf();
+  eq(cols.map((c) => c.c), ['form_captcha', 'form_kind', 'form_note', 'form_status'], 'migrate_002 adds columns');
+  eq(/needs_browser/.test(cols.find((c) => c.c === 'form_status').t), true, 'enum has needs_browser');
+  eq((await q("SELECT COUNT(*) n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='stoc_master' AND TABLE_NAME='shops' AND INDEX_NAME='idx_pref_form'"))[0].n, 2, 'index (prefecture, form_status) exists once');
+
+  process.env.WH_DB_HOST = cfg.host; process.env.WH_DB_PORT = String(cfg.port);
+  process.env.WH_DB_USER = cfg.user; process.env.WH_DB_PASS = cfg.password;
+  const whPool = ff.createWarehousePool();
+  const whWriter = ff.makeWarehouseWriter(whPool);
+  await q('DELETE FROM stoc_master.shops');
+  const SH = async (name, url, pref, rv, extra) => (await q(
+    'INSERT INTO stoc_master.shops (cid, name, website_url, prefecture, review_count, first_seen_at, last_seen_at, form_status, form_checked_at, email) VALUES (?,?,?,?,?,NOW(),NOW(),?,?,?)',
+    [extra && extra.cid || null, name, url, pref, rv, extra && extra.status || 'unknown', extra && extra.checked || null, extra && extra.email || null])).insertId;
+  const w1 = await SH('W1', 'http://w1.example.jp', '大阪府', 50, { cid: '0xc1' });
+  const w2 = await SH('W2', 'http://w2.example.jp', '大阪府', 40, { cid: '0xc2' });
+  const w3 = await SH('W3', 'http://w3.example.jp', '大阪府', null);
+  const w4 = await SH('W4', 'http://w4.example.jp', '大阪府', 30);
+  const w5 = await SH('W5', 'http://w5.example.jp', '大阪府', 20, { cid: '0xc5', email: 'keep@w5.example.jp' });
+  const wTok = await SH('Tokyo', 'http://tokyo2.example.jp', '東京都', 99);
+  const wNoUrl = await SH('NoUrl', '', '大阪府', 90);
+  const wNb = await SH('NeedsBrowserOld', 'http://nb.example.jp', '大阪府', 10, { status: 'needs_browser', checked: '2020-01-01 00:00:00' });
+  const wErrOld = await SH('ErrOld', 'http://eo.example.jp', '大阪府', 9, { status: 'error', checked: '2020-01-01 00:00:00' });
+  const wErrNew = await SH('ErrNew', 'http://en.example.jp', '大阪府', 8, { status: 'error', checked: new Date() });
+  const wNfOld = await SH('NfOld', 'http://no.example.jp', '大阪府', 7, { status: 'no_form', checked: '2020-01-01 00:00:00' });
+  const wNfNew = await SH('NfNew', 'http://nn.example.jp', '大阪府', 6, { status: 'no_form', checked: new Date() });
+  const wUnkChecked = await SH('UnkChecked', 'http://uc.example.jp', '大阪府', 5, { status: 'unknown', checked: '2020-01-01 00:00:00' });
+  const baseOpts = { source: 'warehouse', recheckDays: 90, errorRetryDays: 7, prefecture: '大阪府', retryNeedsBrowser: false };
+  let tg = await ff.fetchTargets(whPool, baseOpts, 100);
+  eq(tg.map((x) => x.id), [w1, w2, w4, w5, wErrOld, wNfOld, w3], 'wh targets: prefecture, status, order (review DESC, NULL last)');
+  eq((await ff.fetchTargets(whPool, { ...baseOpts, retryNeedsBrowser: true }, 100)).map((x) => x.id).includes(wNb), true, 'needs_browser retried only with flag');
+  eq((await ff.fetchTargets(whPool, { ...baseOpts, prefecture: '大阪府,東京都' }, 100)).some((x) => x.id === wTok), true, 'prefecture list');
+  eq((await ff.fetchTargets(whPool, baseOpts, 2)).map((x) => x.id), [w1, w2], 'limit');
+
+  const hostRes = {
+    'w1.example.jp': res({ inquiryUrl: 'http://w1.example.jp/contact', kind: 'external', hasCaptcha: true, emails: ['info@w1.example.jp'], instagram: 'https://instagram.com/w1' }),
+    'w2.example.jp': res({ status: 'no_form', note: 'フォームなし' }),
+    'w3.example.jp': res({ status: 'unknown', note: '要ブラウザ確認(JSで作られたサイト)' }),
+    'w4.example.jp': res({ status: 'error', note: '調査に失敗しました' }),
+    'w5.example.jp': res({ inquiryUrl: 'http://w5.example.jp/c', emails: ['new@w5.example.jp'] }),
+    'eo.example.jp': res({ status: 'no_form' }),
+    'no.example.jp': res({ status: 'url_found', inquiryUrl: 'http://no.example.jp/contact' }),
+  };
+  await ff.processStores({ stores: tg, finder: async (url) => hostRes[new URL(url).hostname], writer: whWriter, concurrency: 3 });
+  const sh = async (id) => (await q('SELECT * FROM stoc_master.shops WHERE id = ?', [id]))[0];
+  let x = await sh(w1);
+  eq([x.form_status, x.form_url, x.form_kind, x.form_captcha, x.email, x.instagram_url, x.form_checked_at !== null], ['url_found', 'http://w1.example.jp/contact', 'external', 1, 'info@w1.example.jp', 'https://instagram.com/w1', true], 'wh url_found row');
+  x = await sh(w2); eq([x.form_status, x.form_url, x.form_note, x.form_kind], ['no_form', null, 'フォームなし', null], 'wh no_form row');
+  x = await sh(w3); eq([x.form_status, x.form_note, x.form_checked_at !== null], ['needs_browser', '要ブラウザ確認(JSで作られたサイト)', true], 'wh unknown -> needs_browser');
+  x = await sh(w4); eq(x.form_status, 'error', 'wh error row');
+  x = await sh(w5); eq([x.form_status, x.email, x.form_captcha], ['url_found', 'keep@w5.example.jp', 0], 'wh existing email kept');
+  eq((await sh(wErrOld)).form_status, 'no_form', 'wh error retried');
+  eq((await sh(wNfOld)).form_status, 'url_found', 'wh no_form rechecked');
+  eq((await sh(wNb)).form_status, 'needs_browser', 'needs_browser untouched');
+  eq((await sh(wTok)).form_status, 'unknown', 'other prefecture untouched');
+  eq((await ff.fetchTargets(whPool, baseOpts, 100)).map((r) => r.id), [], 'wh loop makes progress: no targets left');
+  // dry-run CSV(store_id列に shops.id)
+  const dcsv = path.join(dir, 'wh-dry.csv');
+  await ff.processStores({ stores: [{ id: w4, name: 'W4', website_url: 'http://w4.example.jp', prefecture: '大阪府' }], finder: async () => res({ inquiryUrl: 'http://w4.example.jp/c' }), writer: (() => { const fsx = require('fs'); fsx.writeFileSync(dcsv, ''); return async (s, r) => fsx.appendFileSync(dcsv, ff.csvRow(s, r)); })() });
+  eq(fs.readFileSync(dcsv, 'utf8').startsWith(w4 + ',W4,大阪府,http://w4.example.jp,フォームあり,http://w4.example.jp/c,自社,なし'), true, 'dry-run csv row uses shops.id');
+  await whPool.end();
+
+  // --- 昇格のシミュレーション + 引き継ぎ(照合順序を本番と同じく食い違わせる) ---
+  await q('ALTER TABLE stoc_sales.stores MODIFY cid VARCHAR(20) COLLATE utf8mb4_unicode_ci NULL');
+  await q('ALTER TABLE stoc_master.shops MODIFY cid VARCHAR(20) COLLATE utf8mb4_general_ci NULL');
+  const colls = await q("SELECT TABLE_SCHEMA s, COLLATION_NAME c FROM information_schema.COLUMNS WHERE TABLE_NAME IN ('stores','shops') AND COLUMN_NAME='cid' ORDER BY s");
+  eq(colls.map((c) => c.c), ['utf8mb4_general_ci', 'utf8mb4_unicode_ci'], 'cid collations differ across databases');
+  // w1: 新規 / w2(no_form): 営業側にも作るが対象外 / w5: 営業側は 'sent' 済み
+  const st1 = (await q("INSERT INTO stoc_sales.stores (name, cid) VALUES ('W1店', '0xc1')")).insertId;
+  const st2 = (await q("INSERT INTO stoc_sales.stores (name, cid) VALUES ('W2店', '0xc2')")).insertId;
+  const st5 = (await q("INSERT INTO stoc_sales.stores (name, cid) VALUES ('W5店', '0xc5')")).insertId;
+  await q("INSERT INTO stoc_sales.store_contact_channels (store_id, inquiry_status, email_status, instagram_url, instagram_status) VALUES (?, 'sent', 'sent', 'https://instagram.com/mine', 'dm_sent')", [st5]);
+  r = run('cli/warehouse-import.js', ['--link-only', '--carry-forms']);
+  eq(r.code, 0, 'carry exit: ' + r.err);
+  eq(/引き継ぎ完了/.test(r.err), true, 'carry summary printed: ' + r.err);
+  eq((await sh(w1)).stoc_store_id, st1, 'linked despite collation mismatch');
+  const cch = async (id) => (await q('SELECT * FROM stoc_sales.store_contact_channels WHERE store_id = ?', [id]))[0];
+  const cd = async (id) => (await q('SELECT channel_type t, value v, source s, is_active a FROM stoc_sales.contact_channel_candidates WHERE store_id = ? ORDER BY t, v', [id]));
+  let k = await cch(st1);
+  eq([k.inquiry_status, k.email_status, k.instagram_url, k.instagram_status, k.inquiry_last_checked_at !== null], ['url_found', 'found', 'https://instagram.com/w1', 'found', true], 'carried channel row');
+  eq(await cd(st1), [{ t: 'inquiry_url', v: 'http://w1.example.jp/contact', s: 'finder', a: 1 }, { t: 'email', v: 'info@w1.example.jp', s: 'finder', a: 1 }], 'carried candidates');
+  k = await cch(st5);
+  eq([k.inquiry_status, k.email_status, k.instagram_url, k.instagram_status], ['sent', 'sent', 'https://instagram.com/mine', 'dm_sent'], 'sent / existing values not overwritten');
+  eq((await cd(st5)).map((c) => c.v), ['http://w5.example.jp/c', 'keep@w5.example.jp'], 'candidates added even for sent store');
+  eq([await cch(st2), (await cd(st2)).length], [undefined, 0], 'no_form shop not carried');
+  // 既存 no_form -> url_found / unknown メール -> found
+  await q("INSERT INTO stoc_master.shops (cid, name, website_url, prefecture, first_seen_at, last_seen_at, form_status, form_url, form_checked_at, email) VALUES ('0xc9','W9','http://w9.example.jp','大阪府',NOW(),NOW(),'url_found','http://w9.example.jp/c',NOW(),'a@w9.example.jp')");
+  const st9 = (await q("INSERT INTO stoc_sales.stores (name, cid) VALUES ('W9店', '0xc9')")).insertId;
+  await q("INSERT INTO stoc_sales.store_contact_channels (store_id, inquiry_status, inquiry_last_checked_at) VALUES (?, 'no_form', '2030-01-01 00:00:00')", [st9]);
+  const before = [(await q('SELECT COUNT(*) n FROM stoc_sales.contact_channel_candidates'))[0].n];
+  r = run('cli/warehouse-import.js', ['--link-only', '--carry-forms']);
+  k = await cch(st9);
+  eq([k.inquiry_status, k.email_status, new Date(k.inquiry_last_checked_at).getFullYear()], ['url_found', 'found', 2030], 'no_form upgraded; last_checked uses GREATEST');
+  // 再実行しても同じ
+  const snap = async () => JSON.stringify([await q('SELECT store_id, inquiry_status, email_status, instagram_url, instagram_status, inquiry_last_checked_at, email_last_checked_at FROM stoc_sales.store_contact_channels ORDER BY store_id'), await q('SELECT store_id, channel_type, value FROM stoc_sales.contact_channel_candidates ORDER BY id')]);
+  const s1snap = await snap();
+  r = run('cli/warehouse-import.js', ['--link-only', '--carry-forms']);
+  eq([r.code, await snap()], [0, s1snap], 'carry-forms idempotent');
+  eq((await q('SELECT COUNT(*) n FROM stoc_sales.contact_channel_candidates'))[0].n > before[0] - 1, true, 'candidates kept');
+  // promote: --form-found の統計行
+  r = run('cli/warehouse-promote.js', ['--out', path.join(dir, 'out', 'wf.csv'), '--prefecture', '大阪府', '--form-found', '--no-rules']);
+  eq(/書き出し対象: \d+\(うちフォームあり \d+\)/.test(r.err), true, 'promote stats show form count: ' + r.err);
+  r = run('cli/warehouse-promote.js', ['--out', path.join(dir, 'out', 'wf.csv'), '--prefecture', '大阪府', '--form-found', '--no-rules']);
+  eq(/うちフォームあり (\d+)/.exec(r.err)[1] === /書き出し対象: (\d+)/.exec(r.err)[1], true, '--form-found rows all have a form');
+
   await db.end();
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`${pass} passed, ${fail} failed`);

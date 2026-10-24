@@ -238,6 +238,55 @@ npm run wh:promote -- --out data/promote_20261024.csv --prefecture 東京都,神
 - `--mark` を付けると書き出した店舗に出力済みの印が付き、次回以降は重複して出力されません(付けなければ何度でも同じ結果を出せます)
 - できた CSV を営業アプリの CSV取り込み画面からアップロードします
 
+### 倉庫でフォーム探し(地域ごと)
+
+営業アプリを軽く保つため、倉庫(`stoc_master.shops`)の店舗に対して地域ごとにフォーム探しを走らせ、**フォームが見つかった店舗だけ**を営業アプリへ入れます。結果は倉庫の `form_status`(`unknown` / `url_found` / `no_form` / `error` / `needs_browser`=JSで作られたサイトなどブラウザ確認が必要)、`form_url`、`form_kind`(onsite/external)、`form_captcha`、`form_note`、`form_checked_at` に書き、メール・Instagramは倉庫側が空のときだけ補います。フォームの送信・入力は一切しません。
+
+1. 一度だけ、倉庫に列と索引を足します(何度実行しても安全)。
+
+```
+mysql < sql/warehouse_migrate_002.sql
+```
+
+2. 後で営業アプリへ引き継ぐため、root で `stoc_wh` に権限を足します(一度だけ)。
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON stoc_sales.store_contact_channels TO 'stoc_wh'@'localhost';
+GRANT SELECT, INSERT, UPDATE ON stoc_sales.contact_channel_candidates TO 'stoc_wh'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+3. 大阪府を別のpm2プロセスとして常駐させます(接続は倉庫と同じ `.env` の `WH_DB_*`。営業アプリ用の `form-finder` とは別です)。
+
+```
+pm2 start cli/find-forms.js --name form-finder-wh --cwd /var/www/webdock -- --source warehouse --prefecture 大阪府 --loop --concurrency 5 && pm2 save
+```
+
+   - 対象はホームページのある店舗で、口コミ数の多い順に処理します。未調査のほか、`error` は `--error-retry-days`(既定7日)後、`no_form` は `--recheck-days`(既定90日)後に再調査します。`needs_browser` は既定では再調査せず、`--retry-needs-browser` を付けたときだけ `--error-retry-days` 後に再試行します。
+   - `--prefecture 大阪府,京都府` のようにカンマで複数指定できます。お試しは `--dry-run --limit 50 --out data/forms-wh.csv`(DBには書きません。CSVの `store_id` 列は倉庫の `shops.id`)。
+
+4. 進み具合の確認:
+
+```
+mysql stoc_master -e "SELECT form_status, COUNT(*) FROM shops WHERE prefecture='大阪府' AND website_url IS NOT NULL GROUP BY form_status;"
+```
+
+5. フォームが見つかった店舗だけCSVにし、営業アプリのCSV取り込み画面から入れます。
+
+```
+npm run wh:promote -- --prefecture 大阪府 --form-found --out data/promote_osaka.csv --mark
+```
+
+   統計行に「書き出し対象: N(うちフォームあり M)」と出ます。
+
+6. 営業アプリへの取り込みが終わったら、見つかったフォームURL(とメール・Instagram)を営業アプリへ引き継ぎます。これで営業アプリの書き出しがすぐフォームURLを使えます。
+
+```
+node cli/warehouse-import.js --link-only --carry-forms
+```
+
+   `stoc_store_id` で紐付いた `url_found` の店舗について、`contact_channel_candidates` に `source='finder'` で追加し、`store_contact_channels` の `inquiry_status` を `url_found` にします(`sent` `confirmed` `failed` は上書きしません。メール・Instagramも未設定のときだけ)。何度実行しても結果は同じです。権限が足りないときは必要な `GRANT` を表示します。通常の取り込み(`--root`)に `--carry-forms` を付けると、取り込みの最後に同じ処理をします。
+
 ### 収集ツールの元ファイル(14列)の取り込みと閉業店の扱い
 
 収集ツールが出力した14列の元ファイル(`緯度（世界測地系）`・`経度（世界測地系）`・`開閉店情報`・`掲載元URL` を含む)は、加工せずそのまま `--root` に置いて取り込めます。列は見出しの名前で判定します。`開閉店情報` は取り込みのたびに最新の内容へ更新され(空欄なら空に戻る)、業種は全体を `category`、先頭の1つを `category_main` に保存します。営業管理へ入れるCSVの業種は、リスツールでの整形と同じく**先頭の1つだけ**を出力します。**リスツールでの整形は不要です**(元ファイルをそのまま取り込めば、整形に当たる処理は倉庫側で行います)。

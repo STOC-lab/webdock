@@ -28,9 +28,12 @@ CREATE TABLE IF NOT EXISTS stoc_master.shops (
   first_seen_at DATETIME NOT NULL,
   last_seen_at DATETIME NOT NULL,
   stoc_store_id INT NULL,
-  form_status ENUM('unknown','url_found','no_form','error') NOT NULL DEFAULT 'unknown',
+  form_status ENUM('unknown','url_found','no_form','error','needs_browser') NOT NULL DEFAULT 'unknown',
   form_url VARCHAR(1000) NULL,
+  form_kind VARCHAR(20) NULL,
+  form_captcha TINYINT(1) NULL,
   form_checked_at DATETIME NULL,
+  form_note VARCHAR(100) NULL,
   email VARCHAR(255) NULL,
   instagram_url VARCHAR(500) NULL,
   webdock_grade VARCHAR(2) NULL,
@@ -46,6 +49,7 @@ CREATE TABLE IF NOT EXISTS stoc_master.shops (
   KEY idx_pref_catmain (prefecture, category_main),
   KEY idx_stoc_store (stoc_store_id),
   KEY idx_form_pref (form_status, prefecture),
+  KEY idx_pref_form (prefecture, form_status),
   KEY idx_promoted (promoted_at),
   KEY idx_last_seen (last_seen_at),
   KEY idx_lat_lng (lat, lng)
@@ -68,4 +72,7 @@ CREATE TABLE IF NOT EXISTS stoc_master.import_runs (
 -- CREATE USER 'stoc_wh'@'localhost' IDENTIFIED BY '…';
 -- GRANT ALL ON stoc_master.* TO 'stoc_wh'@'localhost';
 -- GRANT SELECT ON stoc_sales.stores TO 'stoc_wh'@'localhost';
+-- (フォームURL等の引き継ぎ --carry-forms を使う場合)
+-- GRANT SELECT, INSERT, UPDATE ON stoc_sales.store_contact_channels TO 'stoc_wh'@'localhost';
+-- GRANT SELECT, INSERT, UPDATE ON stoc_sales.contact_channel_candidates TO 'stoc_wh'@'localhost';
 -- FLUSH PRIVILEGES;

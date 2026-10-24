@@ -6,7 +6,9 @@
  *   --pattern: ファイル名(フォルダ名は含まない)に対するワイルドカード(* と ?、大文字小文字無視)。
  *              リスツール整形後のファイル(nagasaki.csv 等)を除き、収集ツールの元ファイルだけ取り込むために使う。
  *   元ファイルはUTF-8(BOM有無どちらも可)。Shift_JISも自動判定。
- *   node cli/warehouse-import.js --link-only
+ *   node cli/warehouse-import.js --link-only [--carry-forms]
+ *   --carry-forms: リンク後、倉庫で見つけたフォームURL(とメール/Instagram)を営業アプリの
+ *                  contact_channel_candidates / store_contact_channels へ引き継ぐ(通常の取り込みの最後にも実行)
  * 接続: WH_DB_HOST(127.0.0.1) WH_DB_PORT WH_DB_USER WH_DB_PASS (.env)
  */
 
@@ -19,12 +21,13 @@ const CHUNK = 64 * 1024 * 1024;
 const LINK_CHUNK = 50000;
 
 function parseArgs(argv) {
-  const o = { root: null, dryRun: false, batch: 1000, linkOnly: false, pattern: null };
+  const o = { root: null, dryRun: false, batch: 1000, linkOnly: false, pattern: null, carryForms: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--root') o.root = argv[++i];
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--link-only') o.linkOnly = true;
+    else if (a === '--carry-forms') o.carryForms = true;
     else if (a === '--pattern') o.pattern = argv[++i];
     else if (a === '--batch') o.batch = Math.floor(Number(argv[++i]));
     else throw new Error('不明なオプション: ' + a);
@@ -182,12 +185,69 @@ async function linkStep(pool, log = console.error) {
   return linked;
 }
 
+const GRANT_HINT = `  GRANT SELECT, INSERT, UPDATE ON stoc_sales.store_contact_channels TO 'stoc_wh'@'localhost';
+  GRANT SELECT, INSERT, UPDATE ON stoc_sales.contact_channel_candidates TO 'stoc_wh'@'localhost';`;
+
+/**
+ * 倉庫でフォームが見つかった店舗のうち、営業アプリに紐付いたもの(stoc_store_id あり)について、
+ * フォームURL・メールを contact_channel_candidates へ、状態を store_contact_channels へ書く。
+ * sent / confirmed / failed などの状態は上書きしない。何度実行しても結果は同じ。
+ * 値(文字列)をDBをまたいでコピーするだけで、照合順序をそろえる必要のある比較は行わない
+ * (列同士の比較が必要になる場合は linkStep と同様に COLLATE でそろえること)。
+ */
+async function carryFormsStep(pool, log = console.error) {
+  const tot = { urls: 0, emails: 0, channels: 0 };
+  const T = 'stoc_sales.store_contact_channels.'; // 倉庫側にも同名の列(instagram_url)があるので修飾が必要
+  try {
+    const [[r]] = await pool.query("SELECT MIN(id) AS lo, MAX(id) AS hi FROM stoc_master.shops WHERE stoc_store_id IS NOT NULL AND form_status = 'url_found'");
+    if (r.lo === null) { log('引き継ぎ: 対象(フォームあり・営業アプリ紐付け済み)の店舗はありません'); return tot; }
+    const base = "stoc_store_id IS NOT NULL AND form_status = 'url_found' AND id >= ? AND id < ?";
+    for (let lo = Number(r.lo); lo <= Number(r.hi); lo += LINK_CHUNK) {
+      const range = [lo, lo + LINK_CHUNK];
+      const [a] = await pool.query(
+        `INSERT IGNORE INTO stoc_sales.contact_channel_candidates (store_id, channel_type, value, source)
+         SELECT stoc_store_id, 'inquiry_url', form_url, 'finder' FROM stoc_master.shops WHERE ${base} AND form_url IS NOT NULL AND form_url <> ''`, range);
+      const [b] = await pool.query(
+        `INSERT IGNORE INTO stoc_sales.contact_channel_candidates (store_id, channel_type, value, source)
+         SELECT stoc_store_id, 'email', email, 'finder' FROM stoc_master.shops WHERE ${base} AND email IS NOT NULL AND email <> ''`, range);
+      const [c] = await pool.query(
+        `INSERT INTO stoc_sales.store_contact_channels
+           (store_id, inquiry_status, inquiry_last_checked_at, email_status, email_last_checked_at, instagram_url, instagram_status)
+         SELECT stoc_store_id, 'url_found', COALESCE(form_checked_at, NOW()),
+                IF(email IS NOT NULL AND email <> '', 'found', 'unknown'),
+                IF(email IS NOT NULL AND email <> '', COALESCE(form_checked_at, NOW()), NULL),
+                IF(instagram_url IS NOT NULL AND instagram_url <> '', instagram_url, NULL),
+                IF(instagram_url IS NOT NULL AND instagram_url <> '', 'found', 'unknown')
+         FROM stoc_master.shops WHERE ${base} AND form_url IS NOT NULL AND form_url <> ''
+         ON DUPLICATE KEY UPDATE
+           ${T}inquiry_status = IF(${T}inquiry_status IS NULL OR ${T}inquiry_status IN ('unknown','no_form'), 'url_found', ${T}inquiry_status),
+           ${T}inquiry_last_checked_at = GREATEST(COALESCE(${T}inquiry_last_checked_at, '1970-01-01'), VALUES(inquiry_last_checked_at)),
+           ${T}email_last_checked_at = IF(VALUES(email_status) = 'found' AND (${T}email_status IS NULL OR ${T}email_status = 'unknown'), VALUES(email_last_checked_at), ${T}email_last_checked_at),
+           ${T}email_status = IF(VALUES(email_status) = 'found' AND (${T}email_status IS NULL OR ${T}email_status = 'unknown'), 'found', ${T}email_status),
+           ${T}instagram_status = IF(VALUES(instagram_url) IS NOT NULL AND (${T}instagram_url IS NULL OR ${T}instagram_url = '') AND (${T}instagram_status IS NULL OR ${T}instagram_status = 'unknown'), 'found', ${T}instagram_status),
+           ${T}instagram_url = IF(VALUES(instagram_url) IS NOT NULL AND (${T}instagram_url IS NULL OR ${T}instagram_url = ''), VALUES(instagram_url), ${T}instagram_url)`, range);
+      tot.urls += a.affectedRows; tot.emails += b.affectedRows; tot.channels += c.affectedRows;
+    }
+  } catch (e) {
+    if (e && [1044, 1142, 1143, 1227].includes(e.errno)) {
+      log('エラー: 営業アプリのテーブルへ書き込む権限がありません。root で次を実行してから、もう一度実行してください。\n' + GRANT_HINT + "\n  FLUSH PRIVILEGES;");
+      return null;
+    }
+    throw e;
+  }
+  log(`引き継ぎ完了: 候補を追加(問い合わせURL ${tot.urls}件 / メール ${tot.emails}件)、連絡先の状態を更新(${tot.channels}件)`);
+  return tot;
+}
+
 async function main() {
   try { require('dotenv').config(); } catch { /* なくても動く */ }
   const o = parseArgs(process.argv.slice(2));
   if (o.linkOnly) {
     const pool = makePool();
-    try { await linkStep(pool); } finally { await pool.end(); }
+    try {
+      await linkStep(pool);
+      if (o.carryForms) await carryFormsStep(pool);
+    } finally { await pool.end(); }
     return;
   }
   const root = path.resolve(o.root);
@@ -220,7 +280,10 @@ async function main() {
       console.error(`[${total.files}/${files.length}] ${path.relative(root, file)} 読込${st.rows} CIDあり${withCid.n} 新規${st.inserted} 更新${st.updated} スキップ${st.skipped}`);
     }
     console.error(`合計: ファイル${total.files} 読込${total.rows} 新規${total.inserted} 更新${total.updated} スキップ${total.skipped} エラー${errors.length}`);
-    if (pool) await linkStep(pool);
+    if (pool) {
+      await linkStep(pool);
+      if (o.carryForms) await carryFormsStep(pool);
+    }
   } finally {
     if (pool) {
       await pool.query(
@@ -235,4 +298,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { parseArgs, walk, globToRegExp, processFile, upsertSql, linkStep, makePool };
+module.exports = { parseArgs, walk, globToRegExp, processFile, upsertSql, linkStep, carryFormsStep, makePool };

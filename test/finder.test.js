@@ -266,6 +266,32 @@ const noRobots = async () => '';
   await processStores({ stores, concurrency: 1, shouldStop: () => n++ >= 1, finder: async () => ({ status: 'no_form' }), writer: async (s) => { w2.push(s.id); } });
   eq(w2.length, 2, 'shouldStop halts new stores (in-flight group finishes)');
 
+  // ---- 倉庫モード: 対象クエリと結果->UPDATE値 ----
+  const { buildWarehouseTargetQuery, resultToShopUpdate, parseArgs } = require('../cli/find-forms');
+  const base = { recheckDays: 90, errorRetryDays: 7, prefecture: '大阪府', limit: 500, retryNeedsBrowser: false };
+  let q = buildWarehouseTargetQuery(base);
+  eq(q.params, [['大阪府'], 7, 90, 500], 'wh query params');
+  ok(/FROM stoc_master\.shops/.test(q.sql) && /prefecture IN \(\?\)/.test(q.sql), 'wh query from shops + prefecture');
+  ok(/form_status IN \('error'\) AND/.test(q.sql) && !/needs_browser/.test(q.sql), 'needs_browser not retried by default');
+  ok(/ORDER BY review_count IS NULL, review_count DESC, id/.test(q.sql), 'wh order');
+  q = buildWarehouseTargetQuery({ ...base, retryNeedsBrowser: true, prefecture: '大阪府, 京都府' });
+  ok(/'error','needs_browser'/.test(q.sql), 'retry-needs-browser flag');
+  eq(q.params[0], ['大阪府', '京都府'], 'wh query prefecture list');
+  q = buildWarehouseTargetQuery({ ...base, prefecture: null });
+  ok(!/prefecture IN/.test(q.sql) && q.params.length === 3, 'wh query without prefecture');
+  eq(parseArgs([]).source, 'stores', 'default source stores');
+  eq(parseArgs(['--source', 'warehouse', '--retry-needs-browser']).retryNeedsBrowser, true, 'parse warehouse flags');
+  let threw = false; try { parseArgs(['--source', 'x']); } catch { threw = true; }
+  ok(threw, 'invalid --source rejected');
+  const base0 = { status: 'url_found', inquiryUrl: 'https://a.jp/c', kind: 'external', hasCaptcha: true, emails: ['x@a.jp', 'y@a.jp'], instagram: 'https://instagram.com/a', note: '' };
+  eq(resultToShopUpdate(base0), { form_status: 'url_found', form_url: 'https://a.jp/c', form_kind: 'external', form_captcha: 1, form_note: null, email: 'x@a.jp', instagram_url: 'https://instagram.com/a' }, 'url_found mapping');
+  eq(resultToShopUpdate({ ...base0, kind: 'onsite', hasCaptcha: false }).form_captcha, 0, 'captcha false -> 0');
+  eq(resultToShopUpdate({ status: 'unknown', note: '要ブラウザ確認' }).form_status, 'needs_browser', "finder 'unknown' -> needs_browser");
+  const nf = resultToShopUpdate({ status: 'no_form', inquiryUrl: 'https://ignored', kind: 'none', emails: [], instagram: null, note: 'x'.repeat(300) });
+  eq([nf.form_status, nf.form_url, nf.form_kind, nf.form_captcha, nf.form_note.length, nf.email], ['no_form', null, null, null, 100, null], 'no_form mapping + note truncated');
+  eq(resultToShopUpdate({ status: 'error', note: '失敗' }).form_status, 'error', 'error mapping');
+  eq(resultToShopUpdate({ ...base0, inquiryUrl: 'https://a.jp/' + 'p'.repeat(1000) }).form_status, 'error', 'too-long form url -> error');
+
   console.log(`${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

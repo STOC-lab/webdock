@@ -55,7 +55,7 @@ function buildQuery(o) {
   if (o.hasWebsite) where.push("website_url IS NOT NULL AND website_url <> ''");
   if (o.excludeClosed) where.push("(business_status IS NULL OR (business_status NOT LIKE '%閉業%' AND business_status NOT LIKE '%閉店%'))");
   if (o.formFound) where.push("form_status = 'url_found'");
-  const sql = `SELECT id, name, category, category_main, postal, address_raw, phone, rating, review_count, gbp_registered, website_url, gmap_url, photo_count
+  const sql = `SELECT id, form_status, name, category, category_main, postal, address_raw, phone, rating, review_count, gbp_registered, website_url, gmap_url, photo_count
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;
   return { sql, params };
@@ -89,7 +89,7 @@ async function selectRows(pool, o, rules, log) {
   const { sql, params } = buildQuery(o);
   const check = rules ? compileRules(rules) : null;
   const dedupe = o.dedupePhone === undefined ? !!(rules && (rules.dedupeColumns || []).includes('電話番号')) : o.dedupePhone;
-  const st = { scanned: 0, excluded: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null };
+  const st = { withForm: 0, scanned: 0, excluded: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null };
   const seen = new Set();
   const out = [];
   for (let off = 0; out.length < o.limit; off += PAGE) {
@@ -112,6 +112,7 @@ async function selectRows(pool, o, rules, log) {
           seen.add(p);
         }
       }
+      if (r.form_status === 'url_found') st.withForm++;
       out.push(r);
       if (out.length >= o.limit) break;
     }
@@ -128,7 +129,7 @@ function printStats(st, log = console.error) {
   const top = [...st.byKeyword.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
   for (const [k, n] of top) log(`  ${k} : ${n}`);
   log(`電話番号の重複で除外: ${st.dupRemoved}`);
-  log(`書き出し対象: ${st.written}`);
+  log(`書き出し対象: ${st.written}(うちフォームあり ${st.withForm})`);
 }
 
 function csvField(v) {
