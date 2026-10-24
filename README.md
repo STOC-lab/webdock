@@ -277,3 +277,6 @@ npm run wh:import -- --root /var/data/gmp/all --pattern "gmp_*.csv"
 ```
 
 テスト: `npm run test:warehouse` と `npm run test:rules`(DB不要)、DBテストは **stoc_master と stoc_sales を削除して作り直すため、本番サーバーでは絶対に実行しないこと**(テスト専用環境で `WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js`。本番サーバー上・実データがある場合は自動で中止する安全装置あり)
+
+
+**社内判断の上書き**: `rules/問い合わせ営業.overrides.json` に、.listt を作り直しても消えない判断を書きます(現在: 屋号の「店」は除外しない/電話番号が無い店は除外)。`remove` で条件を外し、`add` で足し、`excludeEmpty` で「空欄なら除外」を指定します。

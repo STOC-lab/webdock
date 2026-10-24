@@ -38,6 +38,7 @@ function parseListt(xmlText) {
     exclude: { name: [], category: [], website: [], phone: [] },
     other: {},
     ignored: [],
+    excludeEmpty: {},   // 空欄なら除外する列(リスツールでは「空白だけの条件」で表していた)
   };
 
   for (const b of blocks(section(xml, 'option_replace_columns'), 'column')) {
@@ -60,7 +61,11 @@ function parseListt(xmlText) {
     let filter = tag(b, 'filter');
     if (filter === null) { out.ignored.push({ column: col, value: '', reason: 'filter要素なし' }); continue; }
     filter = filter.replace(/[\r\n]+$/, '');
-    if (filter.trim() === '') { out.ignored.push({ column: col, value: filter, reason: '空白のみ' }); continue; }
+    if (filter.trim() === '') {
+      // 電話番号の「空白だけの条件」は「電話番号が無い店を除外する」意図(2026-10 確認済み)
+      if (COLUMN_MAP[col] === 'phone') { out.excludeEmpty.phone = true; continue; }
+      out.ignored.push({ column: col, value: filter, reason: '空白のみ' }); continue;
+    }
     if (type !== '1') { out.ignored.push({ column: col, value: filter, reason: 'type=' + type + '(未対応)' }); continue; }
     const key = COLUMN_MAP[col];
     const list = key ? out.exclude[key] : (out.other[col] = out.other[col] || []);
@@ -78,10 +83,14 @@ function compileRules(rules) {
     ['website', '登録URL', (r) => r.website_url],
     ['phone', '電話番号', (r) => r.phone],
   ];
+  const empty = rules.excludeEmpty || {};
   return function check(row) {
     for (const [key, column, get] of spec) {
       const v = get(row);
-      if (v === null || v === undefined || v === '') continue;
+      if (v === null || v === undefined || String(v).trim() === '') {
+        if (empty[key]) return { column, keyword: '(空欄)' };
+        continue;
+      }
       const s = String(v);
       for (const kw of ex[key] || []) if (s.includes(kw)) return { column, keyword: kw };
     }
@@ -89,4 +98,18 @@ function compileRules(rules) {
   };
 }
 
-module.exports = { parseListt, compileRules, COLUMN_MAP, decodeEntities };
+/**
+ * 上書き設定(rules/<名前>.overrides.json)を反映する。.listt から作り直しても消えない社内判断をここに置く。
+ * 形式: { "remove": { "name": ["店"] }, "add": { "name": ["…"] }, "excludeEmpty": { "phone": true } }
+ */
+function applyOverrides(rules, ov) {
+  if (!ov) return rules;
+  const r = JSON.parse(JSON.stringify(rules));
+  r.exclude = r.exclude || {};
+  for (const [k, list] of Object.entries(ov.remove || {})) r.exclude[k] = (r.exclude[k] || []).filter((x) => !list.includes(x));
+  for (const [k, list] of Object.entries(ov.add || {})) { r.exclude[k] = r.exclude[k] || []; for (const x of list) if (!r.exclude[k].includes(x)) r.exclude[k].push(x); }
+  r.excludeEmpty = Object.assign({}, r.excludeEmpty || {}, ov.excludeEmpty || {});
+  return r;
+}
+
+module.exports = { parseListt, compileRules, applyOverrides, COLUMN_MAP, decodeEntities };

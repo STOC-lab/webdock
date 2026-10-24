@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const wh = require('../src/warehouse');
-const { compileRules } = require('../src/rules');
+const { compileRules, applyOverrides } = require('../src/rules');
 const { makePool } = require('./warehouse-import');
 
 const HEADERS = ['屋号', '業種', '郵便番号', '住所', '電話番号', '評価', '口コミ数', 'Googleマイビジネス登録有無', '登録URL', 'GMAP', '写真枚数'];
@@ -71,7 +71,9 @@ function loadRules(name) {
     if (name === undefined) return null;
     throw new Error('ルールファイルが見つかりません: ' + file);
   }
-  const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  let json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const ovFile = path.join(dir, n + '.overrides.json');
+  if (fs.existsSync(ovFile)) json = applyOverrides(json, JSON.parse(fs.readFileSync(ovFile, 'utf8')));
   json.name = n;
   return json;
 }

@@ -1,14 +1,14 @@
 {
   "meta": {
     "source_file": "GMAPSTOC.listt",
-    "generated_at": "2026-10-24T11:49:35.069Z",
+    "generated_at": "2026-10-24T11:54:13.251Z",
     "counts": {
       "name": 112,
       "category": 333,
       "website": 11,
       "phone": 1
     },
-    "ignored_count": 2
+    "ignored_count": 1
   },
   "replace": [
     {
@@ -489,12 +489,10 @@
     ]
   },
   "other": {},
+  "excludeEmpty": {
+    "phone": true
+  },
   "ignored": [
-    {
-      "column": "電話番号",
-      "value": "\r\n      ",
-      "reason": "空白のみ"
-    },
     {
       "column": "業種",
       "value": "\r\n      ",

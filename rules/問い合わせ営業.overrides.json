@@ -1,0 +1,6 @@
+{
+  "_説明": "リスツールの.listtから作り直しても消えない社内判断。remove=条件から外す / add=条件に足す / excludeEmpty=空欄なら除外",
+  "remove": { "name": ["店"] },
+  "add": {},
+  "excludeEmpty": { "phone": true }
+}

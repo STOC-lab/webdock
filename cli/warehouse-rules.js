@@ -33,6 +33,7 @@ function build(from) {
     dedupeColumns: r.dedupeColumns,
     exclude: r.exclude,
     other: r.other,
+    excludeEmpty: r.excludeEmpty,
     ignored: r.ignored,
   };
 }

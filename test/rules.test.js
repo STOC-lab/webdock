@@ -24,7 +24,7 @@ ok(r.exclude.phone.includes('0078'), 'phone has 0078');
 ok(r.exclude.name.concat(r.exclude.category).includes('B&B'), 'B&B decoded from &amp;');
 ok(!r.exclude.name.some((k) => k.includes('&amp;')), 'no raw entities');
 ok(r.exclude.name.includes('SS ') && r.exclude.name.includes('カーブス '), 'trailing spaces kept');
-eq(r.ignored.length, 2, 'two ignored whitespace-only values');
+eq(r.ignored.length, 1, 'one ignored whitespace-only value (業種); the 電話番号 one means 電話番号なしを除外');
 ok(r.ignored.every((x) => x.value.trim() === ''), 'ignored are whitespace-only');
 ok(Object.values(r.exclude).every((l) => l.length === new Set(l).size), 'no duplicate keywords');
 ok(Object.values(r.exclude).every((l) => l.every((k) => k.trim() !== '' && !/[\r\n]$/.test(k))), 'no empty / CRLF-terminated keywords');
@@ -55,7 +55,8 @@ eq(check(row({ category_main: '役所' })).column, '業種', 'category 役所 ex
 eq(check(row({ category_main: '美容院' /* 全体: 美容院、カフェ */ })), null, 'first category 美容院 kept even if later category is cafe');
 eq(check(row({ website_url: 'https://www.instagram.com/foo' })), { column: '登録URL', keyword: 'instagram' }, 'instagram url');
 eq(check(row({ phone: '0078-12-3456' })), { column: '電話番号', keyword: '0078' }, 'phone 0078');
-eq(check(row({ name: null, category_main: null, website_url: null, phone: null })), null, 'nulls kept');
+eq((check(row({ name: null, category_main: null, website_url: null, phone: null })) || {}).keyword, '(空欄)', 'no phone -> excluded (電話番号なしを除外)');
+eq(check(row({ name: null, category_main: null, website_url: null, phone: '079-000-0000' })), null, 'other nulls kept');
 eq(compileRules({ exclude: { name: ['SS '] } })({ name: 'ss x' }), null, 'case-sensitive');
 eq(compileRules({ exclude: { name: ['SS '] } })({ name: 'SS x' }).keyword, 'SS ', 'trailing-space keyword matches');
 eq(compileRules({ exclude: { name: ['SS '] } })({ name: 'SSx' }), null, 'trailing-space keyword needs the space');
@@ -70,6 +71,18 @@ eq(saved.meta.source_file, 'GMAPSTOC.listt', 'meta source');
 const g = globToRegExp('gmp_*.csv');
 eq([g.test('gmp_長崎県_20261016-101752.csv'), g.test('GMP_a.CSV'), g.test('nagasaki.csv'), g.test('xgmp_a.csv'), g.test('gmp_a.csvx')], [true, true, false, false, false], 'glob');
 eq(globToRegExp('a?.csv').test('ab.csv') && !globToRegExp('a?.csv').test('a.csv') && !globToRegExp('a.csv').test('abcsv'), true, 'glob ? and dot escaped');
+
+// ---- 上書き設定(社内判断): 「店」を外す / 電話番号なしを除外 ----
+{
+  const { parseListt: pl, compileRules: cr, applyOverrides: ao } = require('../src/rules');
+  const base = pl(require('fs').readFileSync(require('path').join(__dirname, '..', 'rules', 'source', 'GMAPSTOC.listt'), 'utf8'));
+  eq(base.excludeEmpty.phone, true, 'listt: 電話番号の空白条件は「電話番号なしを除外」');
+  const ov = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'rules', '問い合わせ営業.overrides.json'), 'utf8'));
+  const c2 = cr(ao(base, ov));
+  eq(c2({ name: '山田工務店', category_main: '工務店', phone: '079-000-0000' }), null, 'override: 工務店は残る(「店」を外した)');
+  eq((c2({ name: '山田工務店', category_main: '工務店', phone: '' }) || {}).keyword, '(空欄)', '電話番号なしは除外');
+  eq((c2({ name: 'ダイワハウス 神戸営業所', category_main: '住宅', phone: '078' }) || {}).column, '屋号', '営業所は引き続き除外');
+}
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

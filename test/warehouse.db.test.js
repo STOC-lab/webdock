@@ -215,13 +215,13 @@ function run(script, args) {
   const readF = () => w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outF)), ',');
   r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県']);
   eq(r.code, 0, 'rules promote exit: ' + r.err);
-  eq(readF().slice(1).map((l) => l[0]), ['福岡美容室B(同電話)', '福岡エステC', '福岡ネイルD', '福岡ネイルE'], 'rules: ダイワハウス excluded, same phone deduped (higher review kept), empty phones all kept');
+  eq(readF().slice(1).map((l) => l[0]), ['福岡美容室B(同電話)', '福岡エステC'], 'rules: ダイワハウス excluded, same phone deduped (higher review kept), shops without phone excluded');
   eq(readF().find((l) => l[0] === '福岡美容室B(同電話)')[1], '美容院', 'first category exported');
-  eq(/ルールで除外: 1\b/.test(r.err) && /電話番号の重複で除外: 1\b/.test(r.err) && /書き出し対象: 4\b/.test(r.err) && /走査した行: 6\b/.test(r.err), true, 'stats printed: ' + r.err);
+  eq(/ルールで除外: 3\b/.test(r.err) && /電話番号の重複で除外: 1\b/.test(r.err) && /書き出し対象: 2\b/.test(r.err) && /走査した行: 6\b/.test(r.err), true, 'stats printed: ' + r.err);
   eq(/屋号:[^ ]+ : 1/.test(r.err), true, 'top keywords printed');
   // 福岡エステC: 業種に除外語がなければ残る(上で確認済み)。--no-dedupe-phone
   r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県', '--no-dedupe-phone']);
-  eq(readF().length, 6, '--no-dedupe-phone keeps both same-phone rows (5 + header)');
+  eq(readF().length, 4, '--no-dedupe-phone keeps both same-phone rows (3 + header)');
   // limit は絞り込み後: 上位(口コミ順)の先頭はダイワハウス(除外)なので、limit 2 でも2件出る
   r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県', '--limit', '2']);
   eq(readF().slice(1).map((l) => l[0]), ['福岡美容室B(同電話)', '福岡エステC'], '--limit counted after filtering');
@@ -236,7 +236,7 @@ function run(script, args) {
   // report-only はファイルを書かない
   const outR = path.join(dir, 'out', 'report.csv');
   r = run('cli/warehouse-promote.js', ['--out', outR, '--prefecture', '福岡県', '--report-only', '--mark']);
-  eq([r.code, fs.existsSync(outR), /ルールで除外: 1\b/.test(r.err)], [0, false, true], '--report-only writes no file');
+  eq([r.code, fs.existsSync(outR), /ルールで除外: 3\b/.test(r.err)], [0, false, true], '--report-only writes no file');
   eq((await q('SELECT COUNT(*) n FROM stoc_master.shops WHERE promoted_at IS NOT NULL'))[0].n, 0, '--report-only marks nothing');
   r = run('cli/warehouse-promote.js', ['--prefecture', '福岡県', '--report-only']);
   eq(r.code, 0, '--report-only needs no --out');
