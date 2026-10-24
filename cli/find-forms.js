@@ -51,7 +51,7 @@ const csvLine = (vals) => vals.map(csvField).join(',') + '\r\n';
 const CSV_COLUMNS = ['store_id', '店名', '都道府県', 'URL', '結果', '問い合わせURL', '種類', '画像認証', 'メール', 'Instagram', '備考'];
 
 function csvRow(store, r) {
-  const res = r.status === 'url_found' ? 'フォームあり' : r.status === 'no_form' ? 'フォームなし' : 'エラー';
+  const res = r.status === 'url_found' ? 'フォームあり' : r.status === 'no_form' ? 'フォームなし' : r.status === 'unknown' ? '要確認' : 'エラー';
   const kind = r.status !== 'url_found' ? '' : r.kind === 'external' ? '外部サービス' : '自社';
   return csvLine([
     store.id, store.name, store.prefecture, store.website_url, res, r.inquiryUrl || '', kind,
@@ -96,7 +96,7 @@ async function processStores({ stores, finder, writer, concurrency = 5, shouldSt
     groups.get(host).stores.push(s);
   }
 
-  const stats = { total: stores.length, done: 0, found: 0, none: 0, error: 0 };
+  const stats = { total: stores.length, done: 0, found: 0, none: 0, unknown: 0, error: 0 };
   let idx = 0;
 
   async function worker() {
@@ -122,6 +122,7 @@ async function processStores({ stores, finder, writer, concurrency = 5, shouldSt
         stats.done++;
         if (r.status === 'url_found') stats.found++;
         else if (r.status === 'no_form') stats.none++;
+        else if (r.status === 'unknown') stats.unknown++;
         else stats.error++;
         onProgress({ ...stats });
       }
@@ -201,6 +202,7 @@ ON DUPLICATE KEY UPDATE
       const emails = (r.emails || []).slice(0, 3).filter((e) => e.length <= 1000);
       await conn.execute(UPSERT, [
         store.id,
+        // unknown(要ブラウザ確認)とerrorは inquiry_status を変えず、確認日時だけ更新する(UPSERT側で保証)
         r.status === 'url_found' ? 'url_found' : r.status === 'no_form' ? 'no_form' : 'unknown',
         emails.length ? 'found' : 'unknown',
         emails.length ? 'found' : 'unknown',
@@ -270,7 +272,7 @@ async function main() {
     if (done % 50 === 0 || done === s.total) {
       if (done === lastPrinted) return;
       lastPrinted = done;
-      console.error(`[${done}/${s.total}] フォームあり ${s.found}件 / なし ${s.none}件 / エラー ${s.error}件`);
+      console.error(`[${done}/${s.total}] フォームあり ${s.found}件 / なし ${s.none}件 / 要確認 ${s.unknown}件 / エラー ${s.error}件`);
     }
   };
 
@@ -288,14 +290,14 @@ async function main() {
         rows.forEach((r) => seen.add(r.id));
         lastPrinted = 0;
         const st = await processStores({ stores: rows, finder, writer, concurrency: opts.concurrency, shouldStop, onProgress: makeProgress(0) });
-        console.error(`バッチ完了: ${st.done}件 (あり${st.found} / なし${st.none} / エラー${st.error})`);
+        console.error(`バッチ完了: ${st.done}件 (あり${st.found} / なし${st.none} / 要確認${st.unknown} / エラー${st.error})`);
       }
     } else {
       if (opts.loop && opts.dryRun) console.error('--dry-run のため --loop は無視します');
       const rows = await fetchTargets(pool, opts, opts.limit);
       console.error(`対象 ${rows.length}件${opts.dryRun ? ` -> ${opts.out}` : ''}`);
       const st = await processStores({ stores: rows, finder, writer, concurrency: opts.concurrency, shouldStop, onProgress: makeProgress(0) });
-      console.error(`完了: ${st.done}/${st.total}件 (あり${st.found} / なし${st.none} / エラー${st.error})`);
+      console.error(`完了: ${st.done}/${st.total}件 (あり${st.found} / なし${st.none} / 要確認${st.unknown} / エラー${st.error})`);
     }
   } finally {
     await pool.end();

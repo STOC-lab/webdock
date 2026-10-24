@@ -7,6 +7,8 @@
  * ページ取得は src/safeFetch.js の fetchHomepage を使い、URL/IP安全規則をすべて通す。
  */
 
+const fs = require('fs');
+const path = require('path');
 const { fetchHomepage, fetchHead } = require('./safeFetch');
 
 const MAX_PAGES = 4;          // 1サイトで取得するページ数の上限(トップ+候補3)
@@ -91,8 +93,16 @@ function extractLinks(html, baseUrl) {
     if (u.protocol !== 'http:' && u.protocol !== 'https:') continue;
     u.hash = '';
     let text = stripTags(m[2]);
-    const alt = m[2].match(/<img\b[^>]*>/i);
-    if (alt) { const a = getAttr(alt[0], 'alt'); if (a) text = (text + ' ' + a).trim(); }
+    const imgs = [...m[2].matchAll(/<img\b[^>]*>/gi)].map((x) => x[0]);
+    const first = imgs[0];
+    if (first) { const a = getAttr(first, 'alt'); if (a) text = (text + ' ' + a).trim(); }
+    if (!text) {
+      // 画像リンクなど: 画像のalt/title/aria-label → aタグ自身のtitle/aria-label
+      const parts = [];
+      for (const t of imgs) for (const n of ['alt', 'title', 'aria-label']) { const v = getAttr(t, n); if (v && v.trim()) parts.push(v.trim()); }
+      for (const n of ['title', 'aria-label']) { const v = getAttr(m[1], n); if (v && v.trim()) parts.push(v.trim()); }
+      text = parts.join(' ').trim();
+    }
     out.push({ url: u.toString(), text });
   }
   return out;
@@ -161,6 +171,25 @@ function detectForm(html) {
   return { hasContactForm: false, hasCaptcha, kind: 'none' };
 }
 
+/** Cloudflareメール保護の16進文字列を復号(先頭1バイトが鍵、以降を鍵とXOR) */
+function decodeCfEmail(hex) {
+  const h = String(hex || '');
+  if (h.length < 4 || h.length % 2 || !/^[0-9a-f]+$/i.test(h)) return '';
+  const key = parseInt(h.slice(0, 2), 16);
+  let out = '';
+  for (let i = 2; i < h.length; i += 2) out += String.fromCharCode(parseInt(h.slice(i, i + 2), 16) ^ key);
+  return out;
+}
+
+/** HTML中の /cdn-cgi/l/email-protection#HEX と data-cfemail="HEX" をすべて復号 */
+function decodeCfEmails(src) {
+  const out = [];
+  const add = (hex) => { const a = decodeCfEmail(hex); if (a.includes('@')) out.push(a); };
+  for (const m of String(src).matchAll(/\/cdn-cgi\/l\/email-protection#([0-9a-f]+)/gi)) add(m[1]);
+  for (const m of String(src).matchAll(/data-cfemail\s*=\s*["']?([0-9a-f]+)/gi)) add(m[1]);
+  return out;
+}
+
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 const PLACEHOLDER_RE = /(^|[@.])example\.(com|jp|org|net)$|sample|^xxx+@|@xxx|your-?e?-?mail|^test@|^name@|^email@|^mail@mail\./i;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|css|js)$/i;
@@ -177,6 +206,7 @@ function extractEmails(html, siteHost) {
       for (const a of addr.split(/[,;]/)) found.push(a.trim());
     }
   }
+  for (const a of decodeCfEmails(src)) found.push(a);
   for (const m of stripTags(src).matchAll(EMAIL_RE)) found.push(m[0]);
 
   const seen = new Set();
@@ -230,6 +260,143 @@ function isNonOwnSite(host) {
   return NON_OWN_SITE_HOSTS.some((n) => h === n || (n !== 'google.com' && h.endsWith('.' + n)));
 }
 
+/* ---------- 営業管理と共有する「自社サイトではない」一覧 ---------- */
+const BUNDLED_TERMS_FILE = path.join(__dirname, '..', 'rules', 'non_own_site_terms.txt');
+const SERVER_TERMS_FILE = '/var/www/stoc-sales-engine/app/Helpers/non_own_site_terms.txt';
+
+function defaultTermsFile() {
+  if (process.env.NON_OWN_TERMS_FILE) return process.env.NON_OWN_TERMS_FILE;
+  try { if (fs.existsSync(SERVER_TERMS_FILE)) return SERVER_TERMS_FILE; } catch { /* 無視 */ }
+  return BUNDLED_TERMS_FILE;
+}
+
+/** 一覧テキストを解析。#@url / #@host で以降の語の判定方法を切り替え(初期は url)。 */
+function parseNonOwnTerms(text) {
+  const rules = { url: [], host: [] };
+  const seen = { url: new Set(), host: new Set() };
+  let mode = 'url';
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('#')) {
+      const sw = line.toLowerCase();
+      if (sw === '#@url') mode = 'url';
+      else if (sw === '#@host') mode = 'host';
+      continue;
+    }
+    line = line.replace(/^https?:/i, '').replace(/^\/\//, '').trim().toLowerCase();
+    if (!line || seen[mode].has(line)) continue;
+    seen[mode].add(line);
+    rules[mode].push(line);
+  }
+  return rules;
+}
+
+const termsCache = new Map();
+function loadNonOwnTerms(file) {
+  const f = file || defaultTermsFile();
+  if (termsCache.has(f)) return termsCache.get(f);
+  let rules;
+  try { rules = parseNonOwnTerms(fs.readFileSync(f, 'utf8')); }
+  catch {
+    try { rules = parseNonOwnTerms(fs.readFileSync(BUNDLED_TERMS_FILE, 'utf8')); } catch { rules = { url: [], host: [] }; }
+  }
+  termsCache.set(f, rules);
+  return rules;
+}
+
+const NOTE_LIST = '自社サイトではない(一覧)';
+const NOTE_BUILTIN = '自社サイトではない(地図・公共・掲載ページ)';
+const NOTE_ORG = '団体の窓口のため除外';
+const NOTE_JS = '要ブラウザ確認(JSで作られたサイト)';
+const ORG_TITLE_RE = /協会|師会|医師会|組合|連合会|商工会|振興会|商店街|事務局|ポータル/;
+const LISTING_KEYWORDS = ['clinic', 'shop', 'shops', 'store', 'detail', 'article', 'search', 'member', 'kikan', 'salon', 'info_', 'shopcms', 'floor', 'tenant', '/s/', '/t0', 'list'];
+const INDEXISH = new Set(['index.html', 'index.htm', 'index.php', 'home', 'top']);
+
+function pathSegments(u) {
+  let segs = u.pathname.split('/').filter(Boolean);
+  if (segs.length === 1 && INDEXISH.has(segs[0].toLowerCase())) segs = [];
+  return segs;
+}
+
+function parseUrl(url) { try { return new URL(url); } catch { return null; } }
+
+/** 共有一覧(ファイル)に該当するか */
+function matchesNonOwnList(url, termsFile) {
+  const u = parseUrl(url);
+  if (!u) return false;
+  const rules = loadNonOwnTerms(termsFile);
+  const full = u.href.toLowerCase();
+  const h = u.hostname.toLowerCase();
+  if (rules.url.some((t) => full.includes(t))) return true;
+  return rules.host.some((t) => h === t || h.endsWith('.' + t));
+}
+
+/** 地図・公共機関・掲載ページ(他者サイト内の店舗一覧ページ)か */
+function matchesBuiltinNonOwn(url) {
+  const u = parseUrl(url);
+  if (!u) return false;
+  const h = u.hostname.toLowerCase();
+  const p = u.pathname.toLowerCase();
+  // Googleマップ
+  if (/(^|\.)google\.[a-z.]+$/.test(h) && p.startsWith('/maps')) return true;
+  if (/^maps\.google\./.test(h) || h === 'maps.app.goo.gl') return true;
+  if (h === 'goo.gl' && p.startsWith('/maps')) return true;
+  // 官公庁・自治体
+  if (h.endsWith('.lg.jp') || h.endsWith('.go.jp') || /(^|\.)(pref|town|city|vill)\./.test(h)) return true;
+  // 掲載ページ
+  if (h === 'sites.google.com') return false;
+  const segs = pathSegments(u);
+  const q = u.search.length > 1;
+  // 3階層以上深いページは、ほかのサイトの中の掲載ページとみなす(店が自分のHPとして深いページを登録することはまず無い)
+  if (segs.length >= 3) return true;
+  if (segs.length >= 2 || (segs.length >= 1 && q)) {
+    if (h.endsWith('.or.jp')) return true;
+    const hay = (p + u.search).toLowerCase();
+    let dec = hay;
+    try { dec = decodeURIComponent(hay); } catch { /* そのまま */ }
+    if (LISTING_KEYWORDS.some((k) => dec.includes(k))) return true;
+  }
+  return false;
+}
+
+/** 自社サイトでない理由(なければ null) */
+function nonOwnReason(url, opts = {}) {
+  const h = hostOf(url);
+  if (h && isNonOwnSite(h)) return NOTE_LIST;
+  if (matchesNonOwnList(url, opts.termsFile)) return NOTE_LIST;
+  if (matchesBuiltinNonOwn(url)) return NOTE_BUILTIN;
+  return null;
+}
+
+/* ---------- JSサイトビルダー ---------- */
+const JS_BUILDER_HOSTS = [
+  'wixsite.com', 'wix.com', 'editorx.io', 'sites.google.com', 'jimdosite.com', 'jimdofree.com', 'jimdo.com',
+  'amebaownd.com', 'studio.site', 'strikingly.com', 'mystrikingly.com', 'peraichi.com', 'goope.jp',
+  'crayonsite.net', 'crayonsite.com', 'kujira.biz', 'kaginawa.jp', 'gorp.jp',
+];
+
+function isJsBuilder(host, body) {
+  const h = String(host || '').toLowerCase();
+  if (JS_BUILDER_HOSTS.some((n) => h === n || h.endsWith('.' + n))) return true;
+  const src = String(body || '');
+  for (const m of src.matchAll(/<meta\b[^>]*>/gi)) {
+    if (/generator/i.test(getAttr(m[0], 'name') || '') && /Wix|Jimdo|STUDIO|Strikingly|Ameba Ownd/i.test(getAttr(m[0], 'content') || '')) return true;
+  }
+  return /<script\b[^>]*\bsrc\s*=\s*["']?[^"'>\s]*(static\.parastorage\.com|wixstatic|jimdocdn|cdn\.studio\.design)/i.test(src);
+}
+
+/** ページの<title>と最初の<h1>/<h2>のテキストが団体の窓口らしいか */
+function isOrgPage(body) {
+  const src = String(body || '').replace(/<!--[\s\S]*?-->/g, ' ');
+  const parts = [];
+  const t = src.match(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/i);
+  if (t) parts.push(stripTags(t[1]));
+  const h = src.match(/<h[12]\b[^>]*>([\s\S]*?)<\/h[12]\s*>/i);
+  if (h) parts.push(stripTags(h[1]));
+  return ORG_TITLE_RE.test(parts.join(' '));
+}
+
 /** robots.txt から User-agent: * の Disallow を取り出す */
 function parseRobots(text) {
   const rules = [];
@@ -274,7 +441,7 @@ function mergeEmails(acc, list) {
 
 /**
  * 1サイトを調べる。フォーム送信はしない。
- * 戻り値: { status:'url_found'|'no_form'|'error', inquiryUrl, hasCaptcha, kind, emails, instagram, checkedPages, note }
+ * 戻り値: { status:'url_found'|'no_form'|'unknown'|'error', inquiryUrl, hasCaptcha, kind, emails, instagram, checkedPages, note }
  */
 async function findContact(websiteUrl, opts = {}) {
   const fetchPage = opts.fetchPage || fetchHomepage;
@@ -282,8 +449,9 @@ async function findContact(websiteUrl, opts = {}) {
   const result = { status: 'no_form', inquiryUrl: null, hasCaptcha: false, kind: 'none', emails: [], instagram: null, checkedPages: 0, note: '' };
 
   const startHost = hostOf(websiteUrl);
-  if (startHost && isNonOwnSite(startHost)) {
-    result.note = '自社サイトではない';
+  const startReason = nonOwnReason(websiteUrl, opts);
+  if (startReason) {
+    result.note = startReason;
     return result;
   }
 
@@ -329,14 +497,28 @@ async function findContact(websiteUrl, opts = {}) {
   result._siteHost = siteHost;
 
   // リダイレクト先が自社サイトでない場合
-  if (isNonOwnSite(siteHost)) {
-    result.note = '自社サイトではない';
+  const finalReason = nonOwnReason(finalUrl, opts);
+  if (finalReason) {
+    result.note = finalReason;
     return finish();
   }
 
+  // 店舗のURLがサイト直下でない(他者サイト内のページの)場合、団体の窓口フォームを拾わないようにする
+  const deepStart = (() => { const u = parseUrl(websiteUrl); const f = parseUrl(finalUrl); return (u && pathSegments(u).length >= 1) || (f && pathSegments(f).length >= 1); })();
+  let jsSite = isJsBuilder(siteHost, top.body);
+  let orgRejected = 0;
+  const noFormEnd = (note) => {
+    if (orgRejected) { result.note = NOTE_ORG; return finish(); }
+    if (jsSite) { result.status = 'unknown'; result.note = NOTE_JS; return finish(); }
+    result.note = note;
+    return finish();
+  };
+
   collect(top, siteHost);
   const topForm = detectForm(top.body);
-  if (topForm.hasContactForm) {
+  if (topForm.hasContactForm && deepStart && isOrgPage(top.body)) {
+    orgRejected++;
+  } else if (topForm.hasContactForm) {
     result.status = 'url_found';
     result.inquiryUrl = finalUrl;
     result.hasCaptcha = topForm.hasCaptcha;
@@ -361,8 +543,7 @@ async function findContact(websiteUrl, opts = {}) {
   const candidates = scored.slice(0, MAX_CANDIDATES);
 
   if (!candidates.length) {
-    result.note = '問い合わせ候補リンクなし';
-    return finish();
+    return noFormEnd('問い合わせ候補リンクなし');
   }
 
   let robotsRules = null;
@@ -389,8 +570,10 @@ async function findContact(websiteUrl, opts = {}) {
     } catch { continue; }
     if (!page || page.status >= 400) continue;
     collect(page, siteHost);
+    if (!jsSite && isJsBuilder('', page.body)) jsSite = true;
     const f = detectForm(page.body);
     const pageUrl = page.finalUrl || c.url;
+    if (deepStart && isOrgPage(page.body)) { orgRejected++; continue; }
     if (f.hasContactForm) {
       result.status = 'url_found';
       result.inquiryUrl = pageUrl;
@@ -411,12 +594,13 @@ async function findContact(websiteUrl, opts = {}) {
     }
   }
 
-  result.note = `候補${candidates.length}件確認、フォームなし` + (skipped ? `(robots除外${skipped}件)` : '');
-  return finish();
+  return noFormEnd(`候補${candidates.length}件確認、フォームなし` + (skipped ? `(robots除外${skipped}件)` : ''));
 }
 
 module.exports = {
   extractLinks, scoreContactLink, detectForm, extractEmails, extractInstagram,
   findContact, NON_OWN_SITE_HOSTS, FORM_SERVICES, isNonOwnSite, isFormServiceUrl,
   parseRobots, isDisallowed, hostOf, MAX_PAGES,
+  parseNonOwnTerms, loadNonOwnTerms, defaultTermsFile, nonOwnReason, matchesBuiltinNonOwn, matchesNonOwnList,
+  isJsBuilder, isOrgPage, decodeCfEmail, decodeCfEmails,
 };

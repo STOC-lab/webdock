@@ -248,7 +248,10 @@ function run(script, args) {
   const id2 = await S('F2(sent)', 'http://f2.example.jp');
   const id3 = await S('F3', 'http://f3.example.jp');
   const id4 = await S('F4(ig)', 'http://f4.example.jp');
+  const id5 = await S('F5(unknown-new)', 'http://f5.example.jp');
+  const id6 = await S('F6(unknown-nf)', 'http://f6.example.jp');
   await q("INSERT INTO stoc_sales.store_contact_channels (store_id, inquiry_status) VALUES (?, 'sent')", [id2]);
+  await q("INSERT INTO stoc_sales.store_contact_channels (store_id, inquiry_status) VALUES (?, 'no_form')", [id6]);
   await q("INSERT INTO stoc_sales.store_contact_channels (store_id, instagram_url, instagram_status) VALUES (?, 'https://instagram.com/old', 'found')", [id4]);
   process.env.FINDER_DB_HOST = cfg.host; process.env.FINDER_DB_PORT = String(cfg.port);
   process.env.FINDER_DB_USER = cfg.user; process.env.FINDER_DB_PASS = cfg.password; process.env.FINDER_DB_NAME = 'stoc_sales';
@@ -258,16 +261,18 @@ function run(script, args) {
   const finder = async (url) => current[new URL(url).hostname];
   const res = (o) => ({ status: 'url_found', inquiryUrl: null, hasCaptcha: false, kind: 'onsite', emails: [], instagram: null, note: '', ...o });
   const stores = await ff.fetchTargets(pool, { recheckDays: 90, errorRetryDays: 7 }, 100);
-  eq(stores.map((s) => s.id).sort((a, b) => a - b), [id1, id3, id4], 'target query valid & selects expected stores');
+  eq(stores.map((s) => s.id).sort((a, b) => a - b), [id1, id3, id4, id5, id6], 'target query valid & selects expected stores');
   eq(stores.some((s) => s.id === id2), false, 'sent store not a target');
   const mk = (id, host) => ({ id, name: 'n', website_url: 'http://' + host, prefecture: '兵庫県' });
   current = {
     'f1.example.jp': res({ inquiryUrl: 'http://f1.example.jp/contact', emails: ['info@f1.example.jp'], instagram: 'https://instagram.com/f1' }),
     'f2.example.jp': res({ inquiryUrl: 'http://f2.example.jp/contact' }),
     'f3.example.jp': res({ status: 'no_form' }),
+    'f5.example.jp': res({ status: 'unknown', note: '要ブラウザ確認(JSで作られたサイト)' }),
+    'f6.example.jp': res({ status: 'unknown' }),
     'f4.example.jp': res({ status: 'no_form', instagram: 'https://instagram.com/new' }),
   };
-  await ff.processStores({ stores: [mk(id1, 'f1.example.jp'), mk(id2, 'f2.example.jp'), mk(id3, 'f3.example.jp'), mk(id4, 'f4.example.jp')], finder, writer, concurrency: Number(process.env.T_CONC || 2) });
+  await ff.processStores({ stores: [mk(id1, 'f1.example.jp'), mk(id2, 'f2.example.jp'), mk(id3, 'f3.example.jp'), mk(id4, 'f4.example.jp'), mk(id5, 'f5.example.jp'), mk(id6, 'f6.example.jp')], finder, writer, concurrency: Number(process.env.T_CONC || 2) });
   const ch = async (id) => (await q('SELECT * FROM stoc_sales.store_contact_channels WHERE store_id = ?', [id]))[0];
   const c1 = await ch(id1);
   eq([c1.inquiry_status, c1.email_status, c1.instagram_url, c1.instagram_status], ['url_found', 'found', 'https://instagram.com/f1', 'found'], 'store1 channels');
@@ -275,6 +280,10 @@ function run(script, args) {
   eq((await ch(id3)).inquiry_status, 'no_form', 'no_form recorded');
   const c4 = await ch(id4);
   eq([c4.instagram_url, c4.inquiry_status], ['https://instagram.com/old', 'no_form'], 'instagram not overwritten when set');
+  const c5 = await ch(id5);
+  eq([c5.inquiry_status, c5.inquiry_last_checked_at !== null], ['unknown', true], 'unknown result: not no_form, last_checked updated');
+  const c6 = await ch(id6);
+  eq([c6.inquiry_status, c6.inquiry_last_checked_at !== null], ['no_form', true], 'unknown result keeps existing status, updates last_checked');
   const cand = async (id, type) => q('SELECT value, is_active, source FROM stoc_sales.contact_channel_candidates WHERE store_id = ? AND channel_type = ? ORDER BY id', [id, type]);
   eq((await cand(id1, 'email')).map((x) => x.value), ['info@f1.example.jp'], 'email candidate');
   eq((await cand(id1, 'inquiry_url')).map((x) => [x.value, x.is_active]), [['http://f1.example.jp/contact', 1]], 'inquiry candidate active');

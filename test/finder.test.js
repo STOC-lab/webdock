@@ -69,7 +69,7 @@ const noRobots = async () => '';
   ok(ff.NON_OWN_SITE_HOSTS.includes('instagram.com') && !ff.NON_OWN_SITE_HOSTS.includes('peraichi.com'), 'host list');
   let called = 0;
   const r0 = await ff.findContact('https://www.instagram.com/shop/', { fetchPage: async () => { called++; return {}; }, fetchRobots: noRobots });
-  eq([r0.status, r0.note, called], ['no_form', '自社サイトではない', 0], 'instagram host -> no_form');
+  eq([r0.status, r0.note, called], ['no_form', '自社サイトではない(一覧)', 0], 'instagram host -> no_form');
 
   // findContact: normal flow
   const log1 = [];
@@ -126,6 +126,115 @@ const noRobots = async () => '';
   eq([r8.status, r8.note], ['error', 'サイトへ接続できませんでした。'], 'top error');
   const r9 = await ff.findContact('https://shop.jp/', { fetchPage: async () => { throw new Error('secret internals'); }, fetchRobots: noRobots });
   eq([r9.status, r9.note.includes('secret')], ['error', false], 'non-userSafe message hidden');
+
+  // ---- (1)(2) 自社サイトではない判定 ----
+  const fs = require('fs'), path = require('path'), os = require('os');
+  const realRules = ff.parseNonOwnTerms(fs.readFileSync(path.join(__dirname, '..', 'rules', 'non_own_site_terms.txt'), 'utf8'));
+  ok(realRules.url.includes('ekiten') && realRules.host.includes('ekiten.jp'), 'rules: ekiten in #@url and #@host');
+  ok(realRules.host.includes('gnavi.co.jp') && realRules.host.includes('lin.ee'), 'rules: #@host section parsed');
+  ok(realRules.url.includes('prtimes') && !realRules.url.includes('gnavi.co.jp'), 'rules: #@url section parsed');
+  ok(realRules.url.length > 100 && new Set(realRules.url).size === realRules.url.length, 'rules: many, deduped');
+  const pr = ff.parseNonOwnTerms('# c\n#@url\n  HTTPS://Foo.com/Bar \nhttp://foo.com/bar\n//baz.jp\n#@host\nX.com\nx.com\n');
+  eq(pr, { url: ['foo.com/bar', 'baz.jp'], host: ['x.com'] }, 'parse: trim/strip scheme/lowercase/dedupe');
+  const tmpRules = path.join(os.tmpdir(), 'nonown-' + process.pid + '.txt');
+  fs.writeFileSync(tmpRules, '#@host\nmyportal.example\n');
+  eq(ff.loadNonOwnTerms(tmpRules).host, ['myportal.example'], 'custom file loads');
+  fs.unlinkSync(tmpRules);
+
+  const nonOwn = async (u) => { let n = 0; const r = await ff.findContact(u, { fetchPage: async () => { n++; return {}; }, fetchRobots: noRobots }); return [r.status, r.note, n]; };
+  const NOTE_L = '自社サイトではない(一覧)', NOTE_B = '自社サイトではない(地図・公共・掲載ページ)';
+  eq(await nonOwn('https://harikyu-ehime.or.jp/clinic/abc/'), ['no_form', NOTE_B, 0], 'harikyu listing');
+  eq(await nonOwn('https://www.ehimeda.or.jp/search/?&c=1&d=566'), ['no_form', NOTE_B, 0], 'ehimeda search');
+  eq((await nonOwn('https://www.google.co.jp/maps/place/data=!4m7!3m6'))[0], 'no_form', 'google maps');
+  ok(ff.matchesBuiltinNonOwn('https://www.google.co.jp/maps/place/data=!4m7'), 'google maps builtin rule');
+  eq(await nonOwn('https://www.town.ikata.ehime.jp/soshiki/34/18078.html'), ['no_form', NOTE_B, 0], 'town.ikata');
+  eq((await nonOwn('http://www.qq.pref.ehime.jp/x'))[0], 'no_form', 'pref host');
+  eq(await nonOwn('https://saijo.mypl.net/article/newopen_niihama-saijo/106465'), ['no_form', NOTE_L, 0], 'mypl.net via list');
+  eq((await nonOwn('http://www.undernavi.com/shikoku/ehime/uwajima/irokoi-u/'))[0], 'no_form', 'undernavi');
+  eq((await nonOwn('http://www.happy-t.co.jp/shopcms/info_4845.html'))[0], 'no_form', 'happy-t shopcms');
+  eq((await nonOwn('http://agora-m.co.jp/about/floor-oceandream/'))[0], 'no_form', 'agora floor');
+  eq((await nonOwn('https://haisha-yoyaku.jp/bun2sdental/detail/index/id/1'))[0], 'no_form', 'haisha-yoyaku');
+  eq(await nonOwn('https://www.ekiten.jp/shop_123/'), ['no_form', NOTE_L, 0], 'ekiten via list');
+  eq((await nonOwn('https://localplace.jp/t000261837/'))[0], 'no_form', 'localplace');
+  eq((await nonOwn('http://r.gnavi.co.jp/abc/'))[0], 'no_form', 'gnavi');
+  eq((await nonOwn('http://www.iryou.teikyouseido.mhlw.go.jp/x/y'))[0], 'no_form', 'mhlw');
+  eq((await nonOwn('https://maps.app.goo.gl/abc'))[0], 'no_form', 'maps.app.goo.gl');
+  eq((await nonOwn('https://goo.gl/maps/abc'))[0], 'no_form', 'goo.gl/maps');
+  eq((await nonOwn('https://maps.google.co.jp/x'))[0], 'no_form', 'maps.google.*');
+  eq((await nonOwn('https://city.himeji.lg.jp/'))[0], 'no_form', 'lg.jp');
+  ok(ff.matchesBuiltinNonOwn('https://x.example.lg.jp/') && ff.matchesBuiltinNonOwn('https://www.mof.go.jp/'), 'lg.jp/go.jp builtin');
+  // 自社サイトは誤判定しない
+  ok(!ff.nonOwnReason('https://sportsizakaya-syakarikiya.com/dishes/'), 'deep own site (1 segment) is own');
+  ok(!ff.nonOwnReason('https://www.kamegaike.com/'), 'kamegaike root is own');
+  ok(!ff.nonOwnReason('https://sites.google.com/view/shop/list/page'), 'sites.google.com exempt from heuristic');
+  ok(!ff.nonOwnReason('https://example-shop.com/index.html'), 'index.html only is root');
+  ok(!ff.nonOwnReason('https://example-shop.com/home'), '/home is root');
+  ok(!ff.nonOwnReason('https://abc.co.jp/about/company/'), 'two segments w/o keyword on .co.jp is own');
+  ok(ff.nonOwnReason('https://abc.co.jp/shop/12?x=1'), 'keyword + 2 segments');
+  ok(ff.nonOwnReason('https://abc.or.jp/a?b=1'), '.or.jp segment+query');
+  const rKame = await ff.findContact('https://www.kamegaike.com/', { fetchPage: fakeSite({
+    'https://www.kamegaike.com/': page('<a href="/contact/">お問い合わせ</a>'),
+    'https://www.kamegaike.com/contact/': page('<title>お問い合わせ | 亀ヶ池</title>' + FORM),
+  }), fetchRobots: noRobots });
+  eq([rKame.status, rKame.inquiryUrl], ['url_found', 'https://www.kamegaike.com/contact/'], 'kamegaike url_found');
+  const rDish = await ff.findContact('https://sportsizakaya-syakarikiya.com/dishes/', { fetchPage: fakeSite({
+    'https://sportsizakaya-syakarikiya.com/dishes/': page('<a href="/contact/">お問い合わせ</a>'),
+    'https://sportsizakaya-syakarikiya.com/contact/': page(FORM),
+  }), fetchRobots: noRobots });
+  eq(rDish.status, 'url_found', 'deep own site still searched');
+
+  // ---- (3) 団体ガード ----
+  const orgSite = {
+    'https://own.jp/about/a/': page('<a href="/contact/">お問い合わせ</a>'),
+    'https://own.jp/contact/': page('<html><head><title>愛媛県鍼灸協会 お問い合わせ</title></head><body>' + FORM + '</body></html>'),
+  };
+  const rOrg = await ff.findContact('https://own.jp/about/a/', { fetchPage: fakeSite(orgSite), fetchRobots: noRobots });
+  eq([rOrg.status, rOrg.inquiryUrl, rOrg.note], ['no_form', null, '団体の窓口のため除外'], 'org guard rejects from deep path');
+  const rOrgRoot = await ff.findContact('https://own.jp/', { fetchPage: fakeSite({ 'https://own.jp/': orgSite['https://own.jp/about/a/'], 'https://own.jp/contact/': orgSite['https://own.jp/contact/'] }), fetchRobots: noRobots });
+  eq(rOrgRoot.status, 'url_found', 'org guard not applied at site root');
+  const rOrgH1 = await ff.findContact('https://own.jp/about/a/', { fetchPage: fakeSite({
+    'https://own.jp/about/a/': orgSite['https://own.jp/about/a/'],
+    'https://own.jp/contact/': page('<h1>歯科医師会事務局</h1>' + FORM),
+  }), fetchRobots: noRobots });
+  eq(rOrgH1.note, '団体の窓口のため除外', 'org guard via h1');
+
+  // ---- (4) JSビルダー ----
+  const rWix = await ff.findContact('https://example.wixsite.com/mysite', { fetchPage: fakeSite({ 'https://example.wixsite.com/mysite': page('<div id="SITE_CONTAINER"></div>') }), fetchRobots: noRobots });
+  eq([rWix.status, rWix.note], ['unknown', '要ブラウザ確認(JSで作られたサイト)'], 'wixsite no links -> unknown');
+  const rGen = await ff.findContact('https://shop.jp/', { fetchPage: fakeSite({ 'https://shop.jp/': '<html><head><meta name="generator" content="Wix.com Website Builder"></head><body></body></html>' }), fetchRobots: noRobots });
+  eq(rGen.status, 'unknown', 'meta generator Wix -> unknown');
+  const rScr = await ff.findContact('https://shop.jp/', { fetchPage: fakeSite({ 'https://shop.jp/': page('<script src="https://static.parastorage.com/x.js"></script>') }), fetchRobots: noRobots });
+  eq(rScr.status, 'unknown', 'parastorage script -> unknown');
+  const rJim = await ff.findContact('https://shop.jp/', { fetchPage: fakeSite({ 'https://shop.jp/': page('<a href="/contact/">お問い合わせ</a>'), 'https://shop.jp/contact/': page('<script src="//u.jimcdn.com/x"></script><script src="https://assets.jimdocdn.com/a.js"></script>nothing') }), fetchRobots: noRobots });
+  eq(rJim.status, 'unknown', 'jimdocdn after candidate without form -> unknown');
+  const rWixForm = await ff.findContact('https://a.wixsite.com/s', { fetchPage: fakeSite({ 'https://a.wixsite.com/s': page(FORM) }), fetchRobots: noRobots });
+  eq(rWixForm.status, 'url_found', 'builder with form still url_found');
+  for (const h of ['sites.google.com/view/x', 'x.jimdofree.com', 'x.amebaownd.com', 'x.studio.site', 'x.mystrikingly.com', 'x.peraichi.com', 'x.goope.jp', 'x.crayonsite.net', 'x.kujira.biz', 'x.kaginawa.jp', 'x.gorp.jp']) {
+    ok(ff.isJsBuilder(h.split('/')[0], ''), 'builder host ' + h);
+  }
+  ok(!ff.isJsBuilder('shop.jp', page('hello')), 'plain site not builder');
+  const { csvRow } = require('../cli/find-forms');
+  ok(csvRow({ id: 1, name: 'n', prefecture: 'p', website_url: 'u' }, { status: 'unknown', note: 'x', emails: [] }).includes(',要確認,'), 'csv 要確認');
+  const stU = await processStores({ stores: [{ id: 9, website_url: 'https://u.jp/' }], finder: async () => ({ status: 'unknown' }), writer: async () => {} });
+  eq([stU.unknown, stU.error], [1, 0], 'progress counts unknown');
+
+  // ---- (5) Cloudflare メール ----
+  const cfHex = (addr, key) => key.toString(16).padStart(2, '0') + [...addr].map((c) => (c.charCodeAt(0) ^ key).toString(16).padStart(2, '0')).join('');
+  eq(ff.decodeCfEmail(cfHex('info@shop.jp', 0x5a)), 'info@shop.jp', 'cf decode');
+  const cfA = cfHex('info@shop.jp', 0x5a), cfB = cfHex('Owner@Gmail.com', 0x13);
+  eq(ff.extractEmails(page(`<a href="/cdn-cgi/l/email-protection#${cfA}">[email&#160;protected]</a>`), 'shop.jp'), ['info@shop.jp'], 'cf href decoded');
+  eq(ff.extractEmails(page(`<span class="__cf_email__" data-cfemail="${cfB}">[email&#160;protected]</span>`), 'shop.jp'), ['owner@gmail.com'], 'cf data-cfemail decoded (free mail)');
+  eq(ff.extractEmails(page(`<a data-cfemail='${cfHex('x@agency.com', 7)}'>.</a>`), 'shop.jp'), [], 'cf other company domain filtered');
+
+  // ---- (6) 画像リンク ----
+  eq(ff.extractLinks('<a href="/contact"><img src="a.png" alt="お問い合わせ"></a>', 'https://a.jp/'), [{ url: 'https://a.jp/contact', text: 'お問い合わせ' }], 'img alt link');
+  eq(ff.extractLinks('<a href="/c" title="お問合せ"><img src="a.png"></a><a href="/d" aria-label="資料請求"></a>', 'https://a.jp/').map((l) => l.text), ['お問合せ', '資料請求'], 'anchor title/aria-label');
+  eq(ff.extractLinks('<a href="/c"><img src="a.png" title="ご相談"></a>', 'https://a.jp/')[0].text, 'ご相談', 'img title');
+  const rImg = await ff.findContact('https://shop.jp/', { fetchPage: fakeSite({
+    'https://shop.jp/': page('<a href="/xyz"><img src="b.png" alt="お問い合わせ"></a>'),
+    'https://shop.jp/xyz': page(FORM),
+  }), fetchRobots: noRobots });
+  eq([rImg.status, rImg.inquiryUrl], ['url_found', 'https://shop.jp/xyz'], 'image-alt contact link followed');
 
   // processStores
   const stores = [
