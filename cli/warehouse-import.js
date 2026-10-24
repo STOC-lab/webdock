@@ -2,7 +2,10 @@
 
 /**
  * 倉庫(stoc_master.shops)への取り込み
- *   node cli/warehouse-import.js --root <folder> [--dry-run] [--batch 1000]
+ *   node cli/warehouse-import.js --root <folder> [--dry-run] [--batch 1000] [--pattern "gmp_*.csv"]
+ *   --pattern: ファイル名(フォルダ名は含まない)に対するワイルドカード(* と ?、大文字小文字無視)。
+ *              リスツール整形後のファイル(nagasaki.csv 等)を除き、収集ツールの元ファイルだけ取り込むために使う。
+ *   元ファイルはUTF-8(BOM有無どちらも可)。Shift_JISも自動判定。
  *   node cli/warehouse-import.js --link-only
  * 接続: WH_DB_HOST(127.0.0.1) WH_DB_PORT WH_DB_USER WH_DB_PASS (.env)
  */
@@ -16,26 +19,34 @@ const CHUNK = 64 * 1024 * 1024;
 const LINK_CHUNK = 50000;
 
 function parseArgs(argv) {
-  const o = { root: null, dryRun: false, batch: 1000, linkOnly: false };
+  const o = { root: null, dryRun: false, batch: 1000, linkOnly: false, pattern: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--root') o.root = argv[++i];
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--link-only') o.linkOnly = true;
+    else if (a === '--pattern') o.pattern = argv[++i];
     else if (a === '--batch') o.batch = Math.floor(Number(argv[++i]));
     else throw new Error('不明なオプション: ' + a);
   }
+  if (o.pattern !== null && !o.pattern) throw new Error('--pattern の値が空です');
   if (!o.linkOnly && !o.root) throw new Error('--root <フォルダ> を指定してください');
   if (!Number.isFinite(o.batch) || o.batch < 1) throw new Error('--batch の値が不正です');
   return o;
 }
 
-function* walk(dir) {
+function globToRegExp(glob) {
+  const re = String(glob).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp('^' + re + '$', 'i');
+}
+
+function* walk(dir, pattern) {
+  const rx = pattern ? globToRegExp(pattern) : null;
   const ents = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
   for (const e of ents) {
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) yield* walk(full);
-    else if (/\.(csv|tsv|txt)$/i.test(e.name)) yield full;
+    if (e.isDirectory()) yield* walk(full, pattern);
+    else if (/\.(csv|tsv|txt)$/i.test(e.name) && (!rx || rx.test(e.name))) yield full;
   }
 }
 
@@ -174,7 +185,7 @@ async function main() {
     return;
   }
   const root = path.resolve(o.root);
-  const files = [...walk(root)];
+  const files = [...walk(root, o.pattern)];
   console.error(`対象ファイル ${files.length}件 (${root})${o.dryRun ? ' [dry-run]' : ''}`);
   const pool = o.dryRun ? null : makePool();
   const total = { files: 0, rows: 0, inserted: 0, updated: 0, skipped: 0 };
@@ -218,4 +229,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { parseArgs, walk, processFile, upsertSql, linkStep, makePool };
+module.exports = { parseArgs, walk, globToRegExp, processFile, upsertSql, linkStep, makePool };

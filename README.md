@@ -250,4 +250,30 @@ npm run wh:promote -- --out data/promote_20261024.csv --prefecture 東京都,神
 mysql < sql/warehouse_migrate_001.sql
 ```
 
-テスト: `npm run test:warehouse`(DB不要)、DBテストは **stoc_master と stoc_sales を削除して作り直すため、本番サーバーでは絶対に実行しないこと**(テスト専用環境で `WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js`。本番サーバー上・実データがある場合は自動で中止する安全装置あり)
+### 除外ルール(リスツールの条件)
+
+営業アプリ用CSVを書き出すとき(`wh:promote`)に、これまでリスツールで行っていた除外・重複除去を自動で適用します。倉庫そのものには**全件を残します**(Instagram DM やTOCの訪問営業など、別の用途で別のルールを使えるようにするため)。
+
+- ルールは `rules/<名前>.json`。既定は `rules/問い合わせ営業.json`(`--rules <名前>` で切替、`--no-rules` で無効)。
+- 屋号・業種・登録URL・電話番号に、キーワードが**含まれていたら除外**(リスツールと同じ完全一致の部分一致、大文字小文字を区別、末尾の空白も含めて照合)。業種は先頭の1つだけで判定します。注意: 屋号のキーワード「店」があるため「○○工務店」のような屋号も除外されます(リスツールと同じ動き)。
+- 電話番号が同じ店舗は口コミ数が多い1件だけ残します(`--no-dedupe-phone` で無効。電話番号が空の行はすべて残す)。
+- `--limit` はルール除外・重複除去のあとの件数です。`--mark` は実際に書き出した行だけに印を付けます。
+- 除外される件数だけ先に見るには `--report-only` (CSVは作らず、走査数・除外数・除外理由の上位20キーワード・重複除去数を表示):
+
+```
+npm run wh:promote -- --prefecture 長崎県 --report-only
+```
+
+新しい .listt からルールを作り直す:
+
+```
+npm run wh:rules -- --from rules/source/GMAPSTOC.listt --name 問い合わせ営業
+```
+
+取り込み時の注意: 整形後のファイル(`nagasaki.csv` など)が元ファイル(`gmp_*.csv`)と同じフォルダにあるため、`--pattern "gmp_*.csv"`(ファイル名に対するワイルドカード `*` `?`、大文字小文字無視)を付けて元ファイルだけ取り込みます。元ファイルは UTF-8 です(Shift_JIS も自動判定)。
+
+```
+npm run wh:import -- --root /var/data/gmp/all --pattern "gmp_*.csv"
+```
+
+テスト: `npm run test:warehouse` と `npm run test:rules`(DB不要)、DBテストは **stoc_master と stoc_sales を削除して作り直すため、本番サーバーでは絶対に実行しないこと**(テスト専用環境で `WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js`。本番サーバー上・実データがある場合は自動で中止する安全装置あり)

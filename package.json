@@ -12,6 +12,8 @@
     "test:finder": "node test/finder.test.js",
     "wh:import": "node cli/warehouse-import.js",
     "wh:promote": "node cli/warehouse-promote.js",
+    "wh:rules": "node cli/warehouse-rules.js",
+    "test:rules": "node test/rules.test.js",
     "test:warehouse": "node test/warehouse.test.js",
     "test:warehouse-db": "echo テスト専用サーバーでのみ: WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js"
   },

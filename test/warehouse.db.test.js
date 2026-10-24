@@ -159,7 +159,7 @@ function run(script, args) {
 
   // --- promote ---
   const out = path.join(dir, 'out', 'promote.csv');
-  r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '兵庫県,東京都', '--mark']);
+  r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '兵庫県,東京都', '--mark', '--no-rules']);
   eq(r.code, 0, 'promote exit: ' + r.err);
   const text = new TextDecoder('shift_jis').decode(fs.readFileSync(out));
   const lines = w.parseDelimited(text, ',');
@@ -172,22 +172,74 @@ function run(script, args) {
   eq(lines[2][9], URL1, 'GMAP kept');
   eq(lines.some((l) => l[0] === 'trimmngsalon MERRY'), false, 'linked store excluded');
   eq((await q('SELECT COUNT(*) n FROM stoc_master.shops WHERE promoted_at IS NOT NULL'))[0].n, 4, 'marked 4');
-  r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '兵庫県,東京都']);
+  r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '兵庫県,東京都', '--no-rules']);
   eq(w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(out)), ',').length, 1, 'second promote: header only');
   // 閉業の扱い(大阪府)
   const outO = path.join(dir, 'out', 'osaka.csv');
-  run('cli/warehouse-promote.js', ['--out', outO, '--prefecture', '大阪府']);
+  run('cli/warehouse-promote.js', ['--out', outO, '--prefecture', '大阪府', '--no-rules']);
   let ol = w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outO)), ',');
   eq(ol.slice(1).map((l) => l[0]).sort(), ['大阪の店A', '大阪の臨時休業店'], 'closed excluded by default, 臨時休業 kept');
   eq(ol[0].length, 11, 'osaka 11 cols');
   eq(ol.find((l) => l[0] === '大阪の店A')[1], 'ラーメン店', 'export uses first category only (same as リスツール整形)');
-  run('cli/warehouse-promote.js', ['--out', outO, '--prefecture', '大阪府', '--include-closed']);
+  run('cli/warehouse-promote.js', ['--out', outO, '--prefecture', '大阪府', '--include-closed', '--no-rules']);
   ol = w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outO)), ',');
   eq(ol.length, 4, '--include-closed includes closed');
   // filters
   await q('UPDATE stoc_master.shops SET promoted_at = NULL');
-  r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '東京都', '--category', '美容,ネイル', '--has-website', '--limit', '5']);
+  r = run('cli/warehouse-promote.js', ['--out', out, '--prefecture', '東京都', '--category', '美容,ネイル', '--has-website', '--limit', '5', '--no-rules']);
   eq(w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(out)), ',').length, 2, 'filters: category+website');
+
+  // --- 除外ルール / 電話番号重複 / limit / report-only / import --pattern ---
+  fs.mkdirSync(path.join(dir, '福岡県'));
+  const rawName = path.join(dir, '福岡県', 'gmp_福岡県_20261016-101752.csv');
+  const cleaned = path.join(dir, '福岡県', 'fukuoka.csv');
+  const rowF = (n, cat, ph, rv, u) => [n, cat, '810-0001', '福岡県福岡市1−1', ph, '4.0', rv, '有り', '', u, '1'].join(',');
+  const UF = (n) => URL1.replace('0xe9a994bb6fdb93c5', '0xbbbb00000000000' + n);
+  const body = [H.join(','),
+    rowF('ダイワハウス 神戸営業所', '住宅', '092-000-0001', '90', UF(1)),
+    rowF('福岡美容室A', '美容院、カフェ', '092-000-0002', '10', UF(2)),
+    rowF('福岡美容室B(同電話)', '美容院', '092-000-0002', '50', UF(3)),
+    rowF('福岡エステC', 'エステ', '092-000-0003', '30', ''),
+    rowF('福岡ネイルD', 'ネイル', '', '5', ''),
+    rowF('福岡ネイルE', 'ネイル', '', '4', ''),
+  ].join('\n') + '\n';
+  fs.writeFileSync(rawName, '﻿' + body);
+  fs.writeFileSync(cleaned, '﻿' + [H.join(','), rowF('整形後ファイル', 'x', '092-999-9999', '1', '')].join('\n') + '\n');
+  r = run('cli/warehouse-import.js', ['--root', path.join(dir, '福岡県'), '--pattern', 'gmp_*.csv']);
+  eq(r.code, 0, 'pattern import exit: ' + r.err);
+  eq(/対象ファイル 1件/.test(r.err), true, 'pattern: only 1 file: ' + r.err);
+  eq((await q("SELECT COUNT(*) n FROM stoc_master.shops WHERE prefecture = '福岡県'"))[0].n, 6, 'pattern: raw rows imported');
+  eq((await q("SELECT COUNT(*) n FROM stoc_master.shops WHERE name = '整形後ファイル'"))[0].n, 0, 'pattern: cleaned sibling skipped');
+
+  const outF = path.join(dir, 'out', 'fukuoka.csv');
+  const readF = () => w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outF)), ',');
+  r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県']);
+  eq(r.code, 0, 'rules promote exit: ' + r.err);
+  eq(readF().slice(1).map((l) => l[0]), ['福岡美容室B(同電話)', '福岡エステC', '福岡ネイルD', '福岡ネイルE'], 'rules: ダイワハウス excluded, same phone deduped (higher review kept), empty phones all kept');
+  eq(readF().find((l) => l[0] === '福岡美容室B(同電話)')[1], '美容院', 'first category exported');
+  eq(/ルールで除外: 1\b/.test(r.err) && /電話番号の重複で除外: 1\b/.test(r.err) && /書き出し対象: 4\b/.test(r.err) && /走査した行: 6\b/.test(r.err), true, 'stats printed: ' + r.err);
+  eq(/屋号:[^ ]+ : 1/.test(r.err), true, 'top keywords printed');
+  // 福岡エステC: 業種に除外語がなければ残る(上で確認済み)。--no-dedupe-phone
+  r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県', '--no-dedupe-phone']);
+  eq(readF().length, 6, '--no-dedupe-phone keeps both same-phone rows (5 + header)');
+  // limit は絞り込み後: 上位(口コミ順)の先頭はダイワハウス(除外)なので、limit 2 でも2件出る
+  r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県', '--limit', '2']);
+  eq(readF().slice(1).map((l) => l[0]), ['福岡美容室B(同電話)', '福岡エステC'], '--limit counted after filtering');
+  // --no-rules
+  r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県', '--no-rules', '--no-dedupe-phone']);
+  eq(readF().length, 7, '--no-rules keeps all 6');
+  // mark は書き出した分だけ
+  await q('UPDATE stoc_master.shops SET promoted_at = NULL');
+  r = run('cli/warehouse-promote.js', ['--out', outF, '--prefecture', '福岡県', '--limit', '2', '--mark']);
+  eq((await q("SELECT name FROM stoc_master.shops WHERE promoted_at IS NOT NULL ORDER BY name")).map((x) => x.name).sort(), ['福岡エステC', '福岡美容室B(同電話)'], '--mark marks only written rows');
+  await q('UPDATE stoc_master.shops SET promoted_at = NULL');
+  // report-only はファイルを書かない
+  const outR = path.join(dir, 'out', 'report.csv');
+  r = run('cli/warehouse-promote.js', ['--out', outR, '--prefecture', '福岡県', '--report-only', '--mark']);
+  eq([r.code, fs.existsSync(outR), /ルールで除外: 1\b/.test(r.err)], [0, false, true], '--report-only writes no file');
+  eq((await q('SELECT COUNT(*) n FROM stoc_master.shops WHERE promoted_at IS NOT NULL'))[0].n, 0, '--report-only marks nothing');
+  r = run('cli/warehouse-promote.js', ['--prefecture', '福岡県', '--report-only']);
+  eq(r.code, 0, '--report-only needs no --out');
 
   // --- find-forms DB writer ---
   const ff = require('../cli/find-forms');
