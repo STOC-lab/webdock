@@ -46,7 +46,7 @@ function buildQuery(o) {
   if (o.hasWebsite) where.push("website_url IS NOT NULL AND website_url <> ''");
   if (o.excludeClosed) where.push("(business_status IS NULL OR (business_status NOT LIKE '%閉業%' AND business_status NOT LIKE '%閉店%'))");
   if (o.formFound) where.push("form_status = 'url_found'");
-  const sql = `SELECT id, name, category, postal, address_raw, phone, rating, review_count, gbp_registered, website_url, gmap_url, photo_count
+  const sql = `SELECT id, name, category, category_main, postal, address_raw, phone, rating, review_count, gbp_registered, website_url, gmap_url, photo_count
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id
 LIMIT ?`;
@@ -61,7 +61,9 @@ function csvField(v) {
 const csvLine = (vals) => vals.map(csvField).join(',') + '\r\n';
 
 function rowToCsv(r) {
-  return csvLine([r.name, r.category, r.postal, r.address_raw, r.phone,
+  // 業種は営業管理の取り込み形式に合わせ「1つ目だけ」(リスツールでの整形と同じ)
+  const { categoryMain } = require('../src/warehouse');
+  return csvLine([r.name, r.category_main || categoryMain(r.category || '') || '', r.postal, r.address_raw, r.phone,
     r.rating === null ? '' : Number(r.rating).toFixed(1), r.review_count, r.gbp_registered, r.website_url, r.gmap_url, r.photo_count]);
 }
 

@@ -180,7 +180,7 @@ function run(script, args) {
   let ol = w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outO)), ',');
   eq(ol.slice(1).map((l) => l[0]).sort(), ['大阪の店A', '大阪の臨時休業店'], 'closed excluded by default, 臨時休業 kept');
   eq(ol[0].length, 11, 'osaka 11 cols');
-  eq(ol.find((l) => l[0] === '大阪の店A')[1], 'ラーメン店、居酒屋', 'full category string in export');
+  eq(ol.find((l) => l[0] === '大阪の店A')[1], 'ラーメン店', 'export uses first category only (same as リスツール整形)');
   run('cli/warehouse-promote.js', ['--out', outO, '--prefecture', '大阪府', '--include-closed']);
   ol = w.parseDelimited(new TextDecoder('shift_jis').decode(fs.readFileSync(outO)), ',');
   eq(ol.length, 4, '--include-closed includes closed');
