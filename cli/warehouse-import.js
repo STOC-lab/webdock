@@ -161,12 +161,18 @@ async function linkStep(pool, log = console.error) {
     log('警告: stoc_sales.stores にアクセスできないためリンク処理をスキップします: ' + e.message);
     return null;
   }
+  // 営業管理(stoc_sales)と倉庫(stoc_master)で照合順序が違うと「Illegal mix of collations」になるため、
+  // 営業管理側の stores.cid の照合順序に倉庫側をそろえて比較する(営業管理側の索引がそのまま使える)。
+  const [[col]] = await pool.query(
+    "SELECT COLLATION_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='stoc_sales' AND TABLE_NAME='stores' AND COLUMN_NAME='cid'");
+  const coll = col && /^[A-Za-z0-9_]+$/.test(col.c || '') ? col.c : null;
+  const wcid = coll ? `w.cid COLLATE ${coll}` : 'w.cid';
   const [[r]] = await pool.query('SELECT MIN(id) AS lo, MAX(id) AS hi FROM stoc_master.shops WHERE cid IS NOT NULL');
   if (r.lo === null) return 0;
   let linked = 0;
   for (let lo = Number(r.lo); lo <= Number(r.hi); lo += LINK_CHUNK) {
     const [res] = await pool.query(
-      `UPDATE stoc_master.shops w JOIN stoc_sales.stores s ON s.cid = w.cid
+      `UPDATE stoc_master.shops w JOIN stoc_sales.stores s ON s.cid = ${wcid}
        SET w.stoc_store_id = s.id
        WHERE w.id >= ? AND w.id < ? AND w.cid IS NOT NULL AND (w.stoc_store_id IS NULL OR w.stoc_store_id <> s.id)`,
       [lo, lo + LINK_CHUNK]);
