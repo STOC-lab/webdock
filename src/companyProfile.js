@@ -130,7 +130,11 @@ const EMP_LABEL_RE = /従業員|社員数|職員数|スタッフ数|従業者数
 const CAP_LABEL_RE = /資本金/;
 const EMP_TEXT_RE = /(?:従業員数|従業員|社員数|職員数|スタッフ数|従業者数)(?:\([^)]*\)|（[^）]*）)?[\s:：　]*/g;
 const CAP_TEXT_RE = /資本金額?(?:\([^)]*\)|（[^）]*）)?[\s:：　]*/g;
-const LISTED_RE = /東証|東京証券取引所|証券コード|(?<![非未再])上場(?!企業|会社|メーカー|大手|予定|を目指|準備)/;
+// 上場の判定は「上場市場」「証券コード」などの項目欄に書かれた場合だけにする。
+// 文章中の「東証」は取引先の紹介(例: 主要取引先 ○○(東証プライム))であることが多く、小さな会社を「大きい」と誤判定するため読まない。
+const LISTED_LABEL_RE = /上場|市場|株式公開|証券コード/;
+const LISTED_VALUE_RE = /東証|証券取引所|プライム|スタンダード|グロース|ジャスダック|JASDAQ|マザーズ|名証|福証|札証|[0-9０-９]{4}|(?<![非未再])上場(?!予定|を目指|準備)/;
+const SEC_CODE_TEXT_RE = /証券コード[\s:：　]*[0-9０-９]{4}/;
 const UNLISTED_RE = /非上場|未上場/;
 
 /** table の th/td と dl の dt/dd から [ラベル, 値] の組を集める */
@@ -201,9 +205,14 @@ function extractCompanySize(html) {
     }
   }
 
-  const stripped = text.replace(UNLISTED_RE, ' ');
-  if (LISTED_RE.test(stripped)) out.listed = true;
-  else if (UNLISTED_RE.test(text)) out.listed = false;
+  for (const [label, value] of pairs) {
+    const l = shortLabel(label);
+    if (l.length > 15 || !value || /取引先|納入先|顧客|実績/.test(l) || !LISTED_LABEL_RE.test(l)) continue;
+    if (UNLISTED_RE.test(value)) { if (out.listed === null) out.listed = false; continue; }
+    if (LISTED_VALUE_RE.test(value)) { out.listed = true; break; }
+  }
+  if (out.listed !== true && SEC_CODE_TEXT_RE.test(text)) out.listed = true;
+  if (out.listed === null && UNLISTED_RE.test(text)) out.listed = false;
   return out;
 }
 

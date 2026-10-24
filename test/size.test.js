@@ -69,7 +69,12 @@ const noRobots = async () => '';
   eq(ex(tbl('資本金', '1,000万円')).capitalText, '1,000万円', 'capitalText');
 
   /* ---- 上場 ---- */
-  eq(ex(page('<p>東京証券取引所プライム市場上場</p>')).listed, true, 'listed 東証');
+  eq(ex(page('<table><tr><th>上場市場</th><td>東京証券取引所プライム市場</td></tr></table>')).listed, true, 'listed 東証(項目欄)');
+  eq(ex(page('<dl><dt>証券コード</dt><dd>1234</dd></dl>')).listed, true, 'listed 証券コード欄');
+  eq(ex(page('<p>当社(証券コード：6789)は</p>')).listed, true, 'listed 証券コード文中');
+  eq(ex(page('<p>東京証券取引所プライム市場上場</p>')).listed, null, '文章中の東証は読まない');
+  eq(ex(page('<table><tr><th>従業員数</th><td>12名</td></tr><tr><th>主要取引先</th><td>トヨタ自動車(東証プライム上場)</td></tr></table>')).listed, null, '取引先欄の東証は読まない');
+  eq(ex(page('<table><tr><th>上場区分</th><td>非上場</td></tr></table>')).listed, false, '上場区分 非上場');
   eq(ex(page('<p>証券コード：1234</p>')).listed, true, 'listed 証券コード');
   eq(ex(page('<p>非上場</p>')).listed, false, '非上場 -> false');
   eq(ex(page('<p>未上場</p>')).listed, false, '未上場 -> false');
@@ -153,7 +158,7 @@ const noRobots = async () => '';
   eq(r.sizeClass, 'large', 'large via employees');
   r = await findCompanySize(TOP, { pages: [{ url: TOP, body: tbl('従業員数', '30名') }], fetchPage: fakeSite({}), fetchRobots: noRobots, maxEmployees: 50 });
   eq(r.sizeClass, 'small', 'maxEmployees option');
-  r = await findCompanySize(TOP, { pages: [{ url: TOP, body: page('<p>東証プライム上場</p>') }], fetchPage: fakeSite({}), fetchRobots: noRobots });
+  r = await findCompanySize(TOP, { pages: [{ url: TOP, body: page('<table><tr><th>上場市場</th><td>東証プライム</td></tr></table>') }], fetchPage: fakeSite({}), fetchRobots: noRobots });
   eq([r.listed, r.sizeClass], [true, 'large'], 'listed -> large');
 
   // エラーは unknown(投げない)

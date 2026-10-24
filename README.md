@@ -321,6 +321,11 @@ node cli/warehouse-promote.js --out data/promote.csv --prefecture 兵庫県 --ex
 node cli/warehouse-promote.js --out data/promote.csv --prefecture 兵庫県 --small-only      # 小規模(small)と確認できた会社だけ
 ```
 
+   **工場・建設など(WEBドック・UTM用)を出すときは `--no-rules` を付けてください。** 既定の「問い合わせ営業」ルールはMEO用で、製造業者・金属加工業・運送会社・倉庫・卸売業・工場などを除外するためです。例:
+   `node cli/warehouse-promote.js --out data/b2b.csv --prefecture 兵庫県 --category 製造,建設,工事 --small-only --no-rules`
+
+   上場の判定は「上場市場」「証券コード」などの項目欄(と文中の「証券コード:1234」)だけを読みます。文章中の「東証」は取引先紹介のことが多いため読みません。
+
    読み取りは目安です。表記ゆれで外れることがあるので、最初は dry-run のCSVで `従業員数` の文字(`employeesText` 相当)と会社概要URLを目で確認してください。テストは `npm run test:size`(DB不要)。
 
 ### 収集ツールの元ファイル(14列)の取り込みと閉業店の扱い
