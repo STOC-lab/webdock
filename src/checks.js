@@ -50,8 +50,8 @@ function checkHttpsRedirect(page) {
   }
   if (page.finalUrl.startsWith('https:')) {
     const host = (() => { try { return new URL(page.finalUrl).hostname; } catch { return ''; } })();
-    if (probe && probe.result === 'serves_http') {
-      // https のサイトで実際に問題がある唯一のケース
+    if (probe && probe.result === 'serves_http' && probe.status >= 200 && probe.status < 300) {
+      // https のサイトで実際に問題がある唯一のケース(http のままページが表示された=2xx のときだけ。403/500 などは中身が出ていないので指摘しない)
       return {
         ...t, status: 'warn',
         summary: 'httpでアクセスした際の自動転送が確認できませんでした',

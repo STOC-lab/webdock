@@ -139,6 +139,8 @@ allowed.forEach(ip => ok(isBlockedIp(ip)===false, 'should allow '+ip));
   ok(c.status==='ok', 'redirect: probe redirects_to_https -> ok');
   c = await redirOf({ httpProbe: { result: 'serves_http', status: 200, chain: [] } });
   ok(c.status==='warn' && c.evidence==='http://a.example.jp/ が転送されずにHTTP 200 を返しました', 'redirect: serves_http -> warn + 証拠');
+  c = await redirOf({ httpProbe: { result: 'serves_http', status: 403, chain: [] } });
+  ok(c.status==='unknown', 'redirect: serves_http 403 は中身が出ていないので指摘しない(unknown)');
   c = await redirOf({ httpProbe: { result: 'unreachable', error: 'x' } });
   ok(c.status==='ok' && c.summary==='httpでの接続は受け付けていません(問題ありません)', 'redirect: unreachable -> ok');
   c = await redirOf({ httpProbe: { result: 'redirects_elsewhere', chain: [] } });
