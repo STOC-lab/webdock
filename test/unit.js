@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { isBlockedIp } = require('../src/safeFetch');
+const { isBlockedIp, probeHttpRedirect, withHttpProbe, sameSiteHost } = require('../src/safeFetch');
 const { runChecks } = require('../src/checks');
 
 let pass = 0, fail = 0;
@@ -62,6 +62,91 @@ allowed.forEach(ip => ok(isBlockedIp(ip)===false, 'should allow '+ip));
   ok(byKey.js_libs==='warn', 'bad: old jquery -> warn');
   ok(byKey.cms==='warn', 'bad: cms exposure -> warn');
   ok(byKey.ext_scripts==='warn', 'bad: many ext scripts -> warn');
+
+  // ---- http→https 転送調査(probeHttpRedirect)。fakeHop で通信を差し替える ----
+  const mkDeps = (script) => {
+    // script: { 'http://host/': {status, location} | Error }
+    const seen = [];
+    return { seen, resolve: async () => '93.184.216.34', fetchOneHop: async (u) => {
+      seen.push(u.toString());
+      const r = script[u.toString()];
+      if (!r) throw new Error('no route');
+      if (r instanceof Error) throw r;
+      return { status: r.status, location: r.location || null, headers: {}, body: '' };
+    } };
+  };
+  const probe = (host, script) => probeHttpRedirect(host, mkDeps(script));
+  let r;
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 301, location: 'https://example.co.jp/' } });
+  ok(r.result==='redirects_to_https', 'probe: 同一ホストhttps転送');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 301, location: 'https://www.example.co.jp/' } });
+  ok(r.result==='redirects_to_https', 'probe: apex→www のhttps転送');
+  r = await probe('www.example.co.jp', { 'http://www.example.co.jp/': { status: 302, location: 'https://example.co.jp/' } });
+  ok(r.result==='redirects_to_https', 'probe: www→apex のhttps転送');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 301, location: 'http://www.example.co.jp/' }, 'http://www.example.co.jp/': { status: 301, location: 'https://www.example.co.jp/' } });
+  ok(r.result==='redirects_to_https', 'probe: http→http(www)→https の2段転送');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 200 } });
+  ok(r.result==='serves_http' && r.status===200, 'probe: 200 は serves_http');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 403 } });
+  ok(r.result==='serves_http' && r.status===403, 'probe: 403 も serves_http');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 500 } });
+  ok(r.result==='serves_http' && r.status===500, 'probe: 500 も serves_http');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 301, location: 'https://other.example.com/' } });
+  ok(r.result==='redirects_elsewhere', 'probe: 別ドメインのhttpsは redirects_elsewhere');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 301, location: 'http://other.example.com/' } });
+  ok(r.result==='redirects_elsewhere', 'probe: 別ドメインのhttpは redirects_elsewhere');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': { status: 301, location: 'https://notexample.co.jp/' } });
+  ok(r.result==='redirects_elsewhere', 'probe: 似ているだけのホストは別扱い');
+  r = await probe('example.co.jp', { 'http://example.co.jp/': new Error('ECONNREFUSED') });
+  ok(r.result==='unreachable' && r.error, 'probe: 接続拒否は unreachable');
+  r = await probe('example.co.jp', {});
+  ok(r.result==='unreachable', 'probe: 失敗は unreachable');
+  r = await probeHttpRedirect('example.co.jp', { resolve: async () => { throw new Error('この宛先は診断できません。'); }, fetchOneHop: async () => { throw new Error('呼ばれない'); } });
+  ok(r.result==='unreachable', 'probe: 名前解決で拒否されたら unreachable(接続しない)');
+  r = await probeHttpRedirect('127.0.0.1');
+  ok(r.result==='unreachable', 'probe: IP直書きは拒否');
+  { // 転送ループは MAX_REDIRECTS で打ち切り
+    const d = mkDeps({ 'http://example.co.jp/': { status: 302, location: 'http://example.co.jp/' } });
+    r = await probeHttpRedirect('example.co.jp', d);
+    ok(r.result==='redirects_elsewhere' && d.seen.length<=6, 'probe: ループは打ち切り');
+  }
+  { // 転送先も毎回再検査(解決でブロックされたら止まる)
+    let n = 0;
+    r = await probeHttpRedirect('example.co.jp', { resolve: async (h) => { if (++n > 1) throw new Error('blocked'); return '93.184.216.34'; },
+      fetchOneHop: async () => ({ status: 302, location: 'http://www.example.co.jp/', headers: {}, body: '' }) });
+    ok(r.result==='redirects_elsewhere', 'probe: 2ホップ目の検査失敗');
+  }
+  ok(sameSiteHost('Example.co.jp','www.example.co.jp') && !sameSiteHost('a.jp','b.jp'), 'sameSiteHost');
+
+  // ---- withHttpProbe: 調査が必要なときだけ呼ぶ ----
+  { let called = 0; const fake = async (h) => { called++; return { result: 'serves_http', status: 200, chain: [], host: h }; };
+    let pg = await withHttpProbe({ finalUrl: 'https://a.jp/', httpToHttps: false }, fake);
+    ok(called===1 && pg.httpProbe.host==='a.jp', 'withHttpProbe: https開始なら調査');
+    pg = await withHttpProbe({ finalUrl: 'https://a.jp/', httpToHttps: true }, fake);
+    ok(called===1 && !pg.httpProbe, 'withHttpProbe: 転送観測済みなら調査しない');
+    pg = await withHttpProbe({ finalUrl: 'http://a.jp/', httpToHttps: false }, fake);
+    ok(called===1 && !pg.httpProbe, 'withHttpProbe: httpのままなら調査しない');
+    pg = await withHttpProbe({ finalUrl: 'https://a.jp/', httpToHttps: false }, async () => { throw new Error('x'); });
+    ok(!pg.httpProbe, 'withHttpProbe: 失敗しても例外にしない');
+  }
+
+  // ---- checkHttpsRedirect の各ケース(runChecks 経由) ----
+  const redirOf = async (o) => (await runChecks({ finalUrl: 'https://a.example.jp/', httpToHttps: false, redirectChain: [{ url: 'https://a.example.jp/', status: 200 }],
+    tls: null, headers: {}, body: '<html></html>', ...o })).results.find((x) => x.key === 'https_redirect');
+  let c = await redirOf({ httpToHttps: true, redirectChain: [{ status: 301 }, { status: 200 }] });
+  ok(c.status==='ok', 'redirect: httpToHttps true -> ok');
+  c = await redirOf({ httpProbe: { result: 'redirects_to_https', chain: [{ status: 301 }, { status: null }] } });
+  ok(c.status==='ok', 'redirect: probe redirects_to_https -> ok');
+  c = await redirOf({ httpProbe: { result: 'serves_http', status: 200, chain: [] } });
+  ok(c.status==='warn' && c.evidence==='http://a.example.jp/ が転送されずにHTTP 200 を返しました', 'redirect: serves_http -> warn + 証拠');
+  c = await redirOf({ httpProbe: { result: 'unreachable', error: 'x' } });
+  ok(c.status==='ok' && c.summary==='httpでの接続は受け付けていません(問題ありません)', 'redirect: unreachable -> ok');
+  c = await redirOf({ httpProbe: { result: 'redirects_elsewhere', chain: [] } });
+  ok(c.status==='unknown' && c.summary==='自動転送を確認できませんでした', 'redirect: redirects_elsewhere -> unknown');
+  c = await redirOf({});
+  ok(c.status==='unknown', 'redirect: https開始で調査データなし -> unknown(旧: warn)');
+  c = await redirOf({ finalUrl: 'http://a.example.jp/' });
+  ok(c.status==='bad', 'redirect: httpのまま -> bad');
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail?1:0);

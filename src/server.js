@@ -7,7 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 
-const { fetchHomepage } = require('./safeFetch');
+const { fetchHomepage, withHttpProbe } = require('./safeFetch');
 const { runChecks } = require('./checks');
 const db = require('./db');
 const { verifyTurnstile } = require('./turnstile');
@@ -97,7 +97,7 @@ app.post('/scan', async (req, res) => {
   }
 
   try {
-    const page = await fetchHomepage(input);
+    const page = await withHttpProbe(await fetchHomepage(input));
     const { results, counts, score, grade } = await runChecks(page);
     const id = await db.saveScan({ domain, url: page.finalUrl, score, grade, result: { results, counts, score, grade, finalUrl: page.finalUrl }, ip });
     if (domain) scanCache.set(domain, { id, at: Date.now() });
@@ -176,7 +176,7 @@ app.post('/sales/scan', async (req, res) => {
   let input = (req.body.url || '').trim();
   if (input && !/^https?:\/\//i.test(input)) input = 'https://' + input;
   try {
-    const page = await fetchHomepage(input);
+    const page = await withHttpProbe(await fetchHomepage(input));
     const { results, counts, score, grade } = await runChecks(page);
     const scan = {
       domain: domainOf(input), url: page.finalUrl,

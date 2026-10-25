@@ -39,7 +39,10 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   eq(pickFindingB2b(mk({ mixed: 'bad', js_libs: 'warn' })), 'mixed', 'mixed が js_libs より先');
   eq(pickFindingB2b(mk({ mixed: 'warn' })), null, 'mixed warn は使わない');
   eq(pickFindingB2b(mk({ https_redirect: 'warn', js_libs: 'warn' })), 'https_redirect', 'https_redirect warn');
-  eq(pickFindingB2b(mk({ https_redirect: 'bad' })), 'https_redirect', 'https_redirect bad');
+  eq(pickFindingB2b(mk({ https_redirect: 'bad' })), 'no_https', 'https非対応(bad)は no_https');
+  eq(pickFindingB2b(mk({ https_redirect: 'bad', mixed: 'bad' })), 'no_https', 'no_https が最優先');
+  eq(pickFindingB2b(mk({ https_redirect: 'unknown' })), null, 'https_redirect unknown は指摘にしない');
+  eq(pickFindingB2b(mk({ https_redirect: 'unknown', js_libs: 'warn' })), 'js_libs', 'unknown は飛ばして次の指摘へ');
   eq(pickFindingB2b(mk({ js_libs: 'warn', cms: 'warn', headers: 'bad' })), 'js_libs', 'js_libs > cms > headers');
   eq(pickFindingB2b(mk({ cms: 'warn', headers: 'bad' })), 'cms', 'cms > headers');
   eq(pickFindingB2b(mk({ headers: 'warn', tls_version: 'warn' })), 'headers', 'headers > tls');
@@ -275,9 +278,21 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
 
 
   // ---- グループ分け(送信ツールが全社同一本文のため) ----
-  eq(G.GROUP_ORDER, ['mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'], 'グループ優先順');
+  eq(G.GROUP_ORDER, ['no_https', 'mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'], 'グループ優先順');
   eq(G.groupKeyOfFinding('cert_expiring'), 'cert_soon', '証明書期限間近は cert_soon');
   eq(G.groupKeyOfFinding('cert_expired'), 'cert_expired', '期限切れ');
+  eq(G.groupKeyOfFinding('no_https'), 'no_https', 'no_https');
+  eq(G.groupKeyOfFinding('https_redirect'), 'https_redirect', 'https_redirect');
+  eq(G.groupKeyOfFinding('unknown'), '', 'unknown はグループ無し');
+  eq(G.batchCode('no_https', new Date('2026-10-25T03:00:00Z')), 'WD-NO-HTTPS-20261025', 'バッチコード no_https');
+  {
+    const mkr = (id, type) => ({ store_id: id, 店名: 'S' + id, URL: `https://s${id}.jp/`, 問い合わせURL: `https://s${id}.jp/c`, 画像認証: '', 指摘種別: type, 送信推奨: type ? 'はい' : 'いいえ' });
+    const gg = G.groupRows([mkr(1, 'no_https'), mkr(2, 'https_redirect'), mkr(3, ''), mkr(4, 'unknown')]);
+    eq(gg.groups.map((g) => g.key + ':' + g.rows.length), ['no_https:1', 'https_redirect:1'], 'no_https と https_redirect は別グループ(unknownは入らない)');
+    const nb = G.renderGroupBodies(T, 'no_https', new Date('2026-10-25T03:00:00Z'));
+    ok(nb.body.includes('サイト全体が暗号化(https)に対応していない状態'), 'no_https 本文の指摘');
+    ok(nb.body.includes('暗号化されないまま送られる場合がある'), 'no_https 本文の困ること');
+  }
   eq(G.groupKeyOfFinding(''), '', '空は無し');
   eq(G.jstMonthJa(new Date('2026-10-25T03:00:00Z')), '2026年10月', '確認月');
   eq(G.jstMonthJa(new Date('2026-12-31T16:00:00Z')), '2027年1月', '確認月(JST繰り上がり)');

@@ -18,6 +18,7 @@ const USER_AGENT = 'WEBDock-Scanner/1.0 (+https://webdock.stoc-plus.site/about)'
 const MAX_REDIRECTS = 5;
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2MB
 const TOTAL_TIMEOUT_MS = 15000;
+const PROBE_TIMEOUT_MS = 8000; // http転送調査の全体タイムアウト
 
 /** 接続を許可しないIP範囲か判定する(許可しないものは true) */
 function isBlockedIp(ip) {
@@ -193,6 +194,79 @@ function fetchOneHop(u, pinnedIp, deadline) {
   });
 }
 
+/** 同一ホスト、または先頭の www. の有無だけが違うホストか(大文字小文字は区別しない) */
+function sameSiteHost(a, b) {
+  const strip = (h) => String(h || '').toLowerCase().replace(/^www\./, '');
+  return strip(a) !== '' && strip(a) === strip(b);
+}
+
+/**
+ * http:// で開いたときの挙動を調べる(https で診断を始めた場合の「自動転送」判定用)。
+ * 既存と同じ防御(URL検査・名前解決検査・IP固定・毎ホップ再検査)を通す。例外は投げない。
+ * 戻り値:
+ *   { result: 'redirects_to_https', chain }   同一ホスト/www違いのhttpsへ転送
+ *   { result: 'serves_http', status, chain }  転送されずhttpのまま 2xx/4xx/5xx を返した
+ *   { result: 'redirects_elsewhere', chain }  別ホスト・別ドメインなどへ転送(判断不能)
+ *   { result: 'unreachable', error }          接続拒否・タイムアウト・DNS失敗(80番ポートを閉じているのは問題ではない)
+ * deps(テスト用に差し替え可): { fetchOneHop, resolve, timeoutMs }
+ */
+async function probeHttpRedirect(host, deps) {
+  const d = deps || {};
+  const hop = d.fetchOneHop || fetchOneHop;
+  const resolve = d.resolve || resolveSafely;
+  const deadline = Date.now() + (d.timeoutMs || PROBE_TIMEOUT_MS);
+  const chain = [];
+  try {
+    let u = validateUrl('http://' + host + '/');
+    for (let i = 0; i <= MAX_REDIRECTS; i++) {
+      let res;
+      try {
+        const ip = await resolve(u.hostname);
+        res = await hop(u, ip, deadline);
+      } catch (e) {
+        // 最初のホップで失敗 = 接続できない。転送を受けた後の失敗は「転送先が不明」
+        if (!chain.length) return { result: 'unreachable', error: (e && e.message) || String(e) };
+        return { result: 'redirects_elsewhere', chain };
+      }
+      chain.push({ url: u.toString(), status: res.status });
+      if (res.status >= 300 && res.status < 400) {
+        if (!res.location) return { result: 'redirects_elsewhere', chain };
+        let next;
+        try {
+          next = new URL(res.location, u);
+          next.hash = '';
+          next = validateUrl(next.toString()); // 転送先も毎回検査
+        } catch { return { result: 'redirects_elsewhere', chain }; }
+        const same = sameSiteHost(host, next.hostname);
+        if (next.protocol === 'https:') {
+          chain.push({ url: next.toString(), status: null });
+          return { result: same ? 'redirects_to_https' : 'redirects_elsewhere', chain };
+        }
+        if (!same) return { result: 'redirects_elsewhere', chain };
+        u = next; // 同一サイト内のhttp→http転送は追い続ける
+        continue;
+      }
+      return { result: 'serves_http', status: res.status, chain };
+    }
+    return { result: 'redirects_elsewhere', chain }; // 転送回数超過
+  } catch (e) {
+    return { result: 'unreachable', error: (e && e.message) || String(e) };
+  }
+}
+
+/**
+ * 診断開始URLがhttpsで、fetchHomepage が http→https 転送を観測していないときだけ、
+ * 最終ホストに対して probeHttpRedirect を実行して page.httpProbe に入れる。page を返す。
+ */
+async function withHttpProbe(page, probe) {
+  try {
+    if (page && !page.httpToHttps && /^https:/i.test(page.finalUrl || '')) {
+      page.httpProbe = await (probe || probeHttpRedirect)(new URL(page.finalUrl).hostname);
+    }
+  } catch { /* 調査は補助情報。失敗しても診断は続ける */ }
+  return page;
+}
+
 /**
  * トップページを取得(リダイレクト追従。毎ホップで再検査)。
  * 戻り値: { finalUrl, status, headers, body, tls, redirectChain, httpToHttps }
@@ -213,7 +287,8 @@ async function fetchHomepage(raw) {
     if (hop.status >= 300 && hop.status < 400 && hop.location) {
       const next = new URL(hop.location, u);
       next.hash = '';
-      if (u.protocol === 'http:' && next.protocol === 'https:' && next.hostname === u.hostname) {
+      // 同一ホスト、または先頭の www. の有無だけが違うホスト(example.co.jp ⇄ www.example.co.jp)への転送を「http→https転送」とみなす
+      if (u.protocol === 'http:' && next.protocol === 'https:' && sameSiteHost(u.hostname, next.hostname)) {
         httpToHttps = true;
       }
       u = validateUrl(next.toString());
@@ -269,4 +344,4 @@ async function fetchHead(raw, maxBytes = 4096, timeoutMs = 5000) {
   });
 }
 
-module.exports = { fetchHomepage, fetchHead, resolveSafely, isBlockedIp, validateUrl, USER_AGENT };
+module.exports = { fetchHomepage, probeHttpRedirect, withHttpProbe, sameSiteHost, fetchHead, resolveSafely, isBlockedIp, validateUrl, USER_AGENT };

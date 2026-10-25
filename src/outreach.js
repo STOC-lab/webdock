@@ -85,9 +85,11 @@ function pickFindingB2b(results) {
   for (const r of results || []) by[r.key] = r;
   const st = (k) => (by[k] ? by[k].status : null);
   const badWarn = (k) => st(k) === 'bad' || st(k) === 'warn';
+  // サイト全体がhttpのまま(https_redirect が bad)は最優先。https_redirect の warn は「httpが転送されず表示される」実測ありの場合のみ
+  if (st('https_redirect') === 'bad') return 'no_https';
   // mixed は本文の href="http://" も数えるため、warn(3件以下)は外部リンクの可能性が高い。bad のみ採用
   if (st('mixed') === 'bad') return 'mixed';
-  if (badWarn('https_redirect')) return 'https_redirect';
+  if (st('https_redirect') === 'warn') return 'https_redirect';
   if (badWarn('cert')) {
     const left = certDaysLeft(by.cert);
     if (left !== null && left < 0) return 'cert_expired';

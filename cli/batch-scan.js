@@ -231,14 +231,14 @@ function csvLine(values) { return values.map(csvField).join(',') + '\r\n'; }
 /* ---------- 診断 ---------- */
 
 async function scanOne(url) {
-  const { fetchHomepage } = require('../src/safeFetch');
+  const { fetchHomepage, withHttpProbe } = require('../src/safeFetch');
   const { runChecks } = require('../src/checks');
   let timer;
   const timeout = new Promise((_, rej) => {
     timer = setTimeout(() => rej(Object.assign(new Error('タイムアウトしました。'), { userSafe: true })), SCAN_TIMEOUT_MS);
   });
   try {
-    return await Promise.race([(async () => runChecks(await fetchHomepage(url)))(), timeout]);
+    return await Promise.race([(async () => runChecks(await withHttpProbe(await fetchHomepage(url))))(), timeout]);
   } finally { clearTimeout(timer); }
 }
 

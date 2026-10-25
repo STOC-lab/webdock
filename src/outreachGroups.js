@@ -8,11 +8,11 @@ const path = require('path');
 const { fillTemplate, jstDateJa } = require('./outreach');
 
 /** 優先順(pickFindingB2b と同じ)。グループキー: 証明書は cert_expired / cert_soon の2つ */
-const GROUP_ORDER = ['mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'];
+const GROUP_ORDER = ['no_https', 'mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'];
 /** グループキー → findings-b2b.json のキー */
 const FINDING_KEY = { cert_soon: 'cert_expiring' };
 const GROUP_LABEL = {
-  mixed: '混在コンテンツ', https_redirect: 'https未転送', cert_expired: '証明書期限切れ', cert_soon: '証明書期限間近',
+  no_https: 'https非対応', mixed: '混在コンテンツ', https_redirect: 'https未転送', cert_expired: '証明書期限切れ', cert_soon: '証明書期限間近',
   js_libs: '古いJSライブラリ', cms: 'CMS露出', headers: 'セキュリティヘッダー', tls_version: '古いTLS',
 };
 // 目視確認用CSVの列(人が送信前に見る)

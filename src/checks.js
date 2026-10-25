@@ -42,17 +42,29 @@ function checkCertExpiry(page) {
 
 function checkHttpsRedirect(page) {
   const t = { key: 'https_redirect', title: 'HTTPSへの自動転送' };
-  if (page.httpToHttps) {
-    return { ...t, status: 'ok', summary: 'http→httpsへ自動転送されています', why: '', fix: '', evidence: `転送を確認(${page.redirectChain.map((h) => h.status).join('→')})` };
+  const probe = page.httpProbe || null;
+  // 転送を直接観測した、または http:// への実アクセスで https への転送を確認できた
+  if (page.httpToHttps || (probe && probe.result === 'redirects_to_https')) {
+    const chain = page.httpToHttps ? page.redirectChain : (probe.chain || []);
+    return { ...t, status: 'ok', summary: 'http→httpsへ自動転送されています', why: '', fix: '', evidence: `転送を確認(${chain.map((h) => h.status).filter((x) => x).join('→')})` };
   }
   if (page.finalUrl.startsWith('https:')) {
-    return {
-      ...t, status: 'warn',
-      summary: 'httpでアクセスした際の自動転送が確認できませんでした',
-      why: '「http://」で来た訪問者が暗号化されないまま閲覧し、情報が盗み見られる恐れがあります。',
-      fix: '制作会社に「http→httpsへの常時リダイレクトを設定してほしい」と依頼してください。',
-      evidence: '最終URLはhttpsだが、自動転送は未確認',
-    };
+    const host = (() => { try { return new URL(page.finalUrl).hostname; } catch { return ''; } })();
+    if (probe && probe.result === 'serves_http') {
+      // https のサイトで実際に問題がある唯一のケース
+      return {
+        ...t, status: 'warn',
+        summary: 'httpでアクセスした際の自動転送が確認できませんでした',
+        why: '「http://」で来た訪問者が暗号化されないまま閲覧し、情報が盗み見られる恐れがあります。',
+        fix: '制作会社に「http→httpsへの常時リダイレクトを設定してほしい」と依頼してください。',
+        evidence: `http://${host}/ が転送されずにHTTP ${probe.status} を返しました`,
+      };
+    }
+    if (probe && probe.result === 'unreachable') {
+      return { ...t, status: 'ok', summary: 'httpでの接続は受け付けていません(問題ありません)', why: '', fix: '', evidence: `http://${host}/ へ接続できませんでした` };
+    }
+    // redirects_elsewhere / 調査データなし: 判断できないので指摘にしない
+    return { ...t, status: 'unknown', summary: '自動転送を確認できませんでした', evidence: probe ? `http://${host}/ の転送先: ${probe.result}` : 'http側の確認データなし' };
   }
   return {
     ...t, status: 'bad',
