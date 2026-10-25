@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const express = require('express');
-const { registerAdminWarehouse, buildPromoteArgs, sanitizeFileName, extractZip, clientIp } = require('../src/adminWarehouse');
+const { registerAdminWarehouse, buildPromoteArgs, buildB2bScanArgs, sanitizeFileName, extractZip, clientIp } = require('../src/adminWarehouse');
 const { createJobRunner } = require('../src/adminJobs');
 
 let pass = 0, fail = 0;
@@ -121,6 +121,15 @@ function multipart(fields, files) {
   ok(buildPromoteArgs({ pref: ['存在県'] }, { mode: 'report', exportDir, now: NOW }).error, '不正な県');
   ok(buildPromoteArgs({ pref: ['東京都'], limit: '-1' }, { mode: 'report', exportDir, now: NOW }).error, '不正な上限');
   ok(buildPromoteArgs({ pref: ['東京都'], limit: '5;rm' }, { mode: 'report', exportDir, now: NOW }).error, '上限に文字列');
+
+  // 診断して文面も作る(batch-scan へ渡す引数)
+  const sc = buildB2bScanArgs({ pref: ['兵庫県', '大阪府'], main_category: '製造、建設', size: 'exclude_large', form_found: '1', limit: '2000' }, { exportDir, now: NOW });
+  eq(sc.args, ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', '兵庫県,大阪府', '--main-category', '製造,建設', '--form-found', '--exclude-large', '--limit', '2000', '--concurrency', '5', '--out', '/x/exports/b2b_scan_20261025-101500.csv'], '診断引数');
+  ok(!sc.args.includes('--mark'), '診断に--markなし');
+  ok(/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}\.csv$/.test(sc.exportFile), '診断CSV名はダウンロード可能な名前');
+  ok(buildB2bScanArgs({ pref: [] }, { exportDir, now: NOW }).error, '診断: 県なし');
+  ok(buildB2bScanArgs({ pref: ['東京都'], limit: '1;x' }, { exportDir, now: NOW }).error, '診断: 不正な上限');
+  ok(buildB2bScanArgs({ pref: ['東京都'] }, { exportDir, now: NOW }).args.includes('製造,加工,建設,工事,工務店,板金,鉄工,製作所,塗装,設備,機械,金属,工場,整備'), '診断: 既定の業種');
 
   // IPの判定: 外から直接つないだ相手のヘッダは信用しない
   const fakeReq = (peer, h) => ({ socket: { remoteAddress: peer }, headers: h });

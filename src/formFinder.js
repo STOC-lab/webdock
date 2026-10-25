@@ -446,13 +446,33 @@ function mergeEmails(acc, list) {
 }
 
 /**
+ * ページ本文に「営業お断り」の記載があるか(各社の規約・特定電子メール法への配慮。該当するフォームには送らない)。
+ * 「営業時間」「営業日」「営業所」「営業部」などは対象外。判定は文言が明確なものだけに絞る。
+ */
+const NOTE_NO_SALES = '営業お断りの記載あり';
+const NO_SALES_RES = [
+  /営業目的(?:の|での)?(?:お問い合わせ|お問合せ|問い合わせ|ご連絡|連絡|ご利用|利用)(?:は|を)?(?:ご遠慮|お断り|禁止)/,
+  /営業(?:のご連絡|のご案内|メール|電話|のお電話|活動|の方)?(?:は|を|の)?(?:固く)?(?:お断り|ご遠慮)/,
+  /セールス(?:は|の|電話|メール)*(?:お断り|ご遠慮)/,
+  /売り込み(?:は|の)?(?:お断り|ご遠慮)/,
+  /勧誘(?:は|の)?(?:お断り|ご遠慮)/,
+  /営業[・･]勧誘/,
+  /営業利用(?:を|は)?禁止/,
+];
+function detectNoSales(html) {
+  const text = stripTags(html || '').replace(/\s+/g, '');
+  if (!text) return false;
+  return NO_SALES_RES.some((re) => re.test(text));
+}
+
+/**
  * 1サイトを調べる。フォーム送信はしない。
  * 戻り値: { status:'url_found'|'no_form'|'unknown'|'error', inquiryUrl, hasCaptcha, kind, emails, instagram, checkedPages, note }
  */
 async function findContact(websiteUrl, opts = {}) {
   const fetchPage = opts.fetchPage || fetchHomepage;
   const fetchRobots = opts.fetchRobots || defaultFetchRobots;
-  const result = { status: 'no_form', inquiryUrl: null, hasCaptcha: false, kind: 'none', emails: [], instagram: null, checkedPages: 0, note: '' };
+  const result = { status: 'no_form', inquiryUrl: null, hasCaptcha: false, kind: 'none', emails: [], instagram: null, checkedPages: 0, note: '', noSales: false };
 
   const startHost = hostOf(websiteUrl);
   const startReason = nonOwnReason(websiteUrl, opts);
@@ -468,7 +488,14 @@ async function findContact(websiteUrl, opts = {}) {
     mergeEmails(emails, extractEmails(page.body, siteHost));
     if (!instagram) instagram = extractInstagram(page.body);
   };
+  let topNoSales = false;
+  let formPageNoSales = false;
   const finish = () => {
+    // 営業お断りの記載(フォームが見つかったページ、またはトップページ)。ステータスは変えず、印と備考だけ付ける
+    if (result.status === 'url_found' && (topNoSales || formPageNoSales)) {
+      result.noSales = true;
+      if (!result.note.includes(NOTE_NO_SALES)) result.note = result.note ? `${result.note}/${NOTE_NO_SALES}` : NOTE_NO_SALES;
+    }
     const sh = result._siteHost || startHost;
     result.emails = emails.slice().sort((a, b) => {
       const sa = a.split('@')[1].endsWith(sh) ? 0 : 1;
@@ -521,6 +548,7 @@ async function findContact(websiteUrl, opts = {}) {
   };
 
   collect(top, siteHost);
+  topNoSales = detectNoSales(top.body);
   const topForm = detectForm(top.body);
   if (topForm.hasContactForm && deepStart && isOrgPage(top.body)) {
     orgRejected++;
@@ -578,9 +606,11 @@ async function findContact(websiteUrl, opts = {}) {
     collect(page, siteHost);
     if (!jsSite && isJsBuilder('', page.body)) jsSite = true;
     const f = detectForm(page.body);
+    const pageNoSales = detectNoSales(page.body);
     const pageUrl = page.finalUrl || c.url;
     if (deepStart && isOrgPage(page.body)) { orgRejected++; continue; }
     if (f.hasContactForm) {
+      formPageNoSales = pageNoSales;
       result.status = 'url_found';
       result.inquiryUrl = pageUrl;
       result.hasCaptcha = f.hasCaptcha;
@@ -591,6 +621,7 @@ async function findContact(websiteUrl, opts = {}) {
     // ページから外部フォームサービスへのリンクがある場合
     const ext = extractLinks(page.body, pageUrl).find((l) => isFormServiceUrl(l.url) && !EXCLUDE_RE.test(l.text));
     if (ext) {
+      formPageNoSales = pageNoSales;
       result.status = 'url_found';
       result.inquiryUrl = ext.url;
       result.kind = 'external';
@@ -606,7 +637,7 @@ async function findContact(websiteUrl, opts = {}) {
 module.exports = {
   extractLinks, scoreContactLink, detectForm, extractEmails, extractInstagram,
   findContact, NON_OWN_SITE_HOSTS, FORM_SERVICES, isNonOwnSite, isFormServiceUrl,
-  parseRobots, isDisallowed, hostOf, MAX_PAGES, stripTags, decodeEntities,
+  detectNoSales, NOTE_NO_SALES, parseRobots, isDisallowed, hostOf, MAX_PAGES, stripTags, decodeEntities,
   parseNonOwnTerms, loadNonOwnTerms, defaultTermsFile, nonOwnReason, matchesBuiltinNonOwn, matchesNonOwnList,
   isJsBuilder, isOrgPage, decodeCfEmail, decodeCfEmails,
 };

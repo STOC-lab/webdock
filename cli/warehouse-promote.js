@@ -6,6 +6,8 @@
  *        [--category 美容院,ネイル] [--has-website] [--include-closed] [--form-found] [--limit 5000] [--mark]
  *        [--rules 問い合わせ営業 | --no-rules] [--dedupe-phone | --no-dedupe-phone] [--report-only]
  *        [--exclude-large | --small-only]   (会社規模: sql/warehouse_migrate_003.sql と find-forms --with-size/--size-only が必要)
+ * --form-found のときは、フォームのページに「営業お断り」の記載があった店(form_no_sales=1)を外す(sql/warehouse_migrate_004.sql が必要。
+ *   未適用なら警告を出して絞り込みをスキップする)。
  * --exclude-large は size_class='large'(従業員が多い会社)を外す(未調査・不明は残す)。--small-only は size_class='small' だけ。
  * 除外ルール(rules/<名前>.json、cli/warehouse-rules.js で作成)は書き出し時にJSで適用する(倉庫には全件残る)。
  * --limit は ルール除外・電話番号重複除去のあとの件数。--report-only はCSVを書かず件数だけ表示。
@@ -67,6 +69,7 @@ function buildQuery(o) {
   if (o.formFound) where.push("form_status = 'url_found'");
   if (o.smallOnly) where.push("size_class = 'small'");
   else if (o.excludeLarge) where.push("(size_class IS NULL OR size_class <> 'large')");
+  if (o.noSalesFilter) where.push('(form_no_sales IS NULL OR form_no_sales = 0)');
   const sql = `SELECT id, form_status, name, category, category_main, postal, address_raw, phone, rating, review_count, gbp_registered, website_url, gmap_url, photo_count
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;
@@ -78,6 +81,13 @@ function buildSizeExcludedCountQuery(o) {
   const { sql, params } = buildQuery({ ...o, excludeLarge: false, smallOnly: false });
   const cond = o.smallOnly ? "(size_class IS NULL OR size_class <> 'small')" : "size_class = 'large'";
   const count = sql.replace(/^SELECT[\s\S]*?\nFROM/, 'SELECT COUNT(*) AS n\nFROM').replace(/\nORDER BY[\s\S]*$/, '') + ' AND ' + cond;
+  return { sql: count, params };
+}
+
+/** 「営業お断り」で外れる件数を数えるSQL(ルール除外・limit の前の件数) */
+function buildNoSalesExcludedCountQuery(o) {
+  const { sql, params } = buildQuery({ ...o, noSalesFilter: false });
+  const count = sql.replace(/^SELECT[\s\S]*?\nFROM/, 'SELECT COUNT(*) AS n\nFROM').replace(/\nORDER BY[\s\S]*$/, '') + ' AND form_no_sales = 1';
   return { sql: count, params };
 }
 
@@ -109,13 +119,20 @@ async function selectRows(pool, o, rules, log) {
   const { sql, params } = buildQuery(o);
   const check = rules ? compileRules(rules) : null;
   const dedupe = o.dedupePhone === undefined ? !!(rules && (rules.dedupeColumns || []).includes('電話番号')) : o.dedupePhone;
-  const st = { withForm: 0, scanned: 0, excluded: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null, sizeExcluded: null };
+  const st = { withForm: 0, scanned: 0, excluded: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null, sizeExcluded: null, noSalesExcluded: null };
   if (o.excludeLarge || o.smallOnly) {
     try {
       const c = buildSizeExcludedCountQuery(o);
       const [r] = await pool.query(c.sql, c.params);
       st.sizeExcluded = Number(r[0].n);
     } catch { st.sizeExcluded = null; }
+  }
+  if (o.noSalesFilter) {
+    try {
+      const c = buildNoSalesExcludedCountQuery(o);
+      const [r] = await pool.query(c.sql, c.params);
+      st.noSalesExcluded = Number(r[0].n);
+    } catch { st.noSalesExcluded = null; }
   }
   const seen = new Set();
   const out = [];
@@ -153,6 +170,7 @@ function printStats(st, log = console.error) {
   log(`ルール: ${st.rules || '(なし)'} / 電話番号重複除去: ${st.dedupe ? 'ON' : 'OFF'}`);
   log(`走査した行: ${st.scanned}`);
   if (st.sizeExcluded !== null && st.sizeExcluded !== undefined) log(`会社規模で除外: ${st.sizeExcluded}(ルール除外の前の件数)`);
+  if (st.noSalesExcluded !== null && st.noSalesExcluded !== undefined) log(`営業お断りで除外: ${st.noSalesExcluded}(ルール除外の前の件数)`);
   log(`ルールで除外: ${st.excluded}`);
   const top = [...st.byKeyword.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
   for (const [k, n] of top) log(`  ${k} : ${n}`);
@@ -179,6 +197,10 @@ async function main() {
   const pool = makePool();
   try {
     const rules = loadRules(o.rules);
+    if (o.formFound) {
+      if (await wh.columnExists(pool, 'shops', 'form_no_sales')) o.noSalesFilter = true;
+      else console.error('警告: shops.form_no_sales 列がないため「営業お断り」の除外をスキップします。先に sql/warehouse_migrate_004.sql を適用してください。');
+    }
     const { rows, stats } = await selectRows(pool, o, rules);
     printStats(stats);
     if (o.reportOnly) { console.log(`[report-only] ${rows.length}件が書き出し対象です(ファイルは作成していません)`); return; }
@@ -202,4 +224,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { parseArgs, buildQuery, buildSizeExcludedCountQuery, loadRules, selectRows, rowToCsv, HEADERS };
+module.exports = { parseArgs, buildQuery, buildSizeExcludedCountQuery, buildNoSalesExcludedCountQuery, printStats, loadRules, selectRows, rowToCsv, HEADERS };

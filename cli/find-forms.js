@@ -312,6 +312,14 @@ function resultToShopUpdate(r) {
 }
 
 function makeWarehouseWriter(pool) {
+  // form_no_sales 列(migrate_004)があれば「営業お断り」の印も書く。なければ警告を1回出して従来どおり
+  let hasNoSales = null;
+  const SQL_NS = `
+UPDATE stoc_master.shops SET
+  form_status = ?, form_url = ?, form_kind = ?, form_captcha = ?, form_no_sales = ?, form_note = ?, form_checked_at = NOW(),
+  email = IF((email IS NULL OR email = '') AND ? IS NOT NULL, ?, email),
+  instagram_url = IF((instagram_url IS NULL OR instagram_url = '') AND ? IS NOT NULL, ?, instagram_url)
+WHERE id = ?`;
   const SQL = `
 UPDATE stoc_master.shops SET
   form_status = ?, form_url = ?, form_kind = ?, form_captcha = ?, form_note = ?, form_checked_at = NOW(),
@@ -320,6 +328,17 @@ UPDATE stoc_master.shops SET
 WHERE id = ?`;
   return async function write(shop, r) {
     const u = resultToShopUpdate(r);
+    if (hasNoSales === null) {
+      hasNoSales = await require('../src/warehouse').columnExists(pool, 'shops', 'form_no_sales');
+      if (!hasNoSales) console.error('警告: shops.form_no_sales 列がありません。「営業お断り」の印は記録されません(sql/warehouse_migrate_004.sql を適用してください)。');
+    }
+    if (hasNoSales) {
+      // フォームが見つかった店だけ 0/1。見つからなかった店は NULL
+      const ns = u.form_status === 'url_found' ? (r.noSales ? 1 : 0) : null;
+      await pool.execute(SQL_NS, [u.form_status, u.form_url, u.form_kind, u.form_captcha, ns, u.form_note,
+        u.email, u.email, u.instagram_url, u.instagram_url, shop.id]);
+      return;
+    }
     await pool.execute(SQL, [u.form_status, u.form_url, u.form_kind, u.form_captcha, u.form_note,
       u.email, u.email, u.instagram_url, u.instagram_url, shop.id]);
   };

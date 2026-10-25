@@ -119,6 +119,26 @@ tail -f nohup.out
 
 テスト: `npm run test:batch`(ネットワーク不要)
 
+### 5. 工場・建設向けの問い合わせ文面(B2B)
+建設・製造・自動車整備の会社向けに、初回の問い合わせ文面(標準と短縮)と件名をつけて診断する。`--template b2b`。
+```
+# 倉庫から直接(WH_DB_* が必要。先に sql/warehouse_migrate_003.sql / 004.sql を適用)
+node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 --exclude-large --form-found \
+  --template b2b --limit 2000 --out data/b2b_scan.csv
+
+# 倉庫から取り出したCSV(Shift_JIS・11列)をそのまま使う場合
+node cli/batch-scan.js --in data/promote_20261025.csv --template b2b --out data/b2b_scan.csv
+```
+- 倉庫の絞り込み: `--prefecture` `--main-category`(主業種のLIKE・カンマ区切り) `--exclude-large` `--small-only` `--form-found` `--limit`。「営業お断り」の記載があったフォーム(`form_no_sales=1`)は自動で外す。
+- `--subject 1|2|3` で件名を固定(省略時は store_id で3種を巡回)。`--max-chars N` で、標準本文がN文字を超える行は短縮本文を使う(短縮も超えるなら「送らない:文字数超過」)。
+- 初回に使う指摘は `templates/findings-b2b.json`(混在→https転送→証明書(期限切れ/30日以内)→古いJSライブラリ→CMS露出→ヘッダー→古いTLSの順)。Cookie・外部スクリプト・メールは初回には使わない。使える指摘がなければ「送らない:初回に使える指摘なし」。
+- 末尾に追加される列: `業種区分` `件名` `本文文字数` `短縮本文` `使用本文`(標準/短縮) `問い合わせURL` `画像認証` `営業お断り`。`本文` は標準本文。
+- 文面は `templates/outreach-b2b.txt` / `outreach-b2b-short.txt` / `outreach-b2b-subjects.txt`、差出人は `outreach-config.json`。
+- 管理画面(`/admin/warehouse` の「取り出し」→ 工場・建設用)の「診断して文面も作る」ボタンで同じ処理を実行できる(同時5件・結果は `b2b_scan_<日時>.csv`)。1サイト1〜3秒で、2,000サイトでおよそ1時間前後。
+- 営業お断りの検出: `node cli/find-forms.js --source warehouse ...` がフォームのページ(とトップ)の「営業お断り」の記載を `form_no_sales` に記録する。`warehouse-promote --form-found` も該当店を外し「営業お断りで除外: N」を表示。列がない(`sql/warehouse_migrate_004.sql` 未適用)ときは警告を出して絞り込みをスキップする。
+
+テスト: `npm run test:b2b`
+
 ## 問い合わせフォーム事前調査(フォーム探し)
 
 営業先の公式サイトを通常の訪問者と同じように見て(トップページ+問い合わせページ候補を最大3つ、1サイト最大4ページ)、問い合わせフォームの有無とURL、公開されているメールアドレス(mailto等)、InstagramプロフィールURLを記録するバックグラウンド処理です。送信時間帯に関係なくいつでも動かせます。**フォームの送信・入力は一切しません**(ページを取得して読むだけ)。取得は既存の安全な取得処理(`src/safeFetch.js`)を使うため、URL・IPの安全規則もそのまま適用されます。robots.txtで禁止されている候補ページは取得しません。

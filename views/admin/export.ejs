@@ -41,7 +41,9 @@
     <div class="adm-actions">
       <button class="adm-btn adm-btn2" type="submit" name="action" value="report">件数を確認(CSVは作らない)</button>
       <button class="adm-btn" type="submit" name="action" value="make" id="makebtn">CSVを作る</button>
+      <button class="adm-btn adm-btn2" type="submit" name="action" value="scan" id="scanbtn">診断して文面も作る</button>
     </div>
+    <p class="adm-help" id="scanhelp">「診断して文面も作る」は工場・建設用だけです。各サイトを診断し、問い合わせ用の文面(件名・本文)つきのCSV(UTF-8)を作ります。出力済みの印は付きません。1サイト1〜3秒ほどかかり、2,000サイトでおよそ1時間前後です(この間、他の作業は始められません)。</p>
     <div class="adm-warn">「CSVを作る」を押すと、出した店には「出力済み」の印が付き、次回からは出ません。作ったCSVは必ずダウンロードしてから画面を離れてください(下の一覧からあとでもダウンロードできます)。</div>
   </form>
 </section>
@@ -59,7 +61,12 @@
 (function () {
   var form = document.getElementById('exform');
   var box = document.getElementById('b2bbox');
-  function sync() { box.style.display = form.preset.value === 'b2b' ? '' : 'none'; }
+  function sync() {
+    var b = form.preset.value === 'b2b';
+    box.style.display = b ? '' : 'none';
+    document.getElementById('scanbtn').style.display = b ? '' : 'none';
+    document.getElementById('scanhelp').style.display = b ? '' : 'none';
+  }
   Array.prototype.forEach.call(form.preset, function (r) {
     r.addEventListener('change', function () {
       sync();
@@ -71,6 +78,9 @@
   function all(v) { Array.prototype.forEach.call(form.querySelectorAll('input[name=pref]'), function (c) { c.checked = v; }); }
   document.getElementById('selall').onclick = function () { all(true); };
   document.getElementById('selnone').onclick = function () { all(false); };
+  document.getElementById('scanbtn').addEventListener('click', function (e) {
+    if (!confirm('選んだ条件の店をすべて診断します。時間がかかります(2,000サイトで1時間前後)。始めますか?')) e.preventDefault();
+  });
   document.getElementById('makebtn').addEventListener('click', function (e) {
     if (!confirm('CSVを作ると、出した店に「出力済み」の印が付き、次回からは出なくなります。作りますか?')) e.preventDefault();
   });

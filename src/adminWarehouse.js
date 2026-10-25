@@ -187,6 +187,34 @@ function buildPromoteArgs(body, { mode, exportDir, now }) {
   return { args, exportFile, preset };
 }
 
+/**
+ * 「診断して文面も作る」: 取り出し画面(工場・建設用)の絞り込みを batch-scan.js(--source warehouse --template b2b)に渡す引数にする。
+ * 結果は b2b_scan_<日時>.csv(UTF-8・BOM付き)。倉庫には「出力済み」の印を付けない。
+ */
+function buildB2bScanArgs(body, { exportDir, now }) {
+  const prefs = toList(body.pref).filter((p, i, a) => a.indexOf(p) === i);
+  if (!prefs.length) return { error: '都道府県を1つ以上選んでください。' };
+  if (prefs.some((p) => !PREFECTURES.includes(p))) return { error: '都道府県の指定が正しくありません。' };
+  const size = ['exclude_large', 'small_only', 'none'].includes(body.size) ? body.size : 'none';
+  let limit = 5000;
+  if (body.limit !== undefined && String(body.limit).trim() !== '') {
+    limit = Number(String(body.limit).trim());
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000000) return { error: '上限件数は1以上の整数で入力してください。' };
+  }
+  const raw = String(body.main_category || '').trim() || DEFAULT_MAIN_CATEGORY;
+  const cats = raw.split(/[,、，\s]+/).map((x) => x.trim()).filter(Boolean);
+  if (!cats.length || cats.length > 60 || cats.some((c) => c.length > 20 || /[\u0000-\u001f]/.test(c))) {
+    return { error: '業種キーワードの入力が正しくありません(カンマ区切り・1語20文字まで)。' };
+  }
+  const args = ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', prefs.join(','), '--main-category', cats.join(',')];
+  if (body.form_found) args.push('--form-found');
+  if (size === 'exclude_large') args.push('--exclude-large');
+  else if (size === 'small_only') args.push('--small-only');
+  const exportFile = `b2b_scan_${stamp(now)}.csv`;
+  args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile));
+  return { args, exportFile, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
+}
+
 // ---- 倉庫の件数(読み取り専用) ----
 function createDefaultQueryStats() {
   let pool = null;
@@ -462,6 +490,13 @@ function registerAdminWarehouse(app, deps = {}) {
   }, status);
   router.get('/export', wrap((req, res) => exportPage(req, res)));
   router.post('/export', wrap(async (req, res) => {
+    if (req.body.action === 'scan') {
+      const sb = buildB2bScanArgs(req.body, { exportDir, now: now() });
+      if (sb.error) return exportPage(req, res, { error: sb.error, form: req.body }, 400);
+      const sr = jobs.start({ title: '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile } });
+      if (!sr.ok) return exportPage(req, res, { error: sr.message, runningId: sr.runningId, form: req.body }, 409);
+      return res.redirect(303, `${BASE}/jobs/${sr.id}`);
+    }
     const mode = req.body.action === 'make' ? 'make' : 'report';
     const built = buildPromoteArgs(req.body, { mode, exportDir, now: now() });
     if (built.error) return exportPage(req, res, { error: built.error, form: req.body }, 400);
@@ -507,7 +542,8 @@ function registerAdminWarehouse(app, deps = {}) {
     try { st = fs.lstatSync(full); } catch { return res.status(404).type('text/plain').send('Not Found'); }
     if (!st.isFile()) return res.status(404).type('text/plain').send('Not Found');
     res.set({
-      'Content-Type': 'text/csv; charset=Shift_JIS',
+      // 診断結果(b2b_scan_*)はUTF-8(BOM付き)、取り出しCSVはShift_JIS
+      'Content-Type': name.startsWith('b2b_scan_') ? 'text/csv; charset=UTF-8' : 'text/csv; charset=Shift_JIS',
       'Content-Disposition': `attachment; filename="${name}"`,
       'Content-Length': String(st.size),
     });
@@ -527,4 +563,4 @@ function registerAdminWarehouse(app, deps = {}) {
   return { enabled: true, uploadDir, exportDir, jobs };
 }
 
-module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };

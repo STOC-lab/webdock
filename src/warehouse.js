@@ -225,7 +225,17 @@ function encodeShiftJis(str) {
   return Buffer.from(out);
 }
 
+/** 列があるか(移行SQL未適用の検出用)。pool は mysql2 の query を持つもの。調べられなければ false */
+async function columnExists(pool, table, column) {
+  try {
+    const [r] = await pool.query(
+      'SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+      ['stoc_master', table, column]);
+    return Number(r[0].n) > 0;
+  } catch { return false; }
+}
+
 module.exports = {
-  PREFECTURES, decodeBuffer, detectDelimiter, parseDelimited, mapHeader, extractCid, normalizeCid,
+  columnExists, PREFECTURES, decodeBuffer, detectDelimiter, parseDelimited, mapHeader, extractCid, normalizeCid,
   normalizeAddress, prefectureOf, normalizePhone, toRecord, categoryMain, cleanLatLng, fallbackKey, encodeShiftJis,
 };
