@@ -15,7 +15,7 @@ const GROUP_LABEL = {
   mixed: '混在コンテンツ', https_redirect: 'https未転送', cert_expired: '証明書期限切れ', cert_soon: '証明書期限間近',
   js_libs: '古いJSライブラリ', cms: 'CMS露出', headers: 'セキュリティヘッダー', tls_version: '古いTLS',
 };
-const GROUP_CSV_COLUMNS = ['store_id', '店名', '都道府県', '業種区分', 'URL', '問い合わせURL', '画像認証'];
+const GROUP_CSV_COLUMNS = ['store_id', '会社名', 'ドメイン', '都道府県', '業種区分', 'URL', '問い合わせURL', '画像認証'];
 
 /** CSVの「指摘種別」(findings-b2b のキー)→ グループキー */
 function groupKeyOfFinding(type) {
@@ -30,7 +30,7 @@ function jstMonthJa(d) {
 
 /**
  * 診断結果の行(オブジェクトの配列)をグループに分ける。
- * 行: { store_id, 店名, 都道府県, 業種区分, URL, 問い合わせURL, 画像認証, 指摘種別, 送信推奨 }
+ * 行: { store_id, 店名(→会社名), 都道府県, 業種区分, URL, 問い合わせURL, 画像認証, 指摘種別, 送信推奨 }
  * 戻り: { groups: [{key, rows}] (優先順・0件は含めない), excluded: { 理由: 件数 }, excludedTotal }
  */
 function groupRows(rows) {
@@ -51,12 +51,28 @@ function groupRows(rows) {
   };
 }
 
-/** グループの固定本文(標準・短縮)を作る。会社固有の差し込みはなし */
-function renderGroupBodies(templates, key, scannedAt) {
+/** 差し込みタグの既定(送信ツールの記法に合わせて outreach-config.json の「差し込みタグ」か --merge-tags で変える) */
+const DEFAULT_MERGE_TAGS = { 会社名: '{会社名}', ドメイン: '{ドメイン}' };
+
+/** URL → ドメイン(ホスト名。先頭の www. は除く)。解釈できなければ空 */
+function domainOfUrl(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : 'https://' + s).hostname.toLowerCase().replace(/^www\./, '');
+  } catch { return ''; }
+}
+
+/** グループの固定本文(標準・短縮)を作る。本文中の {差込:X} は送信ツール用の差し込みタグ文字列に置き換わる(会社ごとの値は入れない) */
+function renderGroupBodies(templates, key, scannedAt, mergeTags) {
   const f = (templates.findingsB2b || {})[FINDING_KEY[key] || key];
   if (!f) throw new Error(`findings-b2b.json に ${FINDING_KEY[key] || key} がありません`);
   const cfg = templates.config || {};
-  const vars = { ...cfg, 電話番号: cfg.電話, 確認月: jstMonthJa(scannedAt), 指摘: f['指摘'], 困ること: f['困ること'] };
+  const tags = { ...DEFAULT_MERGE_TAGS, ...(cfg.差し込みタグ || {}), ...(mergeTags || {}) };
+  const vars = { ...cfg };
+  // fillTemplate は1回の置換なので、タグ文字列中の { } は再展開されない
+  for (const [k, v] of Object.entries(tags)) vars['差込:' + k] = v;
+  Object.assign(vars, { 電話番号: cfg.電話, 確認月: jstMonthJa(scannedAt), 指摘: f['指摘'], 困ること: f['困ること'] });
   return {
     body: fillTemplate(templates.b2bGroup, vars),
     shortBody: fillTemplate(templates.b2bGroupShort, vars),
@@ -74,7 +90,7 @@ const len = (s) => [...s].length;
  * <dir> にグループ別ファイルとまとめ.txtを書く。戻り値: { files: [名前], summary: [{key,label,count,len,shortLen}], excluded, excludedTotal }
  * 既存の group_*.csv / group_*.txt / まとめ.txt は先に消す(件数違いの古いファイルが残らないように)。
  */
-function writeGroupFiles(dir, rows, templates, scannedAt) {
+function writeGroupFiles(dir, rows, templates, scannedAt, mergeTags) {
   fs.mkdirSync(dir, { recursive: true });
   for (const n of fs.readdirSync(dir)) if (/^group_[a-z_]+_.+\.(csv|txt)$/.test(n) || n === 'まとめ.txt') fs.unlinkSync(path.join(dir, n));
   const g = groupRows(rows);
@@ -82,9 +98,9 @@ function writeGroupFiles(dir, rows, templates, scannedAt) {
   const summary = [];
   const put = (name, text) => { fs.writeFileSync(path.join(dir, name), text); files.push(name); };
   for (const { key, rows: rs } of g.groups) {
-    const b = renderGroupBodies(templates, key, scannedAt);
+    const b = renderGroupBodies(templates, key, scannedAt, mergeTags);
     put(`group_${key}_${rs.length}件.csv`, '﻿' + GROUP_CSV_COLUMNS.join(',') + '\r\n'
-      + rs.map((r) => GROUP_CSV_COLUMNS.map((c) => csvField(r[c])).join(',') + '\r\n').join(''));
+      + rs.map((r) => ({ ...r, 会社名: r['店名'], ドメイン: domainOfUrl(r['URL']) })).map((r) => GROUP_CSV_COLUMNS.map((c) => csvField(r[c])).join(',') + '\r\n').join(''));
     put(`group_${key}_本文.txt`, b.body + '\n');
     put(`group_${key}_本文_短縮.txt`, b.shortBody + '\n');
     put(`group_${key}_件名.txt`, b.subjects.map((s, i) => `${i + 1}. ${s}`).join('\n') + '\n');
@@ -101,4 +117,4 @@ function writeGroupFiles(dir, rows, templates, scannedAt) {
   return { files, summary, excluded: g.excluded, excludedTotal: g.excludedTotal };
 }
 
-module.exports = { GROUP_ORDER, GROUP_LABEL, GROUP_CSV_COLUMNS, FINDING_KEY, groupKeyOfFinding, jstMonthJa, groupRows, renderGroupBodies, writeGroupFiles };
+module.exports = { GROUP_ORDER, GROUP_LABEL, GROUP_CSV_COLUMNS, FINDING_KEY, groupKeyOfFinding, jstMonthJa, DEFAULT_MERGE_TAGS, domainOfUrl, groupRows, renderGroupBodies, writeGroupFiles };

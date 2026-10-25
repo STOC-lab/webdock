@@ -3,6 +3,7 @@
  * 一括診断(問い合わせ営業用)
  * node cli/batch-scan.js --in list.tsv --out result.csv [--group-out dir(b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--resume]
  * 入力は TSV/CSV(UTF-8 または Shift_JIS。warehouse-promote の11列CSVもそのまま使える)。
+ * グループ本文の差し込みタグ: --merge-tags '{"会社名":"%company%","ドメイン":"%domain%"}' (省略時は outreach-config.json の「差し込みタグ」)
  * 倉庫から直接: node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 [--exclude-large|--small-only]
  *              [--form-found] --template b2b --out result.csv   (WH_DB_* が必要)
  * B2B(建設・製造向け): --template b2b [--subject 1|2|3] [--max-chars N]
@@ -292,6 +293,7 @@ function parseArgs(argv) {
     else if (k === '--limit') a.limit = parseInt(argv[++i], 10);
     else if (k === '--template') a.template = argv[++i];
     else if (k === '--group-out') a.groupOut = argv[++i];
+    else if (k === '--merge-tags') a.mergeTags = argv[++i];
     else if (k === '--resume') a.resume = true;
     else if (k === '--source') a.source = argv[++i];
     else if (k === '--prefecture') a.prefecture = argv[++i];
@@ -316,6 +318,16 @@ async function main() {
       + '        --out result.csv [--group-out dir(b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]');
     process.exit(2);
   }
+  let mergeTags;
+  if (a.mergeTags !== undefined) {
+    try {
+      mergeTags = JSON.parse(a.mergeTags);
+      if (!mergeTags || typeof mergeTags !== 'object' || Array.isArray(mergeTags) || !Object.values(mergeTags).every((v) => typeof v === 'string')) throw new Error('形式不正');
+    } catch {
+      console.error('--merge-tags は {"会社名":"%company%","ドメイン":"%domain%"} のようなJSONで指定してください。');
+      process.exit(2);
+    }
+  }
   let rows;
   if (fromWh) rows = await loadWarehouseRows(a);
   else {
@@ -337,7 +349,7 @@ async function main() {
     const table = parseDelimited(fs.readFileSync(a.out, 'utf8'), ',');
     const head = table[0] || [];
     const recs = table.slice(1).map((r) => Object.fromEntries(head.map((h, i) => [h, r[i] || ''])));
-    const g = writeGroupFiles(a.groupOut, recs, loadTemplates(), new Date());
+    const g = writeGroupFiles(a.groupOut, recs, loadTemplates(), new Date(), mergeTags);
     console.error(`グループ出力: ${a.groupOut} に ${g.files.length}ファイル(グループ ${g.summary.length}個 / 送らない ${g.excludedTotal}社)。まとめ.txt を確認してください。`);
   }
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
