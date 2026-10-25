@@ -20,7 +20,9 @@
     "test:admin": "node test/admin.test.js",
     "test:b2b": "node test/b2b.test.js",
     "test:single": "node test/single.test.js",
-    "test:report": "node test/report.test.js"
+    "test:report": "node test/report.test.js",
+    "test:exclude": "node test/exclude.test.js",
+    "wh:sitehost": "node cli/warehouse-sitehost.js"
   },
   "keywords": [],
   "author": "",

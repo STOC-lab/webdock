@@ -133,7 +133,7 @@ tail -f nohup.out
 ### 5. 工場・建設向けの問い合わせ文面(B2B)
 建設・製造・自動車整備の会社向けに、初回の問い合わせ文面(標準と短縮)と件名をつけて診断する。`--template b2b`。
 ```
-# 倉庫から直接(WH_DB_* が必要。先に sql/warehouse_migrate_003.sql / 004.sql を適用)
+# 倉庫から直接(WH_DB_* が必要。先に sql/warehouse_migrate_003.sql / 004.sql / 005.sql を適用)
 node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 --exclude-large --form-found \
   --template b2b --limit 2000 --out data/b2b_scan.csv
 
@@ -169,6 +169,11 @@ GRANT SELECT, INSERT ON stoc_sales.inquiry_export_items TO 'stoc_wh'@'localhost'
 GRANT SELECT ON stoc_sales.stores TO 'stoc_wh'@'localhost';
 GRANT UPDATE (exported_at, export_count) ON stoc_sales.stores TO 'stoc_wh'@'localhost';
 ```
+- **診断前の除外**(倉庫から選ぶ段階で外すので診断の時間もかからない。件数は `まとめ.txt` の「診断前に除外した会社」と `result.json` の `preExcluded` に出る。`--limit` は除外のあとに数える):
+  - 「WEBドック送信済み・送信予定」: STOC営業管理で `inquiry_export_batches.filter_json` の `source` が `webdock_b2b` のバッチに、1回でも入っている店(`inquiry_export_items.store_id`。`send_status` は問わない)。再送信のオプションはない。読めなければ中止する(二重送信を防ぐため)。
+  - 「除外ドメイン指定」: `rules/b2b_exclude_domains.txt`(1行1ドメイン・`#` でコメント)。サイトのホスト名がそのドメインと同じ、または `.<ドメイン>` で終わる(サブドメイン・`www.` 付きも)会社を外す。初期値は `autozam.jp` と `bunsen-kk.co.jp`。
+  - 「チェーン・共通ドメイン」: サイトのホスト名(`www.` 除去・小文字)を、倉庫(全都道府県)の3店舗以上が使っている会社。`shops.site_host` 列を使うため、**移行 `sql/warehouse_migrate_005.sql` の適用と `node cli/warehouse-sitehost.js` の実行が必要**(下記)。列がないときは警告を出してこの除外だけスキップする。
+  - 大きな会社は従来どおり `size_class`(`--exclude-large` / `--small-only`)で外す。
 - 出力(`<フォルダ>/`):
   - `send_<バッチコード>.csv`: **送信ツール用**(UTF-8 BOM付き・9列・位置固定)。ヘッダーは `送信先URL,会社名,,レポートURL,業種,評価・口コミ,STOCバッチコード,電話番号,住所`。1=問い合わせフォームURL / 2=会社名 `[company]` / 3=指摘の一文 `[name]`(ヘッダーは空欄のまま。1社ごとの指摘がここに入る) / 4=ドメイン(`www.` 除去)`[param1]` / 5=閲覧者の文言(業種区分から)`[param2]` / 6=`評価4.2(口コミ15件)`(STOCと同じ書式・なければ空)`[param3]` / 7=バッチコード / 8=電話番号(STOCと同じ優先順) / 9=住所。
   - `本文.txt`: 全社共通の本文。`[company]` `[name]` `[param1]` `[param2]` はそのまま残す。差出人は `templates/outreach-config.json` から。
@@ -177,6 +182,17 @@ GRANT UPDATE (exported_at, export_count) ON stoc_sales.stores TO 'stoc_wh'@'loca
   - `result.json`: 管理画面用(登録したバッチコードなど)
 - 指摘の一文は `templates/findings-b2b.json` の `一文`。業種区分は 整備 → 医療 → 製造 → 建設 → 美容 → 飲食 → その他の順で判定し、閲覧者の文言は `src/outreach.js` の `AUDIENCE`。
 - 管理画面の「診断して文面も作る」はこの方式(`--single-out <書き出しフォルダ>/b2b_<日時>/`)を使う。終了後の作業画面に、本文(コピーボタン)・送信ツール用CSV・確認用・まとめのダウンロードと、登録したSTOCバッチコードが出る。**最初の100社は送る前に人が確認する。**
+
+
+#### 5-1c. サイトのホスト名の列(移行005)とバックフィル
+`shops.site_host`(サイトのホスト名。`www.` 除去・小文字)と索引 `idx_site_host` を足す。何度実行しても安全。約250万行への索引追加には数分かかることがある。
+```
+mysql < sql/warehouse_migrate_005.sql          # 列と索引を追加
+node cli/warehouse-sitehost.js                 # 既存行の site_host を埋める(10000行ずつ。途中で止めても再実行で続きから)
+```
+- オプション: `--chunk N`(1回の行数)/ `--recompute`(値のある行も計算し直す)/ `--dry-run`(書かずに件数だけ)。URLからホスト名を取り出せない行は空文字を入れて処理済みにする。
+- 以降の `node cli/warehouse-import.js` は新規・更新行の `site_host` を自動で入れる(列がなければ警告して従来どおり)。既存の `website_url` が埋まっている行は、バックフィルで直す。
+- テスト: `npm run test:exclude`
 
 #### 5-2. グループ別に送る(旧方式。STOCへ結果が戻らないため通常は使わない)
 問い合わせの送信ツールが「1回の送信=全社まったく同じ本文」しか送れない場合は、`--group-out <フォルダ>` を付ける。各社に選ばれた指摘(1社1つ)ごとにグループ分けし、グループごとに固定の本文・件名・宛先CSVを作る。本文・件名・CSVには会社ごとの値は入らず、会社名とドメインは送信ツールの差し込み(差込)タグで入れる(下記)。

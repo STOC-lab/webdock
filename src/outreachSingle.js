@@ -105,7 +105,7 @@ function bodyLengths(body, items) {
   return { typical: len(sub(top, aud)), longest: len(sub(longest, aud)) };
 }
 
-function summaryText({ batches, items, excluded, body, dryRun, now, scanned }) {
+function summaryText({ batches, items, excluded, body, dryRun, now, scanned, preExcluded = {} }) {
   const L = [];
   const sorted = Object.entries(excluded).sort((a, b) => b[1] - a[1]);
   L.push('【B2B送信 まとめ(単一本文)】', '');
@@ -119,7 +119,11 @@ function summaryText({ batches, items, excluded, body, dryRun, now, scanned }) {
     const n = items.filter((i) => i.key === k).length;
     if (n) L.push(`  ${k}(${GROUP_LABEL[k]}): ${n}社`);
   }
-  L.push('', '送らない理由');
+  const pre = Object.entries(preExcluded).filter(([, n]) => n > 0);
+  L.push('', '診断前に除外した会社(倉庫から選ぶ段階で外したので、診断していません。上の「診断した会社」には含みません)');
+  for (const [r, n] of pre) L.push(`  ・${r}: ${n}社`);
+  if (!pre.length) L.push('  (なし)');
+  L.push('', '送らない理由(診断した会社のうち)');
   for (const [r, n] of sorted) L.push(`  ・${r}: ${n}社`);
   if (!sorted.length) L.push('  (なし)');
   const bl = bodyLengths(body, items);
@@ -142,7 +146,7 @@ function summaryText({ batches, items, excluded, body, dryRun, now, scanned }) {
  * 途中のバッチで登録が失敗したら、登録済みバッチのコードを含めて例外にする(登録済み分はSTOCに残る)。
  */
 async function buildSingleFiles(opts) {
-  const { rows, outDir, templates, now = new Date(), stoc, dryRun = false, filter = {} } = opts;
+  const { rows, outDir, templates, now = new Date(), stoc, dryRun = false, filter = {}, preExcluded = {} } = opts;
   fs.mkdirSync(outDir, { recursive: true });
   for (const n of fs.readdirSync(outDir)) {
     if (/^send_.+\.csv$/.test(n) || ['確認用.csv', '本文.txt', 'まとめ.txt', 'result.json'].includes(n)) fs.unlinkSync(path.join(outDir, n));
@@ -179,8 +183,8 @@ async function buildSingleFiles(opts) {
     it.rec['store_id'], it.stocId, it.company, it.domain, it.industry, GROUP_LABEL[it.key], it.sentence, it.formUrl,
     S.contactPhone(it.store), it.store.address || '', it.batchCode])).join(''));
   put('本文.txt', body + '\n');
-  put('まとめ.txt', summaryText({ batches, items, excluded, body, dryRun, now, scanned: rows.length }));
-  put('result.json', JSON.stringify({ dryRun, batches, count: items.length, excluded }, null, 2) + '\n');
+  put('まとめ.txt', summaryText({ batches, items, excluded, body, dryRun, now, scanned: rows.length, preExcluded }));
+  put('result.json', JSON.stringify({ dryRun, batches, count: items.length, excluded, preExcluded }, null, 2) + '\n');
   return { batches, items, excluded, files, body };
 }
 

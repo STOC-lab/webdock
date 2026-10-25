@@ -13,6 +13,8 @@ const path = require('path');
 const { JUDGE, pickFinding, shouldSend, regionOf, fillTemplate, loadTemplates, buildB2bMessage } = require('../src/outreach');
 const wh = require('../src/warehouse');
 const { writeGroupFiles } = require('../src/outreachGroups');
+const EX = require('../src/exclusions');
+const { siteHostOf } = require('../src/siteHost');
 
 const SCAN_TIMEOUT_MS = 45000;
 
@@ -200,6 +202,10 @@ function buildClaimExcludedCountQuery(a, { noSalesCol, storeFlags } = {}) {
   return { sql: `SELECT COUNT(*) AS n FROM stoc_master.shops WHERE ${where.join(' AND ')}`, params };
 }
 
+/**
+ * 倉庫から選ぶ(SQLの絞り込み + クレーム除外)。--limit は診断前の除外(送信済み・チェーン・除外ドメイン)のあとに数えたいので、ここでは付けない。
+ * 戻り: { rows, claimExcluded, chain:{hosts:Set, available} }。chain は「同じサイトのホスト名を3店舗以上が使っている」ホスト名の集合
+ */
 async function loadWarehouseRows(a) {
   try { require('dotenv').config(); } catch { /* なくても動く */ }
   const { createWarehousePool } = require('./find-forms');
@@ -209,18 +215,29 @@ async function loadWarehouseRows(a) {
     if (!noSalesCol) console.error('警告: shops.form_no_sales 列がないため「営業お断り」の除外ができません。先に sql/warehouse_migrate_004.sql を適用してください。');
     // クレーム除外は必須。読めなければここで例外(黙ってスキップしない)
     const { storeFlags } = await checkClaimAccess(pool);
-    const q = buildWarehouseQuery(a, { noSalesCol, storeFlags });
+    const q = buildWarehouseQuery({ ...a, limit: 0 }, { noSalesCol, storeFlags });
     const [rows] = await pool.query(q.sql, q.params);
     const cq = buildClaimExcludedCountQuery(a, { noSalesCol, storeFlags });
     const [[cr]] = await pool.query(cq.sql, cq.params);
-    console.error('クレーム登録で除外: ' + Number(cr.n));
-    return rows.map((r) => ({
+    const mapped = rows.map((r) => ({
       store_id: String(r.store_id), name: r.name || '', url: r.url || '', prefecture: r.prefecture || '', category: r.category || '',
       formUrl: r.form_url || '', captcha: r.form_captcha === null || r.form_captcha === undefined ? '' : (Number(r.form_captcha) ? 'あり' : 'なし'),
       noSales: Number(r.form_no_sales) === 1 ? 'あり' : '',
       phone: r.phone || '', address: r.address_raw || '', stocStoreId: r.stoc_store_id === null || r.stoc_store_id === undefined ? '' : String(r.stoc_store_id),
     }));
+    // チェーン判定: 候補のホスト名ごとに、倉庫全体(全都道府県)での店舗数を数える
+    const chain = await EX.loadChainHosts(pool, mapped.map((r) => siteHostOf(r.url)), { columnExists: wh.columnExists });
+    return { rows: mapped, claimExcluded: Number(cr.n), chain };
   } finally { await pool.end(); }
+}
+
+/**
+ * 診断前の除外をまとめて行う(送信済み・送信予定 → 除外ドメイン指定 → チェーン・共通ドメイン)→ そのあと --limit。
+ * ctx: { resendSet, excludeList, chainHosts }。戻り: { rows, counts }
+ */
+function selectForScan(rows, ctx, limit = 0) {
+  const r = EX.applyPreScanExclusions(rows, ctx);
+  return { rows: limit > 0 ? r.rows.slice(0, limit) : r.rows, counts: r.counts };
 }
 
 function csvField(v) {
@@ -429,11 +446,20 @@ async function main() {
     try { await require('../src/stocBatch').checkStocAccess(stocPool, { readOnly: !!a.dryRunStoc }); } catch (e) { await stocPool.end(); throw e; }
   }
   let rows;
-  if (fromWh) rows = await loadWarehouseRows(a);
-  else {
-    rows = parseInputBuffer(fs.readFileSync(a.in));
-    if (a.limit > 0) rows = rows.slice(0, a.limit);
-  }
+  const preExcluded = {};
+  try {
+    let loaded;
+    if (fromWh) loaded = await loadWarehouseRows(a);
+    else loaded = { rows: parseInputBuffer(fs.readFileSync(a.in)), claimExcluded: 0, chain: { hosts: new Set() } };
+    if (loaded.claimExcluded) preExcluded[EX.REASON.claim] = loaded.claimExcluded;
+    // 診断前の除外。--single-out のときは、すでにWEBドックで送った・送信予定の店(STOC営業管理のバッチ)も外す(二重送信防止。再送信のオプションはない)
+    const ctx = { excludeList: EX.loadExcludeDomains(), chainHosts: loaded.chain.hosts };
+    if (stocPool) ctx.resendSet = await EX.loadResendSet(stocPool, require('../src/stocBatch').stocDbName());
+    const sel = selectForScan(loaded.rows, ctx, a.limit);
+    rows = sel.rows;
+    Object.assign(preExcluded, sel.counts);
+  } catch (e) { if (stocPool) await stocPool.end(); throw e; }
+  console.error('診断前に除外: ' + (Object.entries(preExcluded).map(([k, n]) => `${k} ${n}`).join(' / ') || 'なし') + ` → 診断対象 ${rows.length}社`);
   fs.mkdirSync(path.dirname(path.resolve(a.out)), { recursive: true });
   process.on('SIGINT', () => {
     if (stopRequested) process.exit(130);
@@ -465,6 +491,7 @@ async function main() {
         rows: recs, outDir: a.singleOut, templates: loadTemplates(), now, dryRun: !!a.dryRunStoc,
         userId: /^\d+$/.test(uid || '') ? Number(uid) : null, memoDate: new Date(now.getTime() + 9 * 3600e3).toISOString().slice(0, 10),
         filter: { prefecture: a.prefecture || '', main_category: a.mainCategory || '', exclude_large: !!a.excludeLarge, small_only: !!a.smallOnly, form_found: !!a.formFound, limit: a.limit || 0 },
+        preExcluded,
         stoc: { fetchStores: (ids) => S.fetchStocStores(stocPool, ids), register: (o) => S.registerBatch(stocPool, o) },
       });
       console.error(`単一本文出力: ${a.singleOut} に ${res.files.length}ファイル / 送信対象 ${res.items.length}社 / バッチ ${res.batches.map((b) => b.code + '(' + b.count + ')').join(', ') || 'なし'}${a.dryRunStoc ? ' [STOC未登録]' : ' [STOC登録済み]'}。まとめ.txt を確認してください。`);
@@ -473,6 +500,6 @@ async function main() {
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
-module.exports = { runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
+module.exports = { selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
 if (require.main === module) main().catch((e) => { console.error(e && (e.claimCheck || e.stocCheck) ? 'エラー: ' + e.message : e); process.exit(1); });

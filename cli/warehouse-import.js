@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const wh = require('../src/warehouse');
+const { siteHostOf } = require('../src/siteHost');
 
 const BIG_FILE = 200 * 1024 * 1024;
 const CHUNK = 64 * 1024 * 1024;
@@ -120,25 +121,32 @@ const LIMITS = { cid: 20, name: 255, category: 500, category_main: 100, business
 const fillIfEmpty = (c) => `${c} = IF(${c} IS NULL OR ${c} = '', VALUES(${c}), ${c})`;
 const newer = (c) => `${c} = COALESCE(VALUES(${c}), ${c})`;
 
-function upsertSql(n, hasBs) {
-  const ph = '(' + COLS.map(() => '?').join(',') + ',NOW(),NOW())';
-  return `INSERT INTO stoc_master.shops (${COLS.join(',')},first_seen_at,last_seen_at) VALUES ${Array(n).fill(ph).join(',')}
+/** hasSiteHost=true(sql/warehouse_migrate_005.sql 適用済み)なら site_host 列も入れる */
+function upsertSql(n, hasBs, hasSiteHost = false) {
+  const cols = hasSiteHost ? [...COLS, 'site_host'] : COLS;
+  const ph = '(' + cols.map(() => '?').join(',') + ',NOW(),NOW())';
+  // site_host は website_url と一緒に動かす: 既存の website_url が空のときだけ新しい値を入れる(この代入は website_url の更新より前に書くこと)
+  const siteHost = hasSiteHost ? "site_host = IF(website_url IS NULL OR website_url = '', VALUES(site_host), site_host),\n  " : '';
+  return `INSERT INTO stoc_master.shops (${cols.join(',')},first_seen_at,last_seen_at) VALUES ${Array(n).fill(ph).join(',')}
 ON DUPLICATE KEY UPDATE last_seen_at = NOW(),
-  ${newer('rating')}, ${newer('review_count')}, ${newer('photo_count')}, ${newer('lat')}, ${newer('lng')},
+  ${siteHost}  ${newer('rating')}, ${newer('review_count')}, ${newer('photo_count')}, ${newer('lat')}, ${newer('lng')},
   ${hasBs ? 'business_status = VALUES(business_status)' : 'business_status = business_status'},
   ${['website_url', 'phone', 'category', 'category_main', 'postal', 'address_raw', 'address', 'prefecture', 'place_id', 'gmap_url', 'gbp_registered'].map(fillIfEmpty).join(',\n  ')}`;
 }
 
-async function upsertBatch(pool, recs, stats, hasBs) {
+async function upsertBatch(pool, recs, stats, hasBs, hasSiteHost = false) {
   const params = [];
-  for (const r of recs) for (const c of COLS) params.push(LIMITS[c] ? clip(r[c], LIMITS[c]) : r[c]);
+  for (const r of recs) {
+    for (const c of COLS) params.push(LIMITS[c] ? clip(r[c], LIMITS[c]) : r[c]);
+    if (hasSiteHost) params.push(siteHostOf(clip(r.website_url, LIMITS.website_url)) || (r.website_url ? '' : null));
+  }
   // 既存件数を事前に数えて新規/更新を判定(affectedRowsは同一秒の再実行で0になり、DB間差もあるため)
   const cids = [...new Set(recs.filter((r) => r.cid).map((r) => r.cid))];
   const fbs = [...new Set(recs.filter((r) => !r.cid).map((r) => r.fallback_key))];
   let existing = 0;
   if (cids.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE cid IN (?)', [cids]); existing += Number(x.n); }
   if (fbs.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE fallback_key IN (?)', [fbs]); existing += Number(x.n); }
-  await pool.query(upsertSql(recs.length, hasBs), params);
+  await pool.query(upsertSql(recs.length, hasBs, hasSiteHost), params);
   const inserted = cids.length + fbs.length - existing;
   stats.inserted += inserted;
   stats.updated += recs.length - inserted;
@@ -257,6 +265,8 @@ async function main() {
   const total = { files: 0, rows: 0, inserted: 0, updated: 0, skipped: 0 };
   const errors = [];
   let runId = null;
+  const hasSiteHost = pool ? await wh.columnExists(pool, 'shops', 'site_host') : false;
+  if (pool && !hasSiteHost) console.error('警告: shops.site_host 列がないため、サイトのホスト名は記録しません(sql/warehouse_migrate_005.sql を適用すると記録されます)。');
   const started = new Date();
   if (pool) {
     const [r] = await pool.query('INSERT INTO stoc_master.import_runs (started_at, root_path) VALUES (NOW(), ?)', [root.slice(0, 500)]);
@@ -269,7 +279,7 @@ async function main() {
       try {
         await processFile(file, root, o.batch, async (recs, hasBs) => {
           for (const r of recs) if (r.cid) withCid.n++;
-          if (pool) await upsertBatch(pool, recs, st, hasBs);
+          if (pool) await upsertBatch(pool, recs, st, hasBs, hasSiteHost);
         }, st);
       } catch (e) {
         errors.push(`${path.relative(root, file)}: ${e.message}`);
