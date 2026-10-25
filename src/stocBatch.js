@@ -156,9 +156,9 @@ async function registerBatch(pool, opts) {
   const env = opts.env || process.env;
   const db = stocDbName(env);
   const items = opts.items;
-  // 既定はSTOCの書き出しと同じ(item.website_url=店舗のサイトURL)。送信ツールが結果を返すときの website_url が送信先URL(1列目)だと一致しないので、
-  // その場合は STOC_ITEM_WEBSITE_URL=form でフォームURLを入れる。
-  const formAsSite = env.STOC_ITEM_WEBSITE_URL === 'form';
+  // 送信ツールは結果を返すとき、website_url として送信先URL(CSVの1列目=フォームURL)を送ってくる(2026-10-26 実送信で確認)。
+  // STOC側は batch_code と item.website_url で照合するため、既定でフォームURLを入れる。店舗サイトURLに戻すときだけ STOC_ITEM_WEBSITE_URL=site。
+  const formAsSite = env.STOC_ITEM_WEBSITE_URL !== 'site';
   if (!items.length) throw new Error('登録する店舗がありません');
   if (items.length > BATCH_MAX) throw new Error(`1バッチは${BATCH_MAX}件までです`);
   const conn = await pool.getConnection();

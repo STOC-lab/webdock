@@ -204,7 +204,7 @@ const rec = (id, key, o = {}) => ({
     eq(q[1].params[0].length, 500, '明細は500件ずつ');
     eq(q[3].params[0].length, 201, '明細の最後は余り');
     const row = q[1].params[0][0];
-    eq(row.slice(0, 11), [77, 1, '会社1', '079-111-2222', '兵庫県姫路市1', '兵庫県', '製造', 'https://www.c1.jp/', 'https://c1.jp/f', 'https://g.example/1', ''], '明細: 列の対応(website_url=STOC店舗、inquiry_url=フォーム)');
+    eq(row.slice(0, 11), [77, 1, '会社1', '079-111-2222', '兵庫県姫路市1', '兵庫県', '製造', 'https://c1.jp/f', 'https://c1.jp/f', 'https://g.example/1', ''], '明細: 列の対応(既定はwebsite_url=フォームURL。送信ツールの結果照合に合わせる)');
     eq([row[11], row[12], [...row[13]].length, row[14]], [40, 'WEBドック:cms', 200, 'pending'], '明細: score/approach_label/first_talk(200字)/pending');
     ok(q[1].sql.includes('(batch_id,store_id,shop_name,phone,address,prefecture,category,website_url,inquiry_url,gbp_url,report_url,score,approach_label,first_talk,send_status)'), '明細の列名はSTOCと同じ');
     eq(q[4].params[0].length, 500, 'stores更新は500件ずつ');

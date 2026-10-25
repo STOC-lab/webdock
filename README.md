@@ -161,7 +161,7 @@ node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category
   --template b2b --limit 2000 --single-out data/b2b_20261026 [--dry-run-stoc]
 ```
 - 営業管理(STOC)に登録済みの会社(倉庫の `stoc_store_id` あり)だけが対象。未登録は「営業管理に未登録」で除外。クレーム・営業お断り・画像認証・フォームURLなし・指摘なしの除外は従来どおり。
-- **STOCバッチの登録**: 診断のあと、STOC営業管理(`stoc_sales`)に `sender_YYYYmmdd_HHMMSS_xxxx` 形式のバッチを登録し(`inquiry_export_batches` / `inquiry_export_items`、`stores.exported_at` / `export_count` の更新まで1トランザクション)、そのコードを宛先CSVの7列目に入れる。送信ツールはこのコードと1列目(送信先URL)で結果をSTOCへ戻す。1バッチは最大5000社(超えたら複数バッチ)。`--dry-run-stoc` を付けるとDBには書かず、コードは `DRYRUN`(仮)になる(結果は戻らない。試し用)。`STOC_EXPORT_USER_ID`(任意)で `exported_by` を指定、`STOC_DB_NAME`(既定 `stoc_sales`)でDB名を変更。明細の `website_url` はSTOCの書き出しと同じく店舗のサイトURL(結果の突き合わせは `batch_code` + `website_url`)。送信ツールが結果を返すときのURLが送信先URL(1列目)の場合は一致しないので、その場合は `STOC_ITEM_WEBSITE_URL=form` を付けるとフォームURLを入れる。
+- **STOCバッチの登録**: 診断のあと、STOC営業管理(`stoc_sales`)に `sender_YYYYmmdd_HHMMSS_xxxx` 形式のバッチを登録し(`inquiry_export_batches` / `inquiry_export_items`、`stores.exported_at` / `export_count` の更新まで1トランザクション)、そのコードを宛先CSVの7列目に入れる。送信ツールはこのコードと1列目(送信先URL)で結果をSTOCへ戻す。1バッチは最大5000社(超えたら複数バッチ)。`--dry-run-stoc` を付けるとDBには書かず、コードは `DRYRUN`(仮)になる(結果は戻らない。試し用)。`STOC_EXPORT_USER_ID`(任意)で `exported_by` を指定、`STOC_DB_NAME`(既定 `stoc_sales`)でDB名を変更。明細の `website_url` には送信先URL(フォームURL)を入れる(結果の突き合わせは `batch_code` + `website_url` で、送信ツールは1列目の送信先URLを返すため。2026-10-26 実送信で確認)。店舗のサイトURLに戻すときは `STOC_ITEM_WEBSITE_URL=site`。
 - 書き込み権限は**診断を始める前に**確認し、足りなければ中止して次のGRANTを表示する。root で一度実行しておく(ユーザー名・ホストは `WH_DB_USER` / `WH_DB_HOST` に合わせる):
 ```
 GRANT SELECT, INSERT ON stoc_sales.inquiry_export_batches TO 'stoc_wh'@'localhost';
