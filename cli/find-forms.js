@@ -16,15 +16,18 @@
  *                               (フォーム探しで取得済みのページを使い回し、追加取得は1サイト最大2ページ)
  *   --size-only                 規模だけ調べる(size_checked_at が空の店舗が対象。form_* 列は触らない)
  *   --max-employees 20          この人数以下を small、超えると large とする(既定20)
+ *   --no-sales-only             form_status='url_found' で form_no_sales が未判定(NULL)の既存フォームだけ、フォームのページを取得して
+ *                               「営業お断り」の記載を調べ form_no_sales(0/1)へ書く(sql/warehouse_migrate_004.sql が必要。他の列は触らない。
+ *                               取得失敗・robots除外はNULLのまま。--size-only / --with-size とは併用不可。--loop / --limit / --dry-run / --concurrency 可)
  *   dry-run のCSVには --with-size のとき 従業員数・資本金・上場・規模・会社概要URL の列が付く
  * フォームの送信は一切しない(ページを見るだけ)。
  */
 
 const fs = require('fs');
 const path = require('path');
-const { findContact, hostOf } = require('../src/formFinder');
+const { findContact, hostOf, detectNoSales, NOTE_NO_SALES, parseRobots, isDisallowed } = require('../src/formFinder');
 const { findCompanySize } = require('../src/companyProfile');
-const { fetchHomepage } = require('../src/safeFetch');
+const { fetchHomepage, fetchHead } = require('../src/safeFetch');
 
 const SITE_TIMEOUT_MS = 60000;
 const LOOP_BATCH = 500;
@@ -32,7 +35,7 @@ const LOOP_SLEEP_MS = 30 * 60 * 1000;
 
 /* ---------- 引数 ---------- */
 function parseArgs(argv) {
-  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false, source: 'stores', retryNeedsBrowser: false, category: [], withSize: false, sizeOnly: false, maxEmployees: 30 };
+  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false, source: 'stores', retryNeedsBrowser: false, category: [], withSize: false, sizeOnly: false, noSalesOnly: false, maxEmployees: 30 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -49,12 +52,17 @@ function parseArgs(argv) {
     else if (a === '--category') o.category = String(next() || '').split(',').map((x) => x.trim()).filter(Boolean);
     else if (a === '--with-size') o.withSize = true;
     else if (a === '--size-only') o.sizeOnly = true;
+    else if (a === '--no-sales-only') o.noSalesOnly = true;
     else if (a === '--max-employees') o.maxEmployees = Number(next());
     else throw new Error('不明なオプション: ' + a);
   }
   if (o.source !== 'stores' && o.source !== 'warehouse') throw new Error('--source は stores か warehouse を指定してください');
   if ((o.withSize || o.sizeOnly || o.category.length) && o.source !== 'warehouse') {
     throw new Error('--with-size / --size-only / --category は --source warehouse のときだけ使えます');
+  }
+  if (o.noSalesOnly) {
+    if (o.source !== 'warehouse') throw new Error('--no-sales-only は --source warehouse のときだけ使えます');
+    if (o.sizeOnly || o.withSize) throw new Error('--no-sales-only は --size-only / --with-size と同時に使えません');
   }
   for (const k of ['limit', 'concurrency', 'recheckDays', 'errorRetryDays', 'maxEmployees']) {
     if (!Number.isFinite(o[k]) || o[k] < 1) throw new Error(`--${k} の値が不正です`);
@@ -291,6 +299,28 @@ WHERE website_url IS NOT NULL AND website_url <> ''
   return { sql, params };
 }
 
+/**
+ * --no-sales-only の調査対象: フォームURLがあるのに「営業お断り」を未判定(form_no_sales IS NULL)の店舗。
+ * 取得に失敗した行はNULLのまま残るので、id > afterId で前へ進めて同じ行を繰り返さない(呼び出し側で afterId を更新する)。
+ */
+function buildWarehouseNoSalesTargetQuery({ prefecture, category, limit, afterId = 0 }) {
+  const params = [];
+  const prefs = String(prefecture || '').split(',').map((x) => x.trim()).filter(Boolean);
+  let sql = `
+SELECT id, name, prefecture, form_url, form_note
+FROM stoc_master.shops
+WHERE form_status = 'url_found'
+  AND form_url IS NOT NULL AND form_url <> ''
+  AND form_no_sales IS NULL
+  AND id > ?`;
+  params.push(afterId);
+  if (prefs.length) { sql += '\n  AND prefecture IN (?)'; params.push(prefs); }
+  sql += categoryClause(category, params);
+  sql += '\nORDER BY id\nLIMIT ?';
+  params.push(limit);
+  return { sql, params };
+}
+
 const clipStr = (v, n) => (typeof v === 'string' && v.length > n ? v.slice(0, n) : v);
 
 /** finderの結果 -> shops の更新値。finderの 'unknown'(JS生成サイト等)は 'needs_browser' として記録する。 */
@@ -405,7 +435,93 @@ function makeFinder({ withSize = false, sizeOnly = false, maxEmployees = 30, fet
   };
 }
 
+/** form_note に「営業お断りの記載あり」を足す(100文字に収める。重複は足さない) */
+function appendNoSalesNote(note) {
+  const cur = String(note || '');
+  if (cur.includes(NOTE_NO_SALES)) return clipStr(cur, 100);
+  if (!cur) return NOTE_NO_SALES;
+  return clipStr(cur, Math.max(0, 100 - NOTE_NO_SALES.length - 1)) + '/' + NOTE_NO_SALES;
+}
+
+async function defaultFetchRobotsForNoSales(origin) {
+  return fetchHead(origin + '/robots.txt', 16384, 4000);
+}
+
+/**
+ * --no-sales-only の1店舗分: form_url のページだけを取得して「営業お断り」を判定する。
+ * 戻り値: { ok:true, noSales:boolean } / { ok:false, note }(失敗・robots除外。DBは更新しない)
+ */
+async function checkNoSalesRow(shop, { fetchPage = fetchHomepage, fetchRobots = defaultFetchRobotsForNoSales } = {}) {
+  const url = normalizeUrl(shop.form_url);
+  let origin;
+  try { origin = new URL(url).origin; } catch { return { ok: false, note: 'フォームURLが不正です' }; }
+  let rules = [];
+  try { rules = parseRobots(await fetchRobots(origin)); } catch { rules = []; }
+  if (isDisallowed(rules, url)) return { ok: false, note: 'robots.txtで除外' };
+  let page;
+  try { page = await fetchPage(url); } catch (e) { return { ok: false, note: e && e.userSafe ? e.message : '取得に失敗しました' }; }
+  if (!page || page.status >= 400 || typeof page.body !== 'string') return { ok: false, note: '取得に失敗しました' + (page && page.status ? `(HTTP ${page.status})` : '') };
+  return { ok: true, noSales: detectNoSales(page.body) };
+}
+
+/** form_no_sales だけを書く(他の列は触らない)。お断りありなら form_note へ追記 */
+function makeNoSalesWriter(pool) {
+  const SQL = 'UPDATE stoc_master.shops SET form_no_sales = ?, form_note = ? WHERE id = ? AND form_no_sales IS NULL';
+  const SQL_PLAIN = 'UPDATE stoc_master.shops SET form_no_sales = ? WHERE id = ? AND form_no_sales IS NULL';
+  return async function writeNoSales(shop, noSales) {
+    if (noSales) await pool.execute(SQL, [1, appendNoSalesNote(shop.form_note), shop.id]);
+    else await pool.execute(SQL_PLAIN, [0, shop.id]);
+  };
+}
+
+const NO_SALES_CSV_COLUMNS = ['store_id', '店名', '都道府県', '問い合わせURL', '営業お断り', '備考'];
+function noSalesCsvRow(shop, r) {
+  return csvLine([shop.id, shop.name, shop.prefecture, shop.form_url, r.ok ? (r.noSales ? 'あり' : 'なし') : '', r.ok ? (r.noSales ? NOTE_NO_SALES : '') : r.note || '']);
+}
+function makeNoSalesCsvWriter(file) {
+  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+  fs.writeFileSync(file, '﻿' + csvLine(NO_SALES_CSV_COLUMNS));
+  return async (shop, r) => { if (r) fs.appendFileSync(file, noSalesCsvRow(shop, r)); };
+}
+
+/**
+ * rows を concurrency 並列で調べる。check(shop) -> 結果、writer(shop, 結果) -> Promise(失敗は数えて続行)。
+ * 戻り値: { total, done, noSales, clean, skipped, error }  skipped=取得失敗/robots除外(NULLのまま)
+ */
+async function processNoSales({ rows, check, writer, concurrency = 5, shouldStop = () => false, onProgress = () => {}, siteTimeoutMs = SITE_TIMEOUT_MS }) {
+  const stats = { total: rows.length, done: 0, noSales: 0, clean: 0, skipped: 0, error: 0 };
+  let idx = 0;
+  async function worker() {
+    while (!shouldStop()) {
+      const i = idx++;
+      if (i >= rows.length) return;
+      const shop = rows[i];
+      let r;
+      try { r = await withTimeout(Promise.resolve(check(shop)), siteTimeoutMs); }
+      catch (e) { r = { ok: false, note: e && e.userSafe ? e.message : '調査に失敗しました' }; }
+      try {
+        await writer(shop, r);
+        if (!r.ok) stats.skipped++;
+        else if (r.noSales) stats.noSales++;
+        else stats.clean++;
+      } catch (e) {
+        console.error(`書き込み失敗 store_id=${shop.id}: ${e.message}`);
+        stats.error++;
+      }
+      stats.done++;
+      onProgress({ ...stats });
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, rows.length || 1)) }, worker));
+  return stats;
+}
+
 async function fetchTargets(pool, opts, limit) {
+  if (opts.source === 'warehouse' && opts.noSalesOnly) {
+    const { sql, params } = buildWarehouseNoSalesTargetQuery({ ...opts, limit });
+    const [rows] = await pool.query(sql, params);
+    return rows;
+  }
   const build = opts.source === 'warehouse' ? (opts.sizeOnly ? buildWarehouseSizeTargetQuery : buildWarehouseTargetQuery) : buildTargetQuery;
   const { sql, params } = build({ ...opts, limit });
   // LIMIT のプレースホルダは query() で埋め込む(execute だと型で失敗する環境があるため)
@@ -482,6 +598,38 @@ ON DUPLICATE KEY UPDATE
   };
 }
 
+/** --no-sales-only の本体。id > afterId で前へ進め、取得失敗で NULL のまま残った行を同じ周回で繰り返さない */
+async function runNoSalesOnly(opts, pool, shouldStop, isStopping) {
+  if (!(await require('../src/warehouse').columnExists(pool, 'shops', 'form_no_sales'))) {
+    throw new Error('shops.form_no_sales 列がありません。先に `mysql < sql/warehouse_migrate_004.sql` を実行してください。');
+  }
+  const check = (shop) => checkNoSalesRow(shop);
+  const writer = opts.dryRun
+    ? makeNoSalesCsvWriter(opts.out)
+    : (() => { const w = makeNoSalesWriter(pool); return async (shop, r) => { if (r.ok) await w(shop, r.noSales); }; })();
+  const onProgress = (s) => {
+    if (s.done % 50 === 0 || s.done === s.total) console.error(`[${s.done}/${s.total}] お断りあり ${s.noSales}件 / なし ${s.clean}件 / 取得不可 ${s.skipped}件 / エラー ${s.error}件`);
+  };
+  const summary = (label, st) => console.error(`${label}: ${st.done}/${st.total}件 (お断りあり${st.noSales} / なし${st.clean} / 取得不可${st.skipped} / エラー${st.error})`);
+  const loop = opts.loop && !opts.dryRun;
+  if (opts.loop && opts.dryRun) console.error('--dry-run のため --loop は無視します');
+  let afterId = 0;
+  do {
+    const rows = await fetchTargets(pool, { ...opts, afterId }, loop ? LOOP_BATCH : opts.limit);
+    if (!rows.length) {
+      if (!loop) { console.error('対象なし'); return; }
+      console.error(`対象なし。30分待機します (${new Date().toLocaleString('ja-JP')})`);
+      for (let t = 0; t < LOOP_SLEEP_MS && !isStopping(); t += 1000) await new Promise((r) => setTimeout(r, 1000));
+      afterId = 0; // 取得不可で残った行を次の周回でやり直す
+      continue;
+    }
+    afterId = rows[rows.length - 1].id;
+    if (!loop) console.error(`対象 ${rows.length}件${opts.dryRun ? ` -> ${opts.out}` : ''}`);
+    const st = await processNoSales({ rows, check, writer, concurrency: opts.concurrency, shouldStop, onProgress });
+    summary(loop ? 'バッチ完了' : '完了', st);
+  } while (loop && !isStopping());
+}
+
 /* ---------- main ---------- */
 async function main() {
   loadEnv();
@@ -496,6 +644,10 @@ async function main() {
 
   const wh = opts.source === 'warehouse';
   const pool = wh ? createWarehousePool() : createPool();
+  if (opts.noSalesOnly) {
+    try { await runNoSalesOnly(opts, pool, shouldStop, () => stopping); } finally { await pool.end(); }
+    return;
+  }
   const csvMode = { withSize: opts.withSize, sizeOnly: opts.sizeOnly };
   let writer;
   if (opts.dryRun) writer = makeCsvWriter(opts.out, csvMode);
@@ -552,4 +704,5 @@ if (require.main === module) {
 }
 
 module.exports = { buildWarehouseTargetQuery, resultToShopUpdate, makeWarehouseWriter, createWarehousePool, makeDbWriter, fetchTargets, createPool, processStores, parseArgs, buildTargetQuery, csvField, csvLine, csvRow, CSV_COLUMNS, normalizeUrl,
-  buildWarehouseSizeTargetQuery, sizeToShopUpdate, makeWarehouseSizeWriter, makeFinder, SIZE_CSV_COLUMNS, SIZE_ONLY_CSV_COLUMNS };
+  buildWarehouseSizeTargetQuery, sizeToShopUpdate, makeWarehouseSizeWriter, makeFinder, SIZE_CSV_COLUMNS, SIZE_ONLY_CSV_COLUMNS,
+  buildWarehouseNoSalesTargetQuery, appendNoSalesNote, checkNoSalesRow, makeNoSalesWriter, processNoSales, noSalesCsvRow, NO_SALES_CSV_COLUMNS };

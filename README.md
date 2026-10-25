@@ -334,6 +334,12 @@ node cli/find-forms.js --source warehouse --prefecture 兵庫県 --category 製�
 node cli/find-forms.js --source warehouse --prefecture 兵庫県 --category 製造,建設,工事 --size-only --loop
 ```
 
+3b. `form_no_sales` を入れる前に `url_found` になった既存フォームも「営業お断り」を確認します(`--no-sales-only`。`sql/warehouse_migrate_004.sql` が必要)。`form_status='url_found'` で `form_no_sales` が未判定(NULL)の店舗について、フォームのページだけを取得して `form_no_sales` を 0/1 で書き、お断りありなら `form_note` に「営業お断りの記載あり」を追記します(他の列は触りません)。取得失敗・robots.txt除外はNULLのままで、同じ周回では再試行しません。`--prefecture` / `--category` / `--limit` / `--loop` / `--dry-run` / `--concurrency` は同様に使え、`--size-only` / `--with-size` とは併用できません。dry-run のCSVは store_id・店名・都道府県・問い合わせURL・営業お断り・備考:
+
+```
+node cli/find-forms.js --source warehouse --prefecture 兵庫県 --no-sales-only --loop
+```
+
 4. 営業アプリ用CSVを作るときに規模で絞ります(CSVの形式は変わりません):
 
 ```

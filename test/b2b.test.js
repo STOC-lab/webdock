@@ -184,6 +184,60 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   const lines = []; promote.printStats(sel.stats, (l) => lines.push(l));
   ok(lines.some((l) => l.startsWith('営業お断りで除外: 7')), 'promote: 統計行');
 
+  // --no-sales-only(既存フォームの営業お断り確認)
+  const ff = require('../cli/find-forms');
+  const pa = ff.parseArgs(['--source', 'warehouse', '--prefecture', '兵庫県', '--no-sales-only', '--loop']);
+  ok(pa.noSalesOnly && pa.loop && pa.prefecture === '兵庫県', 'no-sales-only: 引数');
+  ok(!ff.parseArgs([]).noSalesOnly, 'no-sales-only: 既定はオフ');
+  for (const bad of [['--source', 'warehouse', '--no-sales-only', '--size-only'], ['--source', 'warehouse', '--no-sales-only', '--with-size'], ['--no-sales-only']]) {
+    let err = null; try { ff.parseArgs(bad); } catch (e) { err = e; }
+    ok(err && /--no-sales-only/.test(err.message), 'no-sales-only: 排他/倉庫のみ ' + bad.join(' '));
+  }
+  const nq = ff.buildWarehouseNoSalesTargetQuery({ prefecture: '兵庫県', category: ['製造'], limit: 500, afterId: 120 });
+  ok(/form_status = 'url_found'/.test(nq.sql) && nq.sql.includes('form_no_sales IS NULL') && nq.sql.includes("form_url <> ''") && nq.sql.includes('id > ?') && nq.sql.includes('category_main LIKE ?') && /ORDER BY id\s+LIMIT \?$/.test(nq.sql), 'no-sales-only: 対象SQLの形');
+  eq(nq.params, [120, ['兵庫県'], '%製造%', 500], 'no-sales-only: パラメータ(afterId→都道府県→業種→limit)');
+  eq(ff.buildWarehouseNoSalesTargetQuery({ limit: 5 }).params, [0, 5], 'no-sales-only: 既定は afterId=0');
+  eq(ff.appendNoSalesNote(null), NOTE_NO_SALES, 'note: 空なら単独');
+  eq(ff.appendNoSalesNote('外部フォームサービス'), '外部フォームサービス/' + NOTE_NO_SALES, 'note: 追記');
+  eq(ff.appendNoSalesNote('x'.repeat(100)).length, 100, 'note: 100文字に収める');
+  ok(ff.appendNoSalesNote('x'.repeat(100)).endsWith(NOTE_NO_SALES), 'note: 追記が切れない');
+  eq(ff.appendNoSalesNote('a/' + NOTE_NO_SALES), 'a/' + NOTE_NO_SALES, 'note: 重複しない');
+  const okRobots = async () => '';
+  const mkNs = (res) => ({ fetchRobots: okRobots, fetchPage: async () => res });
+  eq(await ff.checkNoSalesRow({ form_url: 'https://a.jp/contact' }, mkNs({ status: 200, body: '<p>営業目的のお問い合わせはお断りします</p>' })), { ok: true, noSales: true }, 'row: お断りあり');
+  eq(await ff.checkNoSalesRow({ form_url: 'https://a.jp/contact' }, mkNs({ status: 200, body: '<p>営業時間 9:00-18:00</p>' })), { ok: true, noSales: false }, 'row: お断りなし');
+  const e1 = await ff.checkNoSalesRow({ form_url: 'https://a.jp/contact' }, mkNs({ status: 404, body: 'x' }));
+  ok(!e1.ok && e1.note, 'row: HTTPエラーはNULLのまま');
+  const e2 = await ff.checkNoSalesRow({ form_url: 'https://a.jp/contact' }, { fetchRobots: okRobots, fetchPage: async () => { throw new Error('boom'); } });
+  ok(!e2.ok, 'row: 取得例外はNULLのまま');
+  let fetched = false;
+  const e3 = await ff.checkNoSalesRow({ form_url: 'https://a.jp/contact' }, { fetchRobots: async () => 'User-agent: *\nDisallow: /contact', fetchPage: async () => { fetched = true; return { status: 200, body: '' }; } });
+  ok(!e3.ok && !fetched, 'row: robots除外は取得しない');
+  // 書き込み: お断りあり=1+note、なし=0のみ
+  const execs = [];
+  const nsw = ff.makeNoSalesWriter({ execute: async (sql, p) => { execs.push([sql, p]); } });
+  await nsw({ id: 7, form_note: '自社' }, true);
+  await nsw({ id: 8, form_note: '自社' }, false);
+  ok(execs[0][0].includes('form_no_sales = ?, form_note = ?') && execs[0][0].includes('form_no_sales IS NULL'), 'writer: 1のときnote追記');
+  eq(execs[0][1], [1, '自社/' + NOTE_NO_SALES, 7], 'writer: 値(1)');
+  ok(!execs[1][0].includes('form_note') && execs[1][0].includes('form_no_sales IS NULL'), 'writer: 0のときnoteは触らない');
+  eq(execs[1][1], [0, 8], 'writer: 値(0)');
+  // 処理: 失敗はスキップ集計、全件処理
+  const written = [];
+  const st = await ff.processNoSales({
+    rows: [{ id: 1, form_url: 'p' }, { id: 2, form_url: 'n' }, { id: 3, form_url: 'e' }],
+    check: async (r) => (r.form_url === 'p' ? { ok: true, noSales: true } : r.form_url === 'n' ? { ok: true, noSales: false } : { ok: false, note: '取得に失敗しました' }),
+    writer: async (r, res) => { written.push([r.id, res.ok]); }, concurrency: 2,
+  });
+  eq([st.done, st.noSales, st.clean, st.skipped, st.error], [3, 1, 1, 1, 0], 'processNoSales: 集計');
+  eq(written.length, 3, 'processNoSales: 全件writerを通る');
+  // CSV
+  const hdr = ff.NO_SALES_CSV_COLUMNS.join(',');
+  eq(hdr, 'store_id,店名,都道府県,問い合わせURL,営業お断り,備考', 'CSV: 見出し');
+  eq(ff.noSalesCsvRow({ id: 1, name: 'A', prefecture: '兵庫県', form_url: 'https://a.jp/c' }, { ok: true, noSales: true }), '1,A,兵庫県,https://a.jp/c,あり,' + NOTE_NO_SALES + '\r\n', 'CSV: あり');
+  eq(ff.noSalesCsvRow({ id: 2, name: 'B', prefecture: '兵庫県', form_url: 'https://b.jp/c' }, { ok: true, noSales: false }), '2,B,兵庫県,https://b.jp/c,なし,\r\n', 'CSV: なし');
+  eq(ff.noSalesCsvRow({ id: 3, name: 'C', prefecture: '兵庫県', form_url: 'https://c.jp/c' }, { ok: false, note: 'robots.txtで除外' }), '3,C,兵庫県,https://c.jp/c,,robots.txtで除外\r\n', 'CSV: 取得不可');
+
   console.log(`b2b: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
