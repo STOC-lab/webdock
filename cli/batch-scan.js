@@ -1,7 +1,7 @@
 'use strict';
 /**
  * 一括診断(問い合わせ営業用)
- * node cli/batch-scan.js --in list.tsv --out result.csv [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--resume]
+ * node cli/batch-scan.js --in list.tsv --out result.csv [--group-out dir(b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--resume]
  * 入力は TSV/CSV(UTF-8 または Shift_JIS。warehouse-promote の11列CSVもそのまま使える)。
  * 倉庫から直接: node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 [--exclude-large|--small-only]
  *              [--form-found] --template b2b --out result.csv   (WH_DB_* が必要)
@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { JUDGE, pickFinding, shouldSend, regionOf, fillTemplate, loadTemplates, buildB2bMessage } = require('../src/outreach');
 const wh = require('../src/warehouse');
+const { writeGroupFiles } = require('../src/outreachGroups');
 
 const SCAN_TIMEOUT_MS = 45000;
 
@@ -290,6 +291,7 @@ function parseArgs(argv) {
     else if (k === '--concurrency') a.concurrency = parseInt(argv[++i], 10) || 5;
     else if (k === '--limit') a.limit = parseInt(argv[++i], 10);
     else if (k === '--template') a.template = argv[++i];
+    else if (k === '--group-out') a.groupOut = argv[++i];
     else if (k === '--resume') a.resume = true;
     else if (k === '--source') a.source = argv[++i];
     else if (k === '--prefecture') a.prefecture = argv[++i];
@@ -306,10 +308,12 @@ function parseArgs(argv) {
 async function main() {
   const a = parseArgs(process.argv.slice(2));
   const fromWh = a.source === 'warehouse';
-  if ((!a.in && !fromWh) || !a.out || !['west', 'east', 'auto', 'b2b'].includes(a.template) || (a.source && !fromWh)
+  // --group-out(b2bのみ)があれば --out は省略可。省略時は <group-out>/scan_all.csv に全件の診断結果を書く
+  if (a.groupOut && !a.out && a.template === 'b2b') a.out = path.join(a.groupOut, 'scan_all.csv');
+  if ((!a.in && !fromWh) || !a.out || (a.groupOut && a.template !== 'b2b') || !['west', 'east', 'auto', 'b2b'].includes(a.template) || (a.source && !fromWh)
     || (a.subject !== undefined && !(a.subject >= 1 && a.subject <= 3))) {
     console.error('使い方: node cli/batch-scan.js (--in list.tsv | --source warehouse --prefecture 兵庫県 [--main-category 製造,建設] [--exclude-large|--small-only] [--form-found])\n'
-      + '        --out result.csv [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]');
+      + '        --out result.csv [--group-out dir(b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]');
     process.exit(2);
   }
   let rows;
@@ -328,9 +332,17 @@ async function main() {
     rows, scan: scanOne, out: a.out, templates: loadTemplates(), concurrency: a.concurrency, templateMode: a.template, resume: a.resume,
     subject: a.subject, maxChars: a.maxChars,
   });
+  if (a.groupOut) {
+    // 再開(--resume)分も含めて、出力CSV全体からグループを作る
+    const table = parseDelimited(fs.readFileSync(a.out, 'utf8'), ',');
+    const head = table[0] || [];
+    const recs = table.slice(1).map((r) => Object.fromEntries(head.map((h, i) => [h, r[i] || ''])));
+    const g = writeGroupFiles(a.groupOut, recs, loadTemplates(), new Date());
+    console.error(`グループ出力: ${a.groupOut} に ${g.files.length}ファイル(グループ ${g.summary.length}個 / 送らない ${g.excludedTotal}社)。まとめ.txt を確認してください。`);
+  }
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
-module.exports = { runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, parseArgs, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
+module.exports = { runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
 if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });

@@ -8,6 +8,8 @@ const { runBatch, parseInputBuffer, parseDelimited, buildWarehouseQuery, B2B_COL
 const { detectNoSales, findContact, NOTE_NO_SALES } = require('../src/formFinder');
 const wh = require('../src/warehouse');
 const promote = require('../cli/warehouse-promote');
+const G = require('../src/outreachGroups');
+const { parseArgs } = require('../cli/batch-scan');
 
 let pass = 0, fail = 0;
 function eq(a, b, msg) {
@@ -241,6 +243,81 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   eq(ff.noSalesCsvRow({ id: 2, name: 'B', prefecture: '兵庫県', form_url: 'https://b.jp/c' }, { ok: true, noSales: false }), '2,B,兵庫県,https://b.jp/c,なし,\r\n', 'CSV: なし');
   eq(ff.noSalesCsvRow({ id: 3, name: 'C', prefecture: '兵庫県', form_url: 'https://c.jp/c' }, { ok: false, note: 'robots.txtで除外' }), '3,C,兵庫県,https://c.jp/c,,robots.txtで除外\r\n', 'CSV: 取得不可');
 
+
+  // ---- グループ分け(送信ツールが全社同一本文のため) ----
+  eq(G.GROUP_ORDER, ['mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'], 'グループ優先順');
+  eq(G.groupKeyOfFinding('cert_expiring'), 'cert_soon', '証明書期限間近は cert_soon');
+  eq(G.groupKeyOfFinding('cert_expired'), 'cert_expired', '期限切れ');
+  eq(G.groupKeyOfFinding(''), '', '空は無し');
+  eq(G.jstMonthJa(new Date('2026-10-25T03:00:00Z')), '2026年10月', '確認月');
+  eq(G.jstMonthJa(new Date('2026-12-31T16:00:00Z')), '2027年1月', '確認月(JST繰り上がり)');
+  const gdir = fs.mkdtempSync(path.join(os.tmpdir(), 'b2b-group-'));
+  try {
+    const gout = path.join(gdir, 'out.csv');
+    const gscan = async (url) => {
+      if (url.includes('mix')) return { results: mk({ mixed: 'bad', js_libs: 'warn' }), score: 40, grade: 'D' };
+      if (url.includes('exp')) return { results: mk({ cert: 'bad' }, { cert: '(残り-3日)' }), score: 40, grade: 'D' };
+      if (url.includes('soon')) return { results: mk({ cert: 'warn' }, { cert: '(残り10日)' }), score: 60, grade: 'C' };
+      if (url.includes('cms')) return { results: mk({ cms: 'warn' }), score: 60, grade: 'C' };
+      if (url.includes('none')) return { results: mk({ mail: 'bad' }), score: 60, grade: 'C' };
+      if (url.includes('fail')) throw Object.assign(new Error('x'), { userSafe: true });
+      return { results: mk(), score: 100, grade: 'A' };
+    };
+    const grows = [
+      ['1', '甲建設', 'mix1.jp'], ['2', '乙工業', 'mix2.jp'], ['3', '丙製作所', 'exp1.jp'], ['4', '丁建設', 'soon1.jp'], ['5', '戊工務店', 'cms1.jp'],
+      ['6', '己機械', 'none1.jp'], ['7', '庚金属', 'fail1.jp'], ['8', '辛工場', 'none2.jp'],
+    ].map(([id, name, d]) => ({ store_id: id, name, url: 'https://' + d, prefecture: '兵庫県', category: '建設会社', formUrl: 'https://' + d + '/c', captcha: 'なし', noSales: '' }));
+    await runBatch({ rows: grows, scan: gscan, out: gout, templates: T, templateMode: 'b2b', log: () => {} });
+    const recs = (() => { const t = parseDelimited(fs.readFileSync(gout, 'utf8'), ','); return t.slice(1).map((r) => Object.fromEntries(t[0].map((h, i) => [h, r[i] || '']))); })();
+    const gg = G.groupRows(recs);
+    eq(gg.groups.map((x) => [x.key, x.rows.length]), [['mixed', 2], ['cert_expired', 1], ['cert_soon', 1], ['cms', 1]], '1社1グループ・優先順・証明書は2分割(mixedとjs_libs併発はmixedのみ)');
+    eq(gg.groups.reduce((a, x) => a + x.rows.length, 0), 5, '合計=送信推奨の数');
+    eq(gg.excluded, { '初回に使える指摘なし': 2, '診断できず': 1 }, '除外理由の集計');
+    eq(gg.excludedTotal, 3, '除外合計');
+    ok(gg.groups.every((x) => x.rows.every((r) => r['送信推奨'] === 'はい')), 'グループは送信推奨=はいのみ');
+
+    const gtime = new Date('2026-10-25T03:00:00Z');
+    const gd = path.join(gdir, 'groups');
+    fs.mkdirSync(gd);
+    fs.writeFileSync(path.join(gd, 'group_mixed_99件.csv'), 'old'); // 古いファイルは消える
+    const w = G.writeGroupFiles(gd, recs, T, gtime);
+    eq(fs.readdirSync(gd).sort(), [...w.files].sort(), '古いファイルは消え、出力だけが残る');
+    eq(w.files.filter((n) => n.endsWith('.csv')).sort(), ['group_cert_expired_1件.csv', 'group_cert_soon_1件.csv', 'group_cms_1件.csv', 'group_mixed_2件.csv'], 'CSVのファイル名');
+    ok(w.files.includes('group_mixed_本文.txt') && w.files.includes('group_mixed_本文_短縮.txt') && w.files.includes('group_mixed_件名.txt') && w.files.includes('まとめ.txt'), 'txtのファイル名');
+    const adminRe = /^group_[a-z_]+_(\d+件\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)$/;
+    ok(w.files.every((n) => adminRe.test(n) || n === 'まとめ.txt'), '全ファイル名が管理画面の許可パターンに合う');
+    const csvText = fs.readFileSync(path.join(gd, 'group_mixed_2件.csv'), 'utf8');
+    ok(csvText.startsWith('﻿store_id,店名,都道府県,業種区分,URL,問い合わせURL,画像認証\r\n'), 'CSVはBOM付きUTF-8・列');
+    ok(csvText.includes('1,甲建設,兵庫県,建設,https://mix1.jp,https://mix1.jp/c,なし') && csvText.includes('2,乙工業'), 'CSVの行');
+    for (const n of w.files.filter((x) => x.endsWith('.txt') && x !== 'まとめ.txt')) {
+      const txt = fs.readFileSync(path.join(gd, n), 'utf8');
+      ok(!/[{}]/.test(txt), 'プレースホルダー残りなし: ' + n);
+      ok(!/甲建設|乙工業|丙製作所|丁建設|戊工務店|mix1|exp1|soon1|cms1/.test(txt), '会社固有の文言なし: ' + n);
+    }
+    const mixedBody = fs.readFileSync(path.join(gd, 'group_mixed_本文.txt'), 'utf8');
+    const mixedShort = fs.readFileSync(path.join(gd, 'group_mixed_本文_短縮.txt'), 'utf8');
+    ok(mixedBody.includes('2026年10月に御社サイトを確認したところ、ページの一部(画像や部品など)が暗号化されない通信で読み込まれている状態を確認しました。'), '標準本文: 確認月と指摘');
+    ok(mixedBody.includes('morisawa@stoc.co.jp 宛に') && mixedBody.includes('TEL:0120-830-046/兵庫県姫路市北条梅原町229'), '標準本文: 返信先・署名');
+    ok([...mixedShort].length < [...mixedBody].length, '短縮は標準より短い');
+    ok(mixedShort.includes('2026年10月に御社サイトを外部から確認したところ'), '短縮本文: 確認月');
+    ok(fs.readFileSync(path.join(gd, 'group_cert_soon_本文.txt'), 'utf8').includes('有効期限が近づいている'), 'cert_soon は期限間近の文言');
+    ok(fs.readFileSync(path.join(gd, 'group_cert_expired_本文.txt'), 'utf8').includes('有効期限が切れている'), 'cert_expired は期限切れの文言');
+    const subj = fs.readFileSync(path.join(gd, 'group_mixed_件名.txt'), 'utf8').trim().split('\n');
+    eq(subj.length, 3, '件名は3候補');
+    ok(subj.some((x) => x.includes('御社Webサイトの設定確認に関するご連絡')) && !subj.join('').includes('ドメイン') && !/mix1|exp1|soon1|cms1/.test(subj.join('')), '件名にドメインなし');
+    const sum = fs.readFileSync(path.join(gd, 'まとめ.txt'), 'utf8');
+    ok(sum.indexOf('mixed(') < sum.indexOf('cert_expired(') && sum.indexOf('cert_expired(') < sum.indexOf('cert_soon(') && sum.indexOf('cert_soon(') < sum.indexOf('cms('), 'まとめ: 優先順');
+    ok(sum.includes('mixed(混在コンテンツ) / 2社 / ' + [...mixedBody.replace(/\n$/, '')].length + '文字 / ' + [...mixedShort.replace(/\n$/, '')].length + '文字'), 'まとめ: 件数と文字数');
+    ok(sum.includes('初回に使える指摘なし: 2社') && sum.includes('診断できず: 1社') && sum.includes('送らない: 3社'), 'まとめ: 除外理由');
+    ok(sum.includes('1グループ=1回の送信。本文はグループごとに違います。最初の100社は送る前に人が確認してください。'), 'まとめ: 注意書き');
+    // 全社0件でもまとめは出る
+    const gd2 = path.join(gdir, 'empty');
+    const w2 = G.writeGroupFiles(gd2, [], T, gtime);
+    eq(w2.files, ['まとめ.txt'], '0件ならまとめのみ');
+  } finally { fs.rmSync(gdir, { recursive: true, force: true }); }
+  // 引数: --group-out
+  eq(parseArgs(['--template', 'b2b', '--group-out', '/x/g']).groupOut, '/x/g', '--group-out を読む');
+  eq(parseArgs(['--template', 'b2b']).groupOut, undefined, '--group-out 省略');
   console.log(`b2b: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

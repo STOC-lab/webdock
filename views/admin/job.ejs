@@ -7,6 +7,41 @@
     <a class="adm-btn adm-link" href="<%= job.downloadUrl %>">CSVをダウンロード(<%= job.exportFile %>)</a>
     <div class="adm-warn">出した店には「出力済み」の印が付いています。ダウンロードしてから画面を離れてください。</div>
   <% } %></div>
+  <% if (typeof groupView !== 'undefined' && groupView) { %>
+  <h3>送信グループ(指摘ごと・1グループ=1回の送信)</h3>
+  <div class="adm-warn">送信ツールは全社同じ本文しか送れないため、指摘ごとにグループに分けています。本文はグループごとに違います。最初の100社は送る前に人が確認してください。</div>
+  <% if (groupView.summary) { %><p><a href="<%= groupView.summary.url %>">まとめ.txt をダウンロード</a></p>
+  <textarea class="adm-input" readonly rows="<%= Math.min(14, groupView.summary.text.split('\n').length + 1) %>" style="width:100%"><%= groupView.summary.text %></textarea><% } %>
+  <% groupView.groups.forEach(function (g, i) { %>
+  <div class="adm-sub" style="margin-top:1.2em">
+    <h3><%= g.key %>(<%= g.count %>社)</h3>
+    <p><a href="<%= g.csv.url %>">宛先CSV(<%= g.csv.name %>)</a>
+      <% if (g.subject) { %> ・ <a href="<%= g.subject.url %>">件名候補</a><% } %>
+      <% if (g.body) { %> ・ <a href="<%= g.body.url %>">標準本文.txt</a><% } %>
+      <% if (g.short) { %> ・ <a href="<%= g.short.url %>">短縮本文.txt</a><% } %></p>
+    <% if (g.subject) { %><p class="adm-help">件名の候補:</p><pre class="adm-log"><%= g.subject.text %></pre><% } %>
+    <% [['標準本文', g.body], ['短縮本文', g.short]].forEach(function (b, j) { if (!b[1]) return; var id = 'ta' + i + '_' + j; %>
+    <p class="adm-help"><%= b[0] %>(<%= [...b[1].text].length %>文字)</p>
+    <textarea class="adm-input" id="<%= id %>" readonly rows="14" style="width:100%"><%= b[1].text %></textarea>
+    <p><button type="button" class="adm-mini copybtn" data-target="<%= id %>">コピー</button> <span class="adm-help copied" data-for="<%= id %>"></span></p>
+    <% }) %>
+  </div>
+  <% }) %>
+  <script>
+  (function () {
+    Array.prototype.forEach.call(document.querySelectorAll('.copybtn'), function (b) {
+      b.addEventListener('click', function () {
+        var ta = document.getElementById(b.dataset.target);
+        var msg = document.querySelector('.copied[data-for="' + b.dataset.target + '"]');
+        function done(t) { if (msg) msg.textContent = t; }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(ta.value).then(function () { done('コピーしました'); }, function () { ta.select(); done('選択しました。Ctrl+Cでコピーしてください'); });
+        } else { ta.select(); done('選択しました。Ctrl+Cでコピーしてください'); }
+      });
+    });
+  })();
+  </script>
+  <% } %>
   <h3>実行のようす(最新500行)</h3>
   <pre class="adm-log" id="log"><%= job.log.join('\n') %></pre>
   <p><a href="<%= BASE %>/">状況へ戻る</a></p>
@@ -27,6 +62,7 @@
       st.className = 'adm-badge adm-' + j.status;
       document.getElementById('times').textContent = '開始 ' + fmt(j.startedAt) + (j.endedAt ? ' ／ 終了 ' + fmt(j.endedAt) : '');
       if (j.status === 'running') { setTimeout(tick, 2000); return; }
+      if (j.groupDir) { location.reload(); return; }
       if (j.downloadUrl) {
         var dl = document.getElementById('dl');
         dl.textContent = '';

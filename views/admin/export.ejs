@@ -56,6 +56,14 @@
     <% }) %>
   </ul>
   <% } %>
+  <% if (typeof groupDirs !== 'undefined' && groupDirs.length) { %>
+  <h3>診断のグループ別ファイル(指摘ごとの宛先CSV・本文)</h3>
+  <% groupDirs.forEach(function (d) { %>
+  <details><summary><%= d.name %>(<%= d.files.length %>ファイル)</summary>
+    <ul class="adm-list"><% d.files.forEach(function (f) { %><li><a href="<%= f.url %>"><%= f.name %></a></li><% }) %></ul>
+  </details>
+  <% }) %>
+  <% } %>
 </section>
 <script>
 (function () {

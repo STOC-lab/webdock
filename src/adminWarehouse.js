@@ -37,6 +37,10 @@ const MAX_ZIP_ENTRIES = 2000;
 const IMPORT_PATTERN = 'gmp_*.csv';
 const GMP_CSV = /^gmp_.+\.csv$/i;
 const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,80}\.csv$/;
+// 「診断して文面も作る」のグループ別出力: <exportDir>/b2b_<YYYYMMDD-HHmmss>/ の中の決まった名前のファイルだけ扱う
+const GROUP_DIR = /^b2b_\d{8}-\d{6}$/;
+const GROUP_FILE = /^(?:group_[a-z_]+_(?:\d+件\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)|まとめ\.txt)$/;
+const GROUP_TEXT_MAX = 64 * 1024; // 画面に出す本文の上限
 const DEFAULT_MAIN_CATEGORY = '製造,加工,建設,工事,工務店,板金,鉄工,製作所,塗装,設備,機械,金属,工場,整備';
 const VIEWS = path.join(__dirname, '..', 'views', 'admin');
 
@@ -211,8 +215,9 @@ function buildB2bScanArgs(body, { exportDir, now }) {
   if (size === 'exclude_large') args.push('--exclude-large');
   else if (size === 'small_only') args.push('--small-only');
   const exportFile = `b2b_scan_${stamp(now)}.csv`;
-  args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile));
-  return { args, exportFile, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
+  const groupDir = `b2b_${stamp(now)}`;
+  args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile), '--group-out', path.join(exportDir, groupDir));
+  return { args, exportFile, groupDir, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
 }
 
 // ---- 倉庫の件数(読み取り専用) ----
@@ -335,10 +340,60 @@ function registerAdminWarehouse(app, deps = {}) {
       }).filter((x) => x.size >= 0).sort((a, b) => b.mtime - a.mtime).slice(0, 30);
     } catch { return []; }
   }
+  /** 診断グループの出力フォルダ(新しい順・10件まで)と、その中の検証済みファイル名 */
+  function listGroupDirs() {
+    try {
+      return fs.readdirSync(exportDir).filter((n) => GROUP_DIR.test(n)).sort().reverse().slice(0, 10).map((n) => {
+        const g = readGroupDir(n);
+        return g ? { name: n, files: g.names.sort().map((f) => ({ name: f, url: `${BASE}/exports/${n}/${encodeURIComponent(f)}` })) } : null;
+      }).filter(Boolean);
+    } catch { return []; }
+  }
   const exportExists = (name) => {
     if (!name || !EXPORT_NAME.test(name)) return false;
     try { return fs.statSync(path.join(exportDir, name)).isFile(); } catch { return false; }
   };
+
+  /** グループ出力フォルダの中身(検証済みの名前だけ)。フォルダ名が不正・無ければ null */
+  function readGroupDir(dirName) {
+    if (!dirName || !GROUP_DIR.test(dirName)) return null;
+    const dir = path.join(exportDir, dirName);
+    try {
+      if (path.dirname(dir) !== exportDir || !fs.lstatSync(dir).isDirectory()) return null;
+      return { dir, names: fs.readdirSync(dir).filter((n) => GROUP_FILE.test(n) && fs.lstatSync(path.join(dir, n)).isFile()) };
+    } catch { return null; }
+  }
+  const readText = (dir, name) => {
+    try {
+      const full = path.join(dir, name);
+      const st = fs.lstatSync(full);
+      return st.isFile() && st.size <= GROUP_TEXT_MAX ? fs.readFileSync(full, 'utf8') : '';
+    } catch { return ''; }
+  };
+  /** 画面用: グループごとの { key, count, csv, body, short, subject, bodyText, shortText, subjectText } と まとめ */
+  function groupView(dirName) {
+    const g = readGroupDir(dirName);
+    if (!g) return null;
+    const url = (n) => `${BASE}/exports/${dirName}/${encodeURIComponent(n)}`;
+    const groups = [];
+    for (const n of g.names) {
+      const m = n.match(/^group_([a-z_]+)_(\d+)件\.csv$/);
+      if (!m) continue;
+      const key = m[1];
+      const nm = { body: `group_${key}_本文.txt`, short: `group_${key}_本文_短縮.txt`, subject: `group_${key}_件名.txt` };
+      const has = (x) => g.names.includes(x);
+      groups.push({
+        key, count: Number(m[2]), csv: { name: n, url: url(n) },
+        body: has(nm.body) ? { name: nm.body, url: url(nm.body), text: readText(g.dir, nm.body) } : null,
+        short: has(nm.short) ? { name: nm.short, url: url(nm.short), text: readText(g.dir, nm.short) } : null,
+        subject: has(nm.subject) ? { name: nm.subject, url: url(nm.subject), text: readText(g.dir, nm.subject) } : null,
+      });
+    }
+    return {
+      dirName, groups,
+      summary: g.names.includes('まとめ.txt') ? { name: 'まとめ.txt', url: url('まとめ.txt'), text: readText(g.dir, 'まとめ.txt') } : null,
+    };
+  }
 
   function startJob(req, res, spec, backTo, backView) {
     const r = jobs.start(spec);
@@ -486,14 +541,14 @@ function registerAdminWarehouse(app, deps = {}) {
 
   // ===== 取り出し(CSVを作る) =====
   const exportPage = (req, res, extra = {}, status = 200) => page(req, res, 'export', {
-    nav: 'export', prefectures: PREFECTURES, defaultMain: DEFAULT_MAIN_CATEGORY, exports: listExports(), form: {}, ...extra,
+    nav: 'export', prefectures: PREFECTURES, defaultMain: DEFAULT_MAIN_CATEGORY, exports: listExports(), groupDirs: listGroupDirs(), form: {}, ...extra,
   }, status);
   router.get('/export', wrap((req, res) => exportPage(req, res)));
   router.post('/export', wrap(async (req, res) => {
     if (req.body.action === 'scan') {
       const sb = buildB2bScanArgs(req.body, { exportDir, now: now() });
       if (sb.error) return exportPage(req, res, { error: sb.error, form: req.body }, 400);
-      const sr = jobs.start({ title: '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile } });
+      const sr = jobs.start({ title: '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile, groupDir: sb.groupDir } });
       if (!sr.ok) return exportPage(req, res, { error: sr.message, runningId: sr.runningId, form: req.body }, 409);
       return res.redirect(303, `${BASE}/jobs/${sr.id}`);
     }
@@ -519,12 +574,14 @@ function registerAdminWarehouse(app, deps = {}) {
     const v = { ...j };
     v.downloadUrl = j.status === 'success' && j.meta && exportExists(j.meta.exportFile) ? `${BASE}/exports/${j.meta.exportFile}` : null;
     v.exportFile = j.meta ? j.meta.exportFile || null : null;
+    v.groupDir = j.status === 'success' && j.meta && j.meta.groupDir && readGroupDir(j.meta.groupDir) ? j.meta.groupDir : null;
     return v;
   }
   router.get('/jobs/:id', wrap(async (req, res) => {
     const j = jobs.get(req.params.id);
     if (!j) return page(req, res, 'dashboard', { nav: 'status', stats: await getStats(), jobs: jobs.list().slice(0, 10), error: 'その作業の記録が見つかりません(サーバーを再起動すると消えます)。' }, 404);
-    await page(req, res, 'job', { nav: '', job: jobView(j) });
+    const jv = jobView(j);
+    await page(req, res, 'job', { nav: '', job: jv, groupView: jv.groupDir ? groupView(jv.groupDir) : null });
   }));
   router.get('/jobs/:id/json', (req, res) => {
     const j = jobs.get(req.params.id);
@@ -550,6 +607,25 @@ function registerAdminWarehouse(app, deps = {}) {
     fs.createReadStream(full).on('error', () => res.destroy()).pipe(res);
   });
 
+  // グループ別の本文・宛先CSV: exports/b2b_<日時>/<決まった名前>
+  router.get('/exports/:dir/:file', (req, res) => {
+    const { dir: dirName, file: name } = req.params;
+    const nf = () => res.status(404).type('text/plain').send('Not Found');
+    if (!GROUP_DIR.test(dirName) || !GROUP_FILE.test(name)) return nf();
+    const dir = path.join(exportDir, dirName);
+    const full = path.join(dir, name);
+    if (path.dirname(dir) !== exportDir || path.dirname(full) !== dir) return nf();
+    let st;
+    try { if (!fs.lstatSync(dir).isDirectory()) return nf(); st = fs.lstatSync(full); } catch { return nf(); }
+    if (!st.isFile()) return nf();
+    res.set({
+      'Content-Type': name.endsWith('.csv') ? 'text/csv; charset=UTF-8' : 'text/plain; charset=UTF-8',
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'Content-Length': String(st.size),
+    });
+    fs.createReadStream(full).on('error', () => res.destroy()).pipe(res);
+  });
+
   // ===== エラー処理(内部の詳細は画面に出さない) =====
   // eslint-disable-next-line no-unused-vars
   router.use((err, req, res, next) => {
@@ -563,4 +639,4 @@ function registerAdminWarehouse(app, deps = {}) {
   return { enabled: true, uploadDir, exportDir, jobs };
 }
 
-module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };

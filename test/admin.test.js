@@ -124,7 +124,8 @@ function multipart(fields, files) {
 
   // 診断して文面も作る(batch-scan へ渡す引数)
   const sc = buildB2bScanArgs({ pref: ['兵庫県', '大阪府'], main_category: '製造、建設', size: 'exclude_large', form_found: '1', limit: '2000' }, { exportDir, now: NOW });
-  eq(sc.args, ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', '兵庫県,大阪府', '--main-category', '製造,建設', '--form-found', '--exclude-large', '--limit', '2000', '--concurrency', '5', '--out', '/x/exports/b2b_scan_20261025-101500.csv'], '診断引数');
+  eq(sc.args, ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', '兵庫県,大阪府', '--main-category', '製造,建設', '--form-found', '--exclude-large', '--limit', '2000', '--concurrency', '5', '--out', '/x/exports/b2b_scan_20261025-101500.csv', '--group-out', '/x/exports/b2b_20261025-101500'], '診断引数');
+  eq(sc.groupDir, 'b2b_20261025-101500', '診断: グループ出力フォルダ名');
   ok(!sc.args.includes('--mark'), '診断に--markなし');
   ok(/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}\.csv$/.test(sc.exportFile), '診断CSV名はダウンロード可能な名前');
   ok(buildB2bScanArgs({ pref: [] }, { exportDir, now: NOW }).error, '診断: 県なし');
@@ -263,6 +264,47 @@ function multipart(fields, files) {
     }
     eq((await ctx.req(BASE + '/exports/meo_20261025-101500.csv')).status, 302, '未ログインはダウンロード不可');
     ok((await (await ctx.req(BASE + '/export', { headers: { cookie } })).text()).includes('meo_20261025-101500.csv'), '一覧に出る');
+
+    // グループ別ファイル(診断して文面も作る)
+    const scanPost = await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ pref: ['兵庫県'], preset: 'b2b', action: 'scan', _csrf: csrf }) });
+    eq(scanPost.status, 303, '診断開始');
+    const scanSpec = ctx.jobs.started[ctx.jobs.started.length - 1];
+    const scanJobId = ctx.jobs.started.length;
+    const gdName = scanSpec.meta.groupDir;
+    ok(/^b2b_\d{8}-\d{6}$/.test(gdName) && scanSpec.args.includes('--group-out') && scanSpec.args.includes('--out'), '診断: --group-out と --out');
+    ok(scanSpec.args[scanSpec.args.indexOf('--group-out') + 1] === path.join(ctx.exportDir, gdName), '診断: group-out は設定フォルダ内');
+    const gd = path.join(ctx.exportDir, gdName);
+    fs.mkdirSync(gd);
+    fs.writeFileSync(path.join(gd, 'group_mixed_2件.csv'), '\uFEFFstore_id\r\n1\r\n');
+    fs.writeFileSync(path.join(gd, 'group_mixed_本文.txt'), 'ご担当者様 <テスト>\n本文です\n');
+    fs.writeFileSync(path.join(gd, 'group_mixed_本文_短縮.txt'), '短縮');
+    fs.writeFileSync(path.join(gd, 'group_mixed_件名.txt'), '1. 件名');
+    fs.writeFileSync(path.join(gd, 'まとめ.txt'), 'まとめ');
+    fs.writeFileSync(path.join(gd, 'secret.txt'), 'x');
+    fs.writeFileSync(path.join(gd, 'group_Bad_1件.csv'), 'x');
+    fs.writeFileSync(path.join(ctx.exportDir, 'outside.txt'), 'x');
+    const jp = await (await ctx.req(BASE + '/jobs/' + scanJobId, { headers: { cookie } })).text();
+    ok(jp.includes('group_mixed_2件.csv') && jp.includes('readonly') && jp.includes('コピー') && jp.includes('ご担当者様 &lt;テスト&gt;'), 'ジョブ画面: グループ・textarea・コピー・エスケープ');
+    ok(!jp.includes('secret.txt') && !jp.includes('group_Bad'), 'ジョブ画面: 不正名は出さない');
+    ok((await (await ctx.req(BASE + '/export', { headers: { cookie } })).text()).includes(gdName), '取り出し画面: グループフォルダ一覧');
+    const gu = (d, f) => BASE + '/exports/' + d + '/' + encodeURIComponent(f);
+    const g1 = await ctx.req(gu(gdName, 'group_mixed_本文.txt'), { headers: { cookie } });
+    eq(g1.status, 200, 'グループ本文DL');
+    eq(g1.headers.get('content-type'), 'text/plain; charset=UTF-8', 'txtはtext/plain UTF-8');
+    ok(/^attachment; /.test(g1.headers.get('content-disposition')), 'txtはattachment');
+    eq((await ctx.req(gu(gdName, 'group_mixed_2件.csv'), { headers: { cookie } })).headers.get('content-type'), 'text/csv; charset=UTF-8', 'csvはUTF-8');
+    eq((await ctx.req(gu(gdName, 'まとめ.txt'), { headers: { cookie } })).status, 200, 'まとめDL');
+    for (const [d, f] of [[gdName, 'secret.txt'], [gdName, 'group_Bad_1件.csv'], [gdName, '..%2Foutside.txt'], [gdName, '%2e%2e%2foutside.txt'], [gdName, 'group_mixed_本文.txt%00'],
+      ['..', 'outside.txt'], ['b2b_20261025', 'まとめ.txt'], ['b2b_20990101-000000', 'まとめ.txt'], ['%2e%2e', 'まとめ.txt'], [gdName, 'group_mixed_本文.csv']]) {
+      const r = await ctx.req(BASE + '/exports/' + d + '/' + (f.includes('%') ? f : encodeURIComponent(f)), { headers: { cookie } });
+      eq(r.status, 404, 'グループDL拒否: ' + d + '/' + f);
+    }
+    // シンボリックリンクは拒否
+    try {
+      fs.symlinkSync(path.join(ctx.exportDir, 'outside.txt'), path.join(gd, 'group_cms_件名.txt'));
+      eq((await ctx.req(gu(gdName, 'group_cms_件名.txt'), { headers: { cookie } })).status, 404, 'シンボリックリンクは拒否');
+    } catch (e) { if (e.code !== 'EPERM') throw e; }
+    eq((await ctx.req(gu(gdName, 'group_mixed_本文.txt'))).status, 302, '未ログインはグループDL不可');
 
     // アップロード
     const goodCsv = Buffer.from('屋号,業種\nA,B\n');

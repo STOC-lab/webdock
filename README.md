@@ -137,6 +137,23 @@ node cli/batch-scan.js --in data/promote_20261025.csv --template b2b --out data/
 - 管理画面(`/admin/warehouse` の「取り出し」→ 工場・建設用)の「診断して文面も作る」ボタンで同じ処理を実行できる(同時5件・結果は `b2b_scan_<日時>.csv`)。1サイト1〜3秒で、2,000サイトでおよそ1時間前後。
 - 営業お断りの検出: `node cli/find-forms.js --source warehouse ...` がフォームのページ(とトップ)の「営業お断り」の記載を `form_no_sales` に記録する。`warehouse-promote --form-found` も該当店を外し「営業お断りで除外: N」を表示。列がない(`sql/warehouse_migrate_004.sql` 未適用)ときは警告を出して絞り込みをスキップする。
 
+#### 5-2. グループ別に送る(送信ツールが全社同一本文のとき)
+問い合わせの送信ツールが「1回の送信=全社まったく同じ本文」しか送れない場合は、`--group-out <フォルダ>` を付ける。各社に選ばれた指摘(1社1つ)ごとにグループ分けし、グループごとに固定の本文・件名・宛先CSVを作る。会社名やドメインなどの差し込みは一切ない。
+```
+node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 --exclude-large --form-found \
+  --template b2b --limit 2000 --group-out data/b2b_20261025        # --out は省略可(省略時は <フォルダ>/scan_all.csv)
+```
+`--group-out` は `--template b2b` のときだけ使える。`--out` も併記すれば従来の1社1行CSVもそのまま出る。
+- グループ(優先順): `mixed` → `https_redirect` → `cert_expired`(期限切れ) → `cert_soon`(30日以内) → `js_libs` → `cms` → `headers` → `tls_version`。1社は最優先の1グループにだけ入る。
+- 出力(0社のグループは作らない):
+  - `group_<グループ>_<件数>件.csv`: 送信推奨=はいの会社。列は `store_id,店名,都道府県,業種区分,URL,問い合わせURL,画像認証`(UTF-8 BOM付き)
+  - `group_<グループ>_本文.txt` / `group_<グループ>_本文_短縮.txt`: そのグループ全社に送る固定本文(標準/短縮)
+  - `group_<グループ>_件名.txt`: 件名3候補(ドメインを含まないもの)
+  - `まとめ.txt`: 優先順のグループ別の件数・標準/短縮の文字数、「送らない」会社の理由別件数、注意書き
+- 手順: グループごとに1回ずつ送信ツールを動かす(CSV=宛先、本文=そのグループの本文)。**最初の100社は送る前に人が確認する。** 送る前に `まとめ.txt` を確認する。
+- 本文は `templates/outreach-b2b-group.txt` / `outreach-b2b-group-short.txt`、件名は `outreach-b2b-group-subjects.txt`。使える差し込みは `{指摘}` `{困ること}` `{確認月}`(例:2026年10月)と `outreach-config.json` の項目だけ。指摘の文言は `findings-b2b.json`(`cert_soon` は `cert_expiring` の文言)。
+- 管理画面の「診断して文面も作る」は `--group-out <書き出しフォルダ>/b2b_<日時>/` も自動で付ける。終了後の作業画面に、グループごとの宛先CSV・件名・本文のダウンロードと、本文の表示+「コピー」ボタンが出る(「取り出し」画面の一覧からもあとで取れる)。
+
 テスト: `npm run test:b2b`
 
 ## 問い合わせフォーム事前調査(フォーム探し)

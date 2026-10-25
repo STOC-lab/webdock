@@ -149,6 +149,9 @@ function loadTemplates(dir) {
     findingsB2b: opt(() => j('findings-b2b.json')),
     b2b: opt(() => t('outreach-b2b.txt')),
     b2bShort: opt(() => t('outreach-b2b-short.txt')),
+    b2bGroup: opt(() => t('outreach-b2b-group.txt')),
+    b2bGroupShort: opt(() => t('outreach-b2b-group-short.txt')),
+    groupSubjects: opt(() => t('outreach-b2b-group-subjects.txt').split(/\r?\n/).map((x) => x.trim()).filter(Boolean)),
     subjects: opt(() => t('outreach-b2b-subjects.txt').split(/\r?\n/).map((x) => x.trim()).filter(Boolean)),
   };
 }
