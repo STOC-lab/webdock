@@ -104,7 +104,9 @@ function buildWarehouseQuery(a, { noSalesCol } = {}) {
   if (a.smallOnly) where.push("size_class = 'small'");
   else if (a.excludeLarge) where.push("(size_class IS NULL OR size_class <> 'large')");
   if (a.formFound) where.push("form_status = 'url_found'");
-  if (noSalesCol) where.push('(form_no_sales IS NULL OR form_no_sales = 0)');
+  // 送信用の文面を作るので、フォームがある店は「営業お断りの記載なし」と確認済み(=0)のものだけにする。
+  // 未確認(NULL: 取得失敗・robots除外など)は送らない。find-forms --no-sales-only で確認できる。
+  if (noSalesCol) where.push(a.formFound ? 'form_no_sales = 0' : '(form_no_sales IS NULL OR form_no_sales = 0)');
   let sql = `SELECT id AS store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha${noSalesCol ? ', form_no_sales' : ''}
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;

@@ -175,6 +175,9 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   ok(!promote.buildQuery(base).sql.includes('form_no_sales'), 'フラグなしでは従来のSQL');
   const withNs = promote.buildQuery({ ...base, noSalesFilter: true }).sql;
   ok(withNs.includes('form_no_sales IS NULL OR form_no_sales = 0'), 'promote: form_no_sales=1 を外す');
+  { const bs = require('../cli/batch-scan.js');
+    const q1 = bs.buildWarehouseQuery({ formFound: true }, { noSalesCol: true }).sql;
+    ok(/form_no_sales = 0/.test(q1) && !/form_no_sales IS NULL/.test(q1), 'batch-scan: フォームありで文面を作るときは営業お断り確認済み(=0)だけ'); }
   const cnt = promote.buildNoSalesExcludedCountQuery({ ...base, noSalesFilter: true }).sql;
   ok(cnt.startsWith('SELECT COUNT(*) AS n') && cnt.endsWith('form_no_sales = 1') && !cnt.includes('ORDER BY'), 'promote: 除外件数SQL');
   // 偽プールで統計行
