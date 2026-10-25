@@ -4,6 +4,7 @@
 <div class="sales-bar">
   <span class="sales-badge">営業モード</span>
   <a class="sales-again" href="/sales">別のサイトを診断</a>
+  <a class="sales-again" href="/sales/report?url=<%= encodeURIComponent(inputUrl || scan.url) %>" target="_blank" rel="noopener">お客様用レポート(印刷用)</a>
 </div>
 
 <h1 class="page-title"><%= scan.domain %> の診断結果</h1>

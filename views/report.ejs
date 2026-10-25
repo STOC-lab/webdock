@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Webサイト 簡易点検レポート - <%= scan.domain %></title>
+<style>
+  :root { --ink:#111; --sub:#444; --line:#bbb; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#eee; color:var(--ink); font-family:"Hiragino Sans","Yu Gothic","Meiryo",sans-serif; font-size:14px; line-height:1.7; }
+  .page { max-width:210mm; margin:12px auto; background:#fff; padding:16mm 16mm 14mm; box-shadow:0 1px 6px rgba(0,0,0,.2); }
+  .toolbar { max-width:210mm; margin:12px auto 0; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .toolbar button, .copy-btn { font:inherit; padding:8px 18px; border:1px solid #333; background:#fff; border-radius:6px; cursor:pointer; }
+  .toolbar button.primary { background:#1a3a6b; color:#fff; border-color:#1a3a6b; }
+  .toolbar form { display:flex; gap:8px; align-items:center; }
+  .toolbar input { font:inherit; padding:6px 10px; border:1px solid #888; border-radius:6px; min-width:16em; }
+  h1 { font-size:22px; margin:0 0 4px; border-bottom:3px double #333; padding-bottom:6px; }
+  h2 { font-size:16px; margin:22px 0 8px; padding:3px 10px; border-left:6px solid #333; background:#f2f2f2; }
+  .meta { width:100%; border-collapse:collapse; margin:10px 0; }
+  .meta th, .meta td { border:1px solid var(--line); padding:4px 10px; text-align:left; vertical-align:top; }
+  .meta th { width:8em; background:#f6f6f6; font-weight:700; }
+  .addressee { font-size:18px; font-weight:700; margin:12px 0 0; }
+  .summary { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid #333; margin:8px 0; }
+  .summary div { padding:8px; text-align:center; border-right:1px solid var(--line); }
+  .summary div:last-child { border-right:0; }
+  .summary b { display:block; font-size:24px; }
+  .summary small { color:var(--sub); }
+  .lead { color:var(--sub); margin:2px 0 8px; font-size:13px; }
+  .item { border:1px solid var(--line); border-radius:4px; padding:8px 12px; margin:8px 0; break-inside:avoid; page-break-inside:avoid; }
+  .item h3 { margin:0 0 4px; font-size:14.5px; }
+  .tag { display:inline-block; border:1px solid #333; padding:0 8px; margin-right:8px; font-size:12px; font-weight:700; }
+  .item dl { margin:0; display:grid; grid-template-columns:8.5em 1fr; gap:2px 8px; }
+  .item dt { font-weight:700; color:var(--sub); font-size:12.5px; }
+  .item dd { margin:0; word-break:break-all; }
+  .oklist { columns:2; margin:4px 0; padding-left:1.2em; }
+  .reqbox { border:1px solid #333; padding:10px 14px; white-space:pre-wrap; word-break:break-all; font-family:inherit; margin:6px 0; background:#fafafa; break-inside:avoid; page-break-inside:avoid; }
+  .note { font-size:12.5px; color:var(--sub); }
+  .footer { margin-top:20px; border-top:1px solid #333; padding-top:8px; break-inside:avoid; }
+  .nobreak { break-inside:avoid; page-break-inside:avoid; }
+  .newpage { break-before:page; page-break-before:always; }
+  @page { size:A4; margin:12mm; }
+  @media print {
+    body { background:#fff; color:#000; font-size:11pt; }
+    .page { box-shadow:none; margin:0; padding:0; max-width:none; }
+    .no-print, .toolbar, .copy-btn { display:none !important; }
+    h2 { break-after:avoid; page-break-after:avoid; background:#fff; border:0; border-left:5px solid #000; }
+    .reqbox { background:#fff; }
+  }
+</style>
+</head>
+<body>
+<% const total = g.urgent.length + g.partial.length + g.renewal.length + g.dns.length; %>
+<div class="toolbar no-print">
+  <button type="button" class="primary" onclick="window.print()">印刷・PDF保存</button>
+  <form method="get" action="/sales/report">
+    <input type="hidden" name="url" value="<%= input %>">
+    <label>宛名(会社名) <input name="company" value="<%= company %>" placeholder="例: 株式会社○○"></label>
+    <button type="submit">反映</button>
+  </form>
+  <a href="/sales">営業モードへ戻る</a>
+  <span class="note">印刷ダイアログで「PDFに保存」を選ぶと、メール添付用のPDFになります。</span>
+</div>
+
+<div class="page">
+  <h1>Webサイト 簡易点検レポート</h1>
+  <% if (company) { %><p class="addressee"><%= company %> 御中</p><% } %>
+  <table class="meta">
+    <tr><th>対象サイト</th><td><%= scan.domain %></td></tr>
+    <tr><th>点検日</th><td><%= dateJa %></td></tr>
+    <tr><th>作成</th><td><%= sender.company %><% if (sender.name) { %> <%= sender.name %><% } %><% if (sender.tel) { %>(TEL <%= sender.tel %>)<% } %></td></tr>
+  </table>
+
+  <h2>点検の範囲</h2>
+  <p>本レポートは、どなたでも閲覧できる<strong>公開情報の範囲</strong>で、ホームページの設定状況を確認したものです。ログイン、サーバーへの侵入、負荷をかける検査は一切行っていません。結果は<strong>点検時点のもの</strong>であり、その後の設定変更により変わる場合があります。</p>
+
+  <h2>点検結果のまとめ</h2>
+  <div class="summary">
+    <% ['urgent','partial','renewal','dns'].forEach(function(b){ %>
+      <div><small><%= BUCKETS[b].label %></small><b><%= g[b].length %>件</b></div>
+    <% }) %>
+  </div>
+  <% if (total === 0) { %><p>今回の点検では、ご確認いただきたい項目は見つかりませんでした。</p><% } else { %>
+  <p class="note">ご対応は上から順(確認の優先順位が高い順)にご検討ください。「要対応」は優先して、「要確認」は状況をご確認のうえ判断いただく項目です。</p>
+  <% } %>
+
+  <% BUCKET_ORDER.forEach(function(b){ if (!g[b].length) return; %>
+  <h2><%= BUCKETS[b].label %>(<%= g[b].length %>件)</h2>
+  <p class="lead"><%= BUCKETS[b].lead %></p>
+  <% g[b].forEach(function(item){ %>
+  <div class="item">
+    <h3><span class="tag"><%= statusLabel(item.status) %></span><%= item.title %></h3>
+    <dl>
+      <dt>確認できたこと</dt><dd><%= item.summary %><% if (item.evidence) { %>(<%= item.evidence %>)<% } %></dd>
+      <% if (item.why) { %><dt>なぜ確認が必要か</dt><dd><%= item.why %></dd><% } %>
+      <dt>対応の目安</dt><dd><%= BUCKETS[b].guide %></dd>
+    </dl>
+  </div>
+  <% }) %>
+  <% }) %>
+
+  <% if (g.okItems.length) { %>
+  <h2 class="nobreak">問題が見つからなかった項目</h2>
+  <ul class="oklist"><% g.okItems.forEach(function(item){ %><li><%= item.title %></li><% }) %></ul>
+  <% } %>
+
+  <% if (siteRequest) { %>
+  <div class="newpage"></div>
+  <h2>制作会社様への確認依頼文</h2>
+  <p class="note">以下をそのままコピーして、ホームページの制作会社様・保守ご担当者様へお送りいただけます。</p>
+  <pre class="reqbox" id="req-site"><%= siteRequest %></pre>
+  <button type="button" class="copy-btn" data-target="req-site">依頼文をコピー</button>
+  <% } %>
+  <% if (dnsRequest) { %>
+  <h2>メール・ドメイン管理ご担当者様への確認依頼文</h2>
+  <p class="note">メールの設定は、ホームページの制作会社ではなく、ドメイン・メールの管理会社(またはご担当者様)が対応します。</p>
+  <pre class="reqbox" id="req-dns"><%= dnsRequest %></pre>
+  <button type="button" class="copy-btn" data-target="req-dns">依頼文をコピー</button>
+  <% } %>
+
+  <div class="footer">
+    <p>ご不明点は <%= sender.company %> <%= surname %>(TEL<%= sender.tel %>／<%= sender.mail %>)まで。どの項目から対応すべきか、部分修正とリニューアルのどちらが適しているかのご相談も承ります(15分程度・お電話またはZoom)。</p>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('.copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = document.getElementById(btn.dataset.target).textContent;
+      var done = function () { var o = btn.textContent; btn.textContent = 'コピーしました'; setTimeout(function () { btn.textContent = o; }, 1500); };
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () { fallback(text, done); }); }
+      else fallback(text, done);
+    });
+  });
+  function fallback(text, done) {
+    var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
+  }
+</script>
+</body>
+</html>

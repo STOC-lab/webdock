@@ -19,7 +19,8 @@
     "test:warehouse-db": "echo テスト専用サーバーでのみ: WEBDOCK_DB_TEST_OK=1 node test/warehouse.db.test.js",
     "test:admin": "node test/admin.test.js",
     "test:b2b": "node test/b2b.test.js",
-    "test:single": "node test/single.test.js"
+    "test:single": "node test/single.test.js",
+    "test:report": "node test/report.test.js"
   },
   "keywords": [],
   "author": "",

@@ -14,6 +14,8 @@ const { verifyTurnstile } = require('./turnstile');
 const { notifyLead } = require('./notify');
 const { PREFECTURES, routeByPrefecture, COMPANY_INFO } = require('./regions');
 const { registerAdminWarehouse } = require('./adminWarehouse');
+const { groupItems, buildRequestText, BUCKETS, BUCKET_ORDER, statusLabel } = require('./reportBuckets');
+const { loadTemplates, jstDateJa } = require('./outreach');
 
 const PORT = Number(process.env.PORT || 3020);
 const SERVICE_NAME = process.env.SERVICE_NAME || 'WEBドック';
@@ -184,12 +186,62 @@ app.post('/sales/scan', async (req, res) => {
     };
     // 記録は残す(営業現地診断)。失敗しても画面は出す。
     try { await db.saveScan({ ...scan, source: 'sales', ip }); } catch (e) { console.error('sales saveScan:', e.message); }
-    res.render('sales_result', { scan, items: sortBySeverity(results), companyInfo: COMPANY_INFO });
+    res.render('sales_result', { scan, items: sortBySeverity(results), companyInfo: COMPANY_INFO, inputUrl: input });
   } catch (e) {
     const msg = e && e.userSafe ? e.message : '診断中にエラーが発生しました。URLをご確認ください。';
     res.status(400).render('sales', { error: msg });
   }
 });
+
+// ---- お客様用 簡易レポート(印刷・PDF保存用)----
+const reportCache = new Map(); // 正規化URL -> { at, scan }
+const REPORT_TTL = 30 * 60 * 1000;
+function reportKey(input) {
+  try { const u = new URL(input); return u.protocol + '//' + u.host.toLowerCase() + u.pathname; } catch { return input; }
+}
+function reportSender() {
+  try {
+    const c = loadTemplates().config || {};
+    return { company: c['差出人会社'] || '', name: c['担当者名'] || '', tel: c['電話'] || '', mail: c['返信先メールアドレス'] || '' };
+  } catch { return { company: '', name: '', tel: '', mail: '' }; }
+}
+// 担当者名は「森澤 梓」→ 苗字だけ(フッター用)
+function surnameOf(name) { return String(name || '').trim().split(/\s+/)[0]; }
+
+app.get('/sales/report', async (req, res) => {
+  if (!salesAuthed(req)) return res.status(401).render('sales_login', { error: 'もう一度ログインしてください。' });
+  let input = String(req.query.url || '').trim();
+  if (input && !/^https?:\/\//i.test(input)) input = 'https://' + input;
+  if (!input) return res.status(400).render('sales', { error: 'URLを入力してください。' });
+  try {
+    const key = reportKey(input);
+    let hit = reportCache.get(key);
+    if (!hit || Date.now() - hit.at > REPORT_TTL) {
+      const page = await withHttpProbe(await fetchHomepage(input)); // SSRF対策済みの取得
+      const { results, counts, score, grade } = await runChecks(page);
+      hit = { at: Date.now(), scan: { domain: domainOf(input), url: page.finalUrl, results, counts, score, grade, scannedAt: new Date() } };
+      reportCache.set(key, hit);
+      if (reportCache.size > 200) { for (const [k, v] of reportCache) if (Date.now() - v.at > REPORT_TTL) reportCache.delete(k); }
+    }
+    const company = String(req.query.company || '').trim().slice(0, 100);
+    res.render('report', reportViewModel(hit.scan, company, input));
+  } catch (e) {
+    const msg = e && e.userSafe ? e.message : '診断中にエラーが発生しました。URLをご確認ください。';
+    res.status(400).render('sales', { error: msg });
+  }
+});
+
+function reportViewModel(scan, company, input) {
+  const g = groupItems(scan.results);
+  const siteItems = [...g.urgent, ...g.partial, ...g.renewal];
+  const sender = reportSender();
+  return {
+    scan, company, input, g, BUCKETS, BUCKET_ORDER, statusLabel, sender, surname: surnameOf(sender.name),
+    dateJa: jstDateJa(scan.scannedAt),
+    siteRequest: buildRequestText(siteItems, 'site', company ? company + ' 御中' : ''),
+    dnsRequest: buildRequestText(g.dns, 'dns', company ? company + ' 御中' : ''),
+  };
+}
 
 // 倉庫の管理画面(WAREHOUSE_ADMIN_PASS と ADMIN_ALLOW_IPS の両方が設定されたときだけ有効。未設定なら /admin は404)
 registerAdminWarehouse(app);
