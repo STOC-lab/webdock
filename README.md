@@ -142,7 +142,32 @@ GRANT SELECT ON stoc_sales.store_flags TO 'stoc_wh'@'localhost';
 - 管理画面(`/admin/warehouse` の「取り出し」→ 工場・建設用)の「診断して文面も作る」ボタンで同じ処理を実行できる(同時5件・結果は `b2b_scan_<日時>.csv`)。1サイト1〜3秒で、2,000サイトでおよそ1時間前後。
 - 営業お断りの検出: `node cli/find-forms.js --source warehouse ...` がフォームのページ(とトップ)の「営業お断り」の記載を `form_no_sales` に記録する。`warehouse-promote --form-found` も該当店を外し「営業お断りで除外: N」を表示。列がない(`sql/warehouse_migrate_004.sql` 未適用)ときは警告を出して絞り込みをスキップする。
 
-#### 5-2. グループ別に送る(送信ツールが全社同一本文のとき)
+#### 5-1b. 単一本文で送る(標準・推奨。結果がSTOC営業管理へ戻る)
+全社同じ本文を1回の送信で送り、会社ごとの違いは送信ツールの差し込みタグで入れる方式。`--single-out <フォルダ>` を付ける(`--template b2b` のみ。`--group-out` とは併用不可。`--out` は省略可)。
+
+```
+node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 --form-found \
+  --template b2b --limit 2000 --single-out data/b2b_20261026 [--dry-run-stoc]
+```
+- 営業管理(STOC)に登録済みの会社(倉庫の `stoc_store_id` あり)だけが対象。未登録は「営業管理に未登録」で除外。クレーム・営業お断り・画像認証・フォームURLなし・指摘なしの除外は従来どおり。
+- **STOCバッチの登録**: 診断のあと、STOC営業管理(`stoc_sales`)に `sender_YYYYmmdd_HHMMSS_xxxx` 形式のバッチを登録し(`inquiry_export_batches` / `inquiry_export_items`、`stores.exported_at` / `export_count` の更新まで1トランザクション)、そのコードを宛先CSVの7列目に入れる。送信ツールはこのコードと1列目(送信先URL)で結果をSTOCへ戻す。1バッチは最大5000社(超えたら複数バッチ)。`--dry-run-stoc` を付けるとDBには書かず、コードは `DRYRUN`(仮)になる(結果は戻らない。試し用)。`STOC_EXPORT_USER_ID`(任意)で `exported_by` を指定、`STOC_DB_NAME`(既定 `stoc_sales`)でDB名を変更。明細の `website_url` はSTOCの書き出しと同じく店舗のサイトURL(結果の突き合わせは `batch_code` + `website_url`)。送信ツールが結果を返すときのURLが送信先URL(1列目)の場合は一致しないので、その場合は `STOC_ITEM_WEBSITE_URL=form` を付けるとフォームURLを入れる。
+- 書き込み権限は**診断を始める前に**確認し、足りなければ中止して次のGRANTを表示する。root で一度実行しておく(ユーザー名・ホストは `WH_DB_USER` / `WH_DB_HOST` に合わせる):
+```
+GRANT SELECT, INSERT ON stoc_sales.inquiry_export_batches TO 'stoc_wh'@'localhost';
+GRANT SELECT, INSERT ON stoc_sales.inquiry_export_items TO 'stoc_wh'@'localhost';
+GRANT SELECT ON stoc_sales.stores TO 'stoc_wh'@'localhost';
+GRANT UPDATE (exported_at, export_count) ON stoc_sales.stores TO 'stoc_wh'@'localhost';
+```
+- 出力(`<フォルダ>/`):
+  - `send_<バッチコード>.csv`: **送信ツール用**(UTF-8 BOM付き・9列・位置固定)。ヘッダーは `送信先URL,会社名,,レポートURL,業種,評価・口コミ,STOCバッチコード,電話番号,住所`。1=問い合わせフォームURL / 2=会社名 `[company]` / 3=指摘の一文 `[name]`(ヘッダーは空欄のまま。1社ごとの指摘がここに入る) / 4=ドメイン(`www.` 除去)`[param1]` / 5=閲覧者の文言(業種区分から)`[param2]` / 6=`評価4.2(口コミ15件)`(STOCと同じ書式・なければ空)`[param3]` / 7=バッチコード / 8=電話番号(STOCと同じ優先順) / 9=住所。
+  - `本文.txt`: 全社共通の本文。`[company]` `[name]` `[param1]` `[param2]` はそのまま残す。差出人は `templates/outreach-config.json` から。
+  - `確認用.csv`: `store_id,stoc_store_id,会社名,ドメイン,業種区分,指摘,一文,送信先URL,電話番号,住所,バッチコード`
+  - `まとめ.txt`: 指摘別・除外理由別の件数、本文の文字数(典型的な値で置換)、送信前の確認事項
+  - `result.json`: 管理画面用(登録したバッチコードなど)
+- 指摘の一文は `templates/findings-b2b.json` の `一文`。業種区分は 整備 → 医療 → 製造 → 建設 → 美容 → 飲食 → その他の順で判定し、閲覧者の文言は `src/outreach.js` の `AUDIENCE`。
+- 管理画面の「診断して文面も作る」はこの方式(`--single-out <書き出しフォルダ>/b2b_<日時>/`)を使う。終了後の作業画面に、本文(コピーボタン)・送信ツール用CSV・確認用・まとめのダウンロードと、登録したSTOCバッチコードが出る。**最初の100社は送る前に人が確認する。**
+
+#### 5-2. グループ別に送る(旧方式。STOCへ結果が戻らないため通常は使わない)
 問い合わせの送信ツールが「1回の送信=全社まったく同じ本文」しか送れない場合は、`--group-out <フォルダ>` を付ける。各社に選ばれた指摘(1社1つ)ごとにグループ分けし、グループごとに固定の本文・件名・宛先CSVを作る。本文・件名・CSVには会社ごとの値は入らず、会社名とドメインは送信ツールの差し込み(差込)タグで入れる(下記)。
 ```
 node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 --exclude-large --form-found \

@@ -124,8 +124,9 @@ function multipart(fields, files) {
 
   // 診断して文面も作る(batch-scan へ渡す引数)
   const sc = buildB2bScanArgs({ pref: ['兵庫県', '大阪府'], main_category: '製造、建設', size: 'exclude_large', form_found: '1', limit: '2000' }, { exportDir, now: NOW });
-  eq(sc.args, ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', '兵庫県,大阪府', '--main-category', '製造,建設', '--form-found', '--exclude-large', '--limit', '2000', '--concurrency', '5', '--out', '/x/exports/b2b_scan_20261025-101500.csv', '--group-out', '/x/exports/b2b_20261025-101500'], '診断引数');
-  eq(sc.groupDir, 'b2b_20261025-101500', '診断: グループ出力フォルダ名');
+  eq(sc.args, ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', '兵庫県,大阪府', '--main-category', '製造,建設', '--form-found', '--exclude-large', '--limit', '2000', '--concurrency', '5', '--out', '/x/exports/b2b_scan_20261025-101500.csv', '--single-out', '/x/exports/b2b_20261025-101500'], '診断引数');
+  eq(sc.singleDir, 'b2b_20261025-101500', '診断: 出力フォルダ名');
+  ok(!sc.args.includes('--group-out') && !sc.args.includes('--dry-run-stoc'), '診断: group-out なし・STOC登録は既定で行う');
   ok(!sc.args.includes('--mark'), '診断に--markなし');
   ok(/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}\.csv$/.test(sc.exportFile), '診断CSV名はダウンロード可能な名前');
   ok(buildB2bScanArgs({ pref: [] }, { exportDir, now: NOW }).error, '診断: 県なし');
@@ -270,9 +271,10 @@ function multipart(fields, files) {
     eq(scanPost.status, 303, '診断開始');
     const scanSpec = ctx.jobs.started[ctx.jobs.started.length - 1];
     const scanJobId = ctx.jobs.started.length;
-    const gdName = scanSpec.meta.groupDir;
-    ok(/^b2b_\d{8}-\d{6}$/.test(gdName) && scanSpec.args.includes('--group-out') && scanSpec.args.includes('--out'), '診断: --group-out と --out');
-    ok(scanSpec.args[scanSpec.args.indexOf('--group-out') + 1] === path.join(ctx.exportDir, gdName), '診断: group-out は設定フォルダ内');
+    const gdName = scanSpec.meta.singleDir;
+    scanSpec.meta.groupDir = gdName; // 旧形式のグループファイルも同じフォルダにあるものとして画面表示を確認する
+    ok(/^b2b_\d{8}-\d{6}$/.test(gdName) && scanSpec.args.includes('--single-out') && scanSpec.args.includes('--out'), '診断: --single-out と --out');
+    ok(scanSpec.args[scanSpec.args.indexOf('--single-out') + 1] === path.join(ctx.exportDir, gdName), '診断: group-out は設定フォルダ内');
     const gd = path.join(ctx.exportDir, gdName);
     fs.mkdirSync(gd);
     fs.writeFileSync(path.join(gd, 'group_mixed_2件.csv'), '\uFEFFstore_id\r\n1\r\n');
@@ -281,12 +283,23 @@ function multipart(fields, files) {
     fs.writeFileSync(path.join(gd, 'group_mixed_本文_短縮.txt'), '短縮');
     fs.writeFileSync(path.join(gd, 'group_mixed_件名.txt'), '1. 件名');
     fs.writeFileSync(path.join(gd, 'まとめ.txt'), 'まとめ');
+    // 単一本文
+    const CODE = 'sender_20261026_010203_ab12';
+    fs.writeFileSync(path.join(gd, `send_${CODE}.csv`), '\uFEFF送信先URL\r\n');
+    fs.writeFileSync(path.join(gd, 'send_DRYRUN.csv'), 'x');
+    fs.writeFileSync(path.join(gd, 'send_WD-MIXED-20261025.csv'), 'x');
+    fs.writeFileSync(path.join(gd, 'send_sender_20261026_010203_AB12.csv'), 'x');
+    fs.writeFileSync(path.join(gd, '確認用.csv'), '\uFEFFstore_id\r\n');
+    fs.writeFileSync(path.join(gd, '本文.txt'), '[company]\n<単一本文>\n');
+    fs.writeFileSync(path.join(gd, 'result.json'), JSON.stringify({ dryRun: false, count: 7, batches: [{ code: CODE, count: 7, file: `send_${CODE}.csv` }, { code: 'WD-MIXED-20261025', count: 1 }, { code: 'sender_x', count: 1 }] }));
     fs.writeFileSync(path.join(gd, 'secret.txt'), 'x');
     fs.writeFileSync(path.join(gd, 'group_Bad_1件.csv'), 'x');
     fs.writeFileSync(path.join(ctx.exportDir, 'outside.txt'), 'x');
     const jp = await (await ctx.req(BASE + '/jobs/' + scanJobId, { headers: { cookie } })).text();
     ok(jp.includes('group_mixed_2件.csv') && jp.includes('group_mixed_2件_確認用.csv') && jp.includes('readonly') && jp.includes('コピー') && jp.includes('ご担当者様 &lt;テスト&gt;'), 'ジョブ画面: グループ・textarea・コピー・エスケープ');
     ok(!jp.includes('secret.txt') && !jp.includes('group_Bad'), 'ジョブ画面: 不正名は出さない');
+    ok(jp.includes(CODE) && jp.includes(`send_${CODE}.csv`) && jp.includes('確認用.csv') && jp.includes('&lt;単一本文&gt;') && jp.includes('id="singlebody"') && jp.includes('登録したバッチコード'), 'ジョブ画面: 単一本文・STOCバッチコード・コピー');
+    ok(!jp.includes('WD-MIXED') && !jp.includes('AB12') && !jp.includes('send_DRYRUN.csv'), 'ジョブ画面: 不正・未記載のバッチは出さない');
     ok((await (await ctx.req(BASE + '/export', { headers: { cookie } })).text()).includes(gdName), '取り出し画面: グループフォルダ一覧');
     const gu = (d, f) => BASE + '/exports/' + d + '/' + encodeURIComponent(f);
     const g1 = await ctx.req(gu(gdName, 'group_mixed_本文.txt'), { headers: { cookie } });
@@ -296,6 +309,14 @@ function multipart(fields, files) {
     eq((await ctx.req(gu(gdName, 'group_mixed_2件.csv'), { headers: { cookie } })).headers.get('content-type'), 'text/csv; charset=UTF-8', 'csvはUTF-8');
     eq((await ctx.req(gu(gdName, 'group_mixed_2件_確認用.csv'), { headers: { cookie } })).headers.get('content-type'), 'text/csv; charset=UTF-8', '確認用csvもDLできる');
     eq((await ctx.req(gu(gdName, 'まとめ.txt'), { headers: { cookie } })).status, 200, 'まとめDL');
+    const s1 = await ctx.req(gu(gdName, `send_${CODE}.csv`), { headers: { cookie } });
+    eq([s1.status, s1.headers.get('content-type')], [200, 'text/csv; charset=UTF-8'], '送信CSVのDL');
+    eq((await ctx.req(gu(gdName, '確認用.csv'), { headers: { cookie } })).status, 200, '確認用DL');
+    eq((await ctx.req(gu(gdName, '本文.txt'), { headers: { cookie } })).status, 200, '単一本文DL');
+    eq((await ctx.req(gu(gdName, 'send_DRYRUN.csv'), { headers: { cookie } })).status, 200, 'DRYRUN送信CSVのDL');
+    for (const bad of ['send_WD-MIXED-20261025.csv', 'send_sender_20261026_010203_AB12.csv', 'send_sender_20261026_010203_ab12.txt', 'send_.csv', 'send_DRYRUN-100.csv']) {
+      eq((await ctx.req(gu(gdName, bad), { headers: { cookie } })).status, 404, '送信CSV名の厳格化: ' + bad);
+    }
     for (const [d, f] of [[gdName, 'secret.txt'], [gdName, 'group_Bad_1件.csv'], [gdName, '..%2Foutside.txt'], [gdName, '%2e%2e%2foutside.txt'], [gdName, 'group_mixed_本文.txt%00'],
       ['..', 'outside.txt'], ['b2b_20261025', 'まとめ.txt'], ['b2b_20990101-000000', 'まとめ.txt'], ['%2e%2e', 'まとめ.txt'], [gdName, 'group_mixed_本文.csv']]) {
       const r = await ctx.req(BASE + '/exports/' + d + '/' + (f.includes('%') ? f : encodeURIComponent(f)), { headers: { cookie } });

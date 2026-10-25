@@ -30,7 +30,8 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   eq(classifyIndustry('食品製造業者'), '製造', '食品製造業者');
   eq(classifyIndustry('不明'), 'その他', '不明');
   eq(classifyIndustry(''), 'その他', '空');
-  eq(classifyIndustry('美容院,建設会社'), 'その他', '主業種(先頭)だけ見る');
+  eq(classifyIndustry('不明,建設会社'), 'その他', '主業種(先頭)だけ見る');
+  eq(classifyIndustry('美容院,建設会社'), '美容', '主業種(先頭)だけ見る(美容)');
 
   // 指摘の優先順位と除外
   eq(pickFindingB2b(mk()), null, 'すべてok');
@@ -111,7 +112,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     eq(Number(r1[col('本文文字数')]), [...r1[col('本文')]].length, '本文文字数');
     eq([r1[col('使用本文')], r1[col('問い合わせURL')], r1[col('画像認証')]], ['標準', 'https://bad.jp/contact', 'なし'], '使用本文/URL/画像認証');
     ok(r1[col('短縮本文')].includes('甲建設 ご担当者様'), '短縮本文あり');
-    eq([t[0][t[0].length - 2], t[0][t[0].length - 1], r1[col('電話番号')], r1[col('住所')]], ['電話番号', '住所', '079-222-3333', '兵庫県姫路市北条1-1'], '電話番号・住所を末尾に引き継ぐ');
+    eq([t[0][t[0].length - 3], t[0][t[0].length - 2], t[0][t[0].length - 1], r1[col('電話番号')], r1[col('住所')]], ['電話番号', '住所', 'stoc_store_id', '079-222-3333', '兵庫県姫路市北条1-1'], '電話番号・住所・stoc_store_idを末尾に引き継ぐ');
     eq(r2[col('送信推奨')], '送らない:初回に使える指摘なし', '送らない+理由');
     eq(r2[col('本文')], '', '送らない時は本文なし');
     // 従来モードの列は増えない
@@ -129,7 +130,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   try { new TextDecoder('utf-8', { fatal: true }).decode(sjis); } catch { utf8Fail = true; }
   ok(utf8Fail, 'テスト用データは UTF-8 として読めない(SJIS)');
   const pr = parseInputBuffer(sjis);
-  eq(pr[0], { store_id: '', name: '甲建設', url: 'https://a.jp', prefecture: '兵庫県', category: '建設会社', phone: '079-000-0000', address: '兵庫県姫路市北条1' }, 'SJIS 1行目(電話番号・住所も読む)');
+  eq(pr[0], { store_id: '', name: '甲建設', url: 'https://a.jp', prefecture: '兵庫県', category: '建設会社', phone: '079-000-0000', address: '兵庫県姫路市北条1', stocStoreId: '' }, 'SJIS 1行目(電話番号・住所も読む)');
   eq([pr[1].name, pr[1].url, pr[1].prefecture], ['乙製作所', '', '東京都'], 'SJIS 2行目');
   eq(parseInputBuffer(Buffer.from('﻿' + csv, 'utf8'))[0].name, '甲建設', 'UTF-8(BOM)も読める');
 

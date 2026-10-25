@@ -48,20 +48,31 @@ function fillTemplate(text, vars) {
 
 /* ---------- B2B(建設・製造)向け ---------- */
 
+// 判定は上から順(最初に当てはまったもの)。新しい業種を足すときはここと AUDIENCE に1行ずつ足す。
 const INDUSTRY_RES = [
   ['整備', /整備|車検/],
+  ['医療', /医院|クリニック|病院|歯科|診療所|整骨|接骨|鍼|整体|動物病院/],
   ['製造', /製造|加工|製作所|鉄工|金属|機械|工場|部品|プラスチック|樹脂|印刷|メーカー|食品|水産加工/],
   ['建設', /建設|建築|工務店|工事|住宅|リフォーム|塗装|板金施工|内装|解体|土木|設備|電気|空調|給水|造園|エクステリア|左官|足場/],
+  ['美容', /美容|理容|ヘア|ネイル|エステ|まつ|サロン|脱毛/],
+  ['飲食', /レストラン|食堂|居酒屋|料理|カフェ|喫茶|ラーメン|寿司|焼肉|そば|うどん|バー|ダイニング|弁当(?!製造)|ベーカリー|パン/],
 ];
+// 旧形式(1社ごとの本文)で使う閲覧者
 const VIEWER = { 建設: '協力会社様・発注者様・求職者様', 製造: '取引先様・調達ご担当者様・求職者様', 整備: 'お客様・取引先様・求職者様', その他: '取引先様・求職者様' };
+// 単一本文([param2])で使う「サイトをご覧になる人」。業種区分 → 文言
+const AUDIENCE = {
+  建設: '協力会社様・発注者様・求職者様', 製造: '取引先様・調達ご担当者様・求職者様', 整備: 'お客様・取引先様・求職者様',
+  飲食: 'お客様・ご予約のお客様', 美容: 'お客様・ご予約のお客様', 医療: '患者様・ご家族様', その他: 'お客様・取引先様',
+};
 
-/** 業種(複数あれば先頭=主業種)から 建設/製造/整備/その他 に分類する。整備 → 製造 → 建設 の順に判定 */
+/** 業種(複数あれば先頭=主業種)から 整備/医療/製造/建設/美容/飲食/その他 に分類する */
 function classifyIndustry(category) {
   const main = String(category || '').split(/[、,，]/)[0].trim();
   for (const [name, re] of INDUSTRY_RES) if (re.test(main)) return name;
   return 'その他';
 }
 const viewerOf = (industry) => VIEWER[industry] || VIEWER.その他;
+const audienceOf = (industry) => AUDIENCE[industry] || AUDIENCE.その他;
 
 /** 診断日を「2026年10月25日」(日本時間)の形にする */
 function jstDateJa(d) {
@@ -151,6 +162,7 @@ function loadTemplates(dir) {
     findingsB2b: opt(() => j('findings-b2b.json')),
     b2b: opt(() => t('outreach-b2b.txt')),
     b2bShort: opt(() => t('outreach-b2b-short.txt')),
+    b2bSingle: opt(() => t('outreach-b2b-single.txt')),
     b2bGroup: opt(() => t('outreach-b2b-group.txt')),
     b2bGroupShort: opt(() => t('outreach-b2b-group-short.txt')),
     groupSubjects: opt(() => t('outreach-b2b-group-subjects.txt').split(/\r?\n/).map((x) => x.trim()).filter(Boolean)),
@@ -158,4 +170,4 @@ function loadTemplates(dir) {
   };
 }
 
-module.exports = { JUDGE, pickFinding, shouldSend, regionOf, fillTemplate, loadTemplates, classifyIndustry, pickFindingB2b, buildB2bMessage, jstDateJa, viewerOf };
+module.exports = { JUDGE, pickFinding, shouldSend, regionOf, fillTemplate, loadTemplates, classifyIndustry, pickFindingB2b, buildB2bMessage, jstDateJa, viewerOf, audienceOf, AUDIENCE, INDUSTRY_RES };

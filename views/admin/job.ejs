@@ -7,6 +7,38 @@
     <a class="adm-btn adm-link" href="<%= job.downloadUrl %>">CSVをダウンロード(<%= job.exportFile %>)</a>
     <div class="adm-warn">出した店には「出力済み」の印が付いています。ダウンロードしてから画面を離れてください。</div>
   <% } %></div>
+  <% if (typeof singleView !== 'undefined' && singleView) { %>
+  <h3>送信用ファイル(全社共通の本文・1つの宛先CSV)</h3>
+  <% if (singleView.dryRun) { %><div class="adm-warn">STOC未登録(試し)です。バッチコードは仮で、このまま送信しても結果はSTOCへ戻りません。</div>
+  <% } else { %><div class="adm-help">STOC営業管理に登録したバッチコード(送信結果はこのコードでSTOCへ戻ります):</div>
+  <% } %>
+  <ul class="adm-list"><% singleView.batches.forEach(function (b) { %>
+    <li><strong><%= b.code %></strong>(<%= b.count %>社) ・ <a href="<%= b.url %>">送信ツール用CSV(<%= b.file %>)</a></li>
+  <% }) %></ul>
+  <p><% if (singleView.check) { %><a href="<%= singleView.check.url %>">確認用.csv</a><% } %>
+    <% if (singleView.summary) { %> ・ <a href="<%= singleView.summary.url %>">まとめ.txt</a><% } %>
+    <% if (singleView.body) { %> ・ <a href="<%= singleView.body.url %>">本文.txt</a><% } %></p>
+  <% if (singleView.summary) { %><textarea class="adm-input" readonly rows="<%= Math.min(24, singleView.summary.text.split('\n').length + 1) %>" style="width:100%"><%= singleView.summary.text %></textarea><% } %>
+  <% if (singleView.body) { %>
+  <p class="adm-help">本文(送信ツールの本文欄にそのまま貼り付け。[company] [name] [param1] [param2] は送信ツールが差し込みます)</p>
+  <textarea class="adm-input" id="singlebody" readonly rows="18" style="width:100%"><%= singleView.body.text %></textarea>
+  <p><button type="button" class="adm-mini copybtn" data-target="singlebody">コピー</button> <span class="adm-help copied" data-for="singlebody"></span></p>
+  <script>
+  (function () {
+    Array.prototype.forEach.call(document.querySelectorAll('.copybtn'), function (b) {
+      b.addEventListener('click', function () {
+        var ta = document.getElementById(b.dataset.target);
+        var msg = document.querySelector('.copied[data-for="' + b.dataset.target + '"]');
+        function done(t) { if (msg) msg.textContent = t; }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(ta.value).then(function () { done('コピーしました'); }, function () { ta.select(); done('選択しました。Ctrl+Cでコピーしてください'); });
+        } else { ta.select(); done('選択しました。Ctrl+Cでコピーしてください'); }
+      });
+    });
+  })();
+  </script>
+  <% } %>
+  <% } %>
   <% if (typeof groupView !== 'undefined' && groupView) { %>
   <h3>送信グループ(指摘ごと・1グループ=1回の送信)</h3>
   <div class="adm-warn">送信ツールは全社同じ本文しか送れないため、指摘ごとにグループに分けています。本文はグループごとに違います。最初の100社は送る前に人が確認してください。</div>
@@ -63,7 +95,7 @@
       st.className = 'adm-badge adm-' + j.status;
       document.getElementById('times').textContent = '開始 ' + fmt(j.startedAt) + (j.endedAt ? ' ／ 終了 ' + fmt(j.endedAt) : '');
       if (j.status === 'running') { setTimeout(tick, 2000); return; }
-      if (j.groupDir) { location.reload(); return; }
+      if (j.groupDir || j.singleDir) { location.reload(); return; }
       if (j.downloadUrl) {
         var dl = document.getElementById('dl');
         dl.textContent = '';

@@ -1,7 +1,7 @@
 'use strict';
 /**
  * 一括診断(問い合わせ営業用)
- * node cli/batch-scan.js --in list.tsv --out result.csv [--group-out dir(b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--resume]
+ * node cli/batch-scan.js --in list.tsv --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--resume]
  * 入力は TSV/CSV(UTF-8 または Shift_JIS。warehouse-promote の11列CSVもそのまま使える)。
  * グループ本文の差し込みタグ: --merge-tags '{"会社名":"%company%","ドメイン":"%domain%"}' (省略時は outreach-config.json の「差し込みタグ」)
  * 倉庫から直接: node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 [--exclude-large|--small-only]
@@ -20,7 +20,7 @@ const COLUMNS = ['store_id', '店名', '都道府県', '業種', 'URL', 'ドメ�
   'ヘッダー', 'Cookie', '混在', 'CMS露出', 'JSライブラリ', '外部スクリプト', 'なりすまし対策', '指摘種別', '指摘', '困ること',
   '送信推奨', '本文', 'エラー', '診断日時'];
 // B2Bモードだけ末尾に足す列
-const B2B_COLUMNS = ['業種区分', '件名', '本文文字数', '短縮本文', '使用本文', '問い合わせURL', '画像認証', '営業お断り', '電話番号', '住所'];
+const B2B_COLUMNS = ['業種区分', '件名', '本文文字数', '短縮本文', '使用本文', '問い合わせURL', '画像認証', '営業お断り', '電話番号', '住所', 'stoc_store_id'];
 const ITEM_KEYS = ['cert', 'https_redirect', 'tls_version', 'headers', 'cookies', 'mixed', 'cms', 'js_libs', 'ext_scripts', 'mail'];
 
 const ALIASES = {
@@ -30,6 +30,7 @@ const ALIASES = {
   prefecture: ['prefecture', '都道府県'],
   category: ['category', '業種'],
   phone: ['phone', '電話番号', '電話'],
+  stoc: ['stoc_store_id', 'stoc_id'], // 営業管理(STOC)の店舗ID。--single-out のとき必須
   address: ['address', '住所', 'address_raw'], // 都道府県の列がないとき、先頭の都道府県名から補う
 };
 
@@ -79,7 +80,7 @@ function parseInput(text) {
   return table.slice(1).map((r) => ({
     store_id: cell(r, 'store_id'), name: cell(r, 'name'), url: cell(r, 'url'),
     prefecture: cell(r, 'prefecture') || wh.prefectureOf(cell(r, 'address')) || '', category: cell(r, 'category'),
-    phone: cell(r, 'phone'), address: cell(r, 'address'),
+    phone: cell(r, 'phone'), address: cell(r, 'address'), stocStoreId: cell(r, 'stoc'),
   }));
 }
 
@@ -185,7 +186,7 @@ function warehouseWhere(a, { noSalesCol, storeFlags } = {}) {
 function buildWarehouseQuery(a, { noSalesCol, storeFlags } = {}) {
   const { where, params } = warehouseWhere(a, { noSalesCol, storeFlags });
   where.push(...claimConditions({ storeFlags }).notClaim);
-  let sql = `SELECT id AS store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha, phone, address_raw${noSalesCol ? ', form_no_sales' : ''}
+  let sql = `SELECT id AS store_id, stoc_store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha, phone, address_raw${noSalesCol ? ', form_no_sales' : ''}
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;
   if (a.limit > 0) { sql += '\nLIMIT ?'; params.push(a.limit); }
@@ -217,7 +218,7 @@ async function loadWarehouseRows(a) {
       store_id: String(r.store_id), name: r.name || '', url: r.url || '', prefecture: r.prefecture || '', category: r.category || '',
       formUrl: r.form_url || '', captcha: r.form_captcha === null || r.form_captcha === undefined ? '' : (Number(r.form_captcha) ? 'あり' : 'なし'),
       noSales: Number(r.form_no_sales) === 1 ? 'あり' : '',
-      phone: r.phone || '', address: r.address_raw || '',
+      phone: r.phone || '', address: r.address_raw || '', stocStoreId: r.stoc_store_id === null || r.stoc_store_id === undefined ? '' : String(r.stoc_store_id),
     }));
   } finally { await pool.end(); }
 }
@@ -341,7 +342,7 @@ async function runBatch({ rows, scan, out, templates, concurrency = 5, templateM
       if (!rec.send) sendCell = '送らない' + (rec.error ? ':診断できず' : rec.reason ? ':' + rec.reason : '');
       const m = rec.b2b;
       extra = [m ? m.industry : '', m ? m.subject : '', m ? m.length : '', m ? m.shortBody : '', m ? m.use : '',
-        row.formUrl || '', row.captcha || '', row.noSales || '', row.phone || '', row.address || ''];
+        row.formUrl || '', row.captcha || '', row.noSales || '', row.phone || '', row.address || '', row.stocStoreId || ''];
     }
     fs.appendFileSync(out, csvLine([
       row.store_id, row.name, row.prefecture, row.category, row.url, rec.domain, rec.grade, rec.score, ...items,
@@ -382,6 +383,8 @@ function parseArgs(argv) {
     else if (k === '--limit') a.limit = parseInt(argv[++i], 10);
     else if (k === '--template') a.template = argv[++i];
     else if (k === '--group-out') a.groupOut = argv[++i];
+    else if (k === '--single-out') a.singleOut = argv[++i];
+    else if (k === '--dry-run-stoc') a.dryRunStoc = true;
     else if (k === '--merge-tags') a.mergeTags = argv[++i];
     else if (k === '--resume') a.resume = true;
     else if (k === '--source') a.source = argv[++i];
@@ -401,10 +404,11 @@ async function main() {
   const fromWh = a.source === 'warehouse';
   // --group-out(b2bのみ)があれば --out は省略可。省略時は <group-out>/scan_all.csv に全件の診断結果を書く
   if (a.groupOut && !a.out && a.template === 'b2b') a.out = path.join(a.groupOut, 'scan_all.csv');
-  if ((!a.in && !fromWh) || !a.out || (a.groupOut && a.template !== 'b2b') || !['west', 'east', 'auto', 'b2b'].includes(a.template) || (a.source && !fromWh)
+  if (a.singleOut && !a.out && a.template === 'b2b') a.out = path.join(a.singleOut, 'scan_all.csv');
+  if ((!a.in && !fromWh) || !a.out || (a.groupOut && a.template !== 'b2b') || (a.singleOut && (a.template !== 'b2b' || a.groupOut)) || (a.dryRunStoc && !a.singleOut) || !['west', 'east', 'auto', 'b2b'].includes(a.template) || (a.source && !fromWh)
     || (a.subject !== undefined && !(a.subject >= 1 && a.subject <= 3))) {
     console.error('使い方: node cli/batch-scan.js (--in list.tsv | --source warehouse --prefecture 兵庫県 [--main-category 製造,建設] [--exclude-large|--small-only] [--form-found])\n'
-      + '        --out result.csv [--group-out dir(b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]');
+      + '        --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]');
     process.exit(2);
   }
   let mergeTags;
@@ -416,6 +420,13 @@ async function main() {
       console.error('--merge-tags は {"会社名":"%company%","ドメイン":"%domain%"} のようなJSONで指定してください。');
       process.exit(2);
     }
+  }
+  // 単一本文: STOC営業管理に書けるか、診断(数時間かかる)の前に確認する。書けなければここで中止
+  let stocPool = null;
+  if (a.singleOut) {
+    try { require('dotenv').config(); } catch { /* なくても動く */ }
+    stocPool = require('../src/stocBatch').createStocPool();
+    try { await require('../src/stocBatch').checkStocAccess(stocPool, { readOnly: !!a.dryRunStoc }); } catch (e) { await stocPool.end(); throw e; }
   }
   let rows;
   if (fromWh) rows = await loadWarehouseRows(a);
@@ -441,9 +452,27 @@ async function main() {
     const g = writeGroupFiles(a.groupOut, recs, loadTemplates(), new Date(), mergeTags);
     console.error(`グループ出力: ${a.groupOut} に ${g.files.length}ファイル(グループ ${g.summary.length}個 / 送らない ${g.excludedTotal}社)。まとめ.txt を確認してください。`);
   }
+  if (a.singleOut) {
+    try {
+      const table = parseDelimited(fs.readFileSync(a.out, 'utf8'), ',');
+      const head = table[0] || [];
+      const recs = table.slice(1).map((r) => Object.fromEntries(head.map((h, i) => [h, r[i] || ''])));
+      const S = require('../src/stocBatch');
+      const { buildSingleFiles } = require('../src/outreachSingle');
+      const now = new Date();
+      const uid = process.env.STOC_EXPORT_USER_ID;
+      const res = await buildSingleFiles({
+        rows: recs, outDir: a.singleOut, templates: loadTemplates(), now, dryRun: !!a.dryRunStoc,
+        userId: /^\d+$/.test(uid || '') ? Number(uid) : null, memoDate: new Date(now.getTime() + 9 * 3600e3).toISOString().slice(0, 10),
+        filter: { prefecture: a.prefecture || '', main_category: a.mainCategory || '', exclude_large: !!a.excludeLarge, small_only: !!a.smallOnly, form_found: !!a.formFound, limit: a.limit || 0 },
+        stoc: { fetchStores: (ids) => S.fetchStocStores(stocPool, ids), register: (o) => S.registerBatch(stocPool, o) },
+      });
+      console.error(`単一本文出力: ${a.singleOut} に ${res.files.length}ファイル / 送信対象 ${res.items.length}社 / バッチ ${res.batches.map((b) => b.code + '(' + b.count + ')').join(', ') || 'なし'}${a.dryRunStoc ? ' [STOC未登録]' : ' [STOC登録済み]'}。まとめ.txt を確認してください。`);
+    } finally { await stocPool.end(); }
+  }
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
 module.exports = { runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
-if (require.main === module) main().catch((e) => { console.error(e && e.claimCheck ? 'エラー: ' + e.message : e); process.exit(1); });
+if (require.main === module) main().catch((e) => { console.error(e && (e.claimCheck || e.stocCheck) ? 'エラー: ' + e.message : e); process.exit(1); });

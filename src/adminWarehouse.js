@@ -40,6 +40,9 @@ const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,80}\.csv$/;
 // 「診断して文面も作る」のグループ別出力: <exportDir>/b2b_<YYYYMMDD-HHmmss>/ の中の決まった名前のファイルだけ扱う
 const GROUP_DIR = /^b2b_\d{8}-\d{6}$/;
 const GROUP_FILE = /^(?:group_[a-z_]+_(?:\d+件(?:_確認用)?\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)|まとめ\.txt)$/;
+// 単一本文方式のフォルダ内: send_<STOCバッチコード>.csv / 確認用.csv / 本文.txt / まとめ.txt / result.json (バッチコードは sender_YYYYmmdd_HHMMSS_xxxx か DRYRUN, DRYRUN-2…)
+const SINGLE_FILE = /^(?:send_(?:sender_\d{8}_\d{6}_[0-9a-f]{4}|DRYRUN(?:-\d{1,2})?)\.csv|確認用\.csv|本文\.txt|まとめ\.txt|result\.json)$/;
+const SENDER_CODE = /^(?:sender_\d{8}_\d{6}_[0-9a-f]{4}|DRYRUN(?:-\d{1,2})?)$/;
 const GROUP_TEXT_MAX = 64 * 1024; // 画面に出す本文の上限
 const DEFAULT_MAIN_CATEGORY = '製造,加工,建設,工事,工務店,板金,鉄工,製作所,塗装,設備,機械,金属,工場,整備';
 const VIEWS = path.join(__dirname, '..', 'views', 'admin');
@@ -215,9 +218,9 @@ function buildB2bScanArgs(body, { exportDir, now }) {
   if (size === 'exclude_large') args.push('--exclude-large');
   else if (size === 'small_only') args.push('--small-only');
   const exportFile = `b2b_scan_${stamp(now)}.csv`;
-  const groupDir = `b2b_${stamp(now)}`;
-  args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile), '--group-out', path.join(exportDir, groupDir));
-  return { args, exportFile, groupDir, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
+  const singleDir = `b2b_${stamp(now)}`;
+  args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile), '--single-out', path.join(exportDir, singleDir));
+  return { args, exportFile, singleDir, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
 }
 
 // ---- 倉庫の件数(読み取り専用) ----
@@ -360,7 +363,7 @@ function registerAdminWarehouse(app, deps = {}) {
     const dir = path.join(exportDir, dirName);
     try {
       if (path.dirname(dir) !== exportDir || !fs.lstatSync(dir).isDirectory()) return null;
-      return { dir, names: fs.readdirSync(dir).filter((n) => GROUP_FILE.test(n) && fs.lstatSync(path.join(dir, n)).isFile()) };
+      return { dir, names: fs.readdirSync(dir).filter((n) => (GROUP_FILE.test(n) || SINGLE_FILE.test(n)) && fs.lstatSync(path.join(dir, n)).isFile()) };
     } catch { return null; }
   }
   const readText = (dir, name) => {
@@ -394,6 +397,25 @@ function registerAdminWarehouse(app, deps = {}) {
     return {
       dirName, groups,
       summary: g.names.includes('まとめ.txt') ? { name: 'まとめ.txt', url: url('まとめ.txt'), text: readText(g.dir, 'まとめ.txt') } : null,
+    };
+  }
+
+  /** 単一本文の画面用: 本文・送信CSV(バッチごと)・確認用・まとめ・登録したSTOCバッチコード。result.json が無い/壊れていれば null */
+  function singleView(dirName) {
+    const g = readGroupDir(dirName);
+    if (!g || !g.names.includes('result.json')) return null;
+    let r;
+    try { r = JSON.parse(readText(g.dir, 'result.json')); } catch { return null; }
+    if (!r || !Array.isArray(r.batches)) return null;
+    const url = (n) => `${BASE}/exports/${dirName}/${encodeURIComponent(n)}`;
+    const batches = r.batches.filter((b) => b && SENDER_CODE.test(String(b.code)) && g.names.includes(`send_${b.code}.csv`))
+      .map((b) => ({ code: b.code, count: Number(b.count) || 0, file: `send_${b.code}.csv`, url: url(`send_${b.code}.csv`) }));
+    const link = (n) => (g.names.includes(n) ? { name: n, url: url(n) } : null);
+    return {
+      dirName, dryRun: !!r.dryRun, count: Number(r.count) || 0, batches,
+      body: g.names.includes('本文.txt') ? { ...link('本文.txt'), text: readText(g.dir, '本文.txt') } : null,
+      check: link('確認用.csv'),
+      summary: g.names.includes('まとめ.txt') ? { ...link('まとめ.txt'), text: readText(g.dir, 'まとめ.txt') } : null,
     };
   }
 
@@ -550,7 +572,7 @@ function registerAdminWarehouse(app, deps = {}) {
     if (req.body.action === 'scan') {
       const sb = buildB2bScanArgs(req.body, { exportDir, now: now() });
       if (sb.error) return exportPage(req, res, { error: sb.error, form: req.body }, 400);
-      const sr = jobs.start({ title: '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile, groupDir: sb.groupDir } });
+      const sr = jobs.start({ title: '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile, singleDir: sb.singleDir } });
       if (!sr.ok) return exportPage(req, res, { error: sr.message, runningId: sr.runningId, form: req.body }, 409);
       return res.redirect(303, `${BASE}/jobs/${sr.id}`);
     }
@@ -577,13 +599,14 @@ function registerAdminWarehouse(app, deps = {}) {
     v.downloadUrl = j.status === 'success' && j.meta && exportExists(j.meta.exportFile) ? `${BASE}/exports/${j.meta.exportFile}` : null;
     v.exportFile = j.meta ? j.meta.exportFile || null : null;
     v.groupDir = j.status === 'success' && j.meta && j.meta.groupDir && readGroupDir(j.meta.groupDir) ? j.meta.groupDir : null;
+    v.singleDir = j.status === 'success' && j.meta && j.meta.singleDir && readGroupDir(j.meta.singleDir) ? j.meta.singleDir : null;
     return v;
   }
   router.get('/jobs/:id', wrap(async (req, res) => {
     const j = jobs.get(req.params.id);
     if (!j) return page(req, res, 'dashboard', { nav: 'status', stats: await getStats(), jobs: jobs.list().slice(0, 10), error: 'その作業の記録が見つかりません(サーバーを再起動すると消えます)。' }, 404);
     const jv = jobView(j);
-    await page(req, res, 'job', { nav: '', job: jv, groupView: jv.groupDir ? groupView(jv.groupDir) : null });
+    await page(req, res, 'job', { nav: '', job: jv, groupView: jv.groupDir ? groupView(jv.groupDir) : null, singleView: jv.singleDir ? singleView(jv.singleDir) : null });
   }));
   router.get('/jobs/:id/json', (req, res) => {
     const j = jobs.get(req.params.id);
@@ -613,7 +636,7 @@ function registerAdminWarehouse(app, deps = {}) {
   router.get('/exports/:dir/:file', (req, res) => {
     const { dir: dirName, file: name } = req.params;
     const nf = () => res.status(404).type('text/plain').send('Not Found');
-    if (!GROUP_DIR.test(dirName) || !GROUP_FILE.test(name)) return nf();
+    if (!GROUP_DIR.test(dirName) || !(GROUP_FILE.test(name) || SINGLE_FILE.test(name))) return nf();
     const dir = path.join(exportDir, dirName);
     const full = path.join(dir, name);
     if (path.dirname(dir) !== exportDir || path.dirname(full) !== dir) return nf();
@@ -621,7 +644,7 @@ function registerAdminWarehouse(app, deps = {}) {
     try { if (!fs.lstatSync(dir).isDirectory()) return nf(); st = fs.lstatSync(full); } catch { return nf(); }
     if (!st.isFile()) return nf();
     res.set({
-      'Content-Type': name.endsWith('.csv') ? 'text/csv; charset=UTF-8' : 'text/plain; charset=UTF-8',
+      'Content-Type': name.endsWith('.csv') ? 'text/csv; charset=UTF-8' : name.endsWith('.json') ? 'application/json; charset=UTF-8' : 'text/plain; charset=UTF-8',
       'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
       'Content-Length': String(st.size),
     });
@@ -641,4 +664,4 @@ function registerAdminWarehouse(app, deps = {}) {
   return { enabled: true, uploadDir, exportDir, jobs };
 }
 
-module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
