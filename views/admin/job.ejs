@@ -15,7 +15,8 @@
   <% groupView.groups.forEach(function (g, i) { %>
   <div class="adm-sub" style="margin-top:1.2em">
     <h3><%= g.key %>(<%= g.count %>社)</h3>
-    <p><a href="<%= g.csv.url %>">宛先CSV(<%= g.csv.name %>)</a>
+    <p><a href="<%= g.csv.url %>">送信ツール用CSV(<%= g.csv.name %>)</a>
+      <% if (g.check) { %> ・ <a href="<%= g.check.url %>">確認用CSV(<%= g.check.name %>)</a><% } %>
       <% if (g.subject) { %> ・ <a href="<%= g.subject.url %>">件名候補</a><% } %>
       <% if (g.body) { %> ・ <a href="<%= g.body.url %>">標準本文.txt</a><% } %>
       <% if (g.short) { %> ・ <a href="<%= g.short.url %>">短縮本文.txt</a><% } %></p>

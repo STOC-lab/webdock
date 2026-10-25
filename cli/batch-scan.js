@@ -20,7 +20,7 @@ const COLUMNS = ['store_id', '店名', '都道府県', '業種', 'URL', 'ドメ�
   'ヘッダー', 'Cookie', '混在', 'CMS露出', 'JSライブラリ', '外部スクリプト', 'なりすまし対策', '指摘種別', '指摘', '困ること',
   '送信推奨', '本文', 'エラー', '診断日時'];
 // B2Bモードだけ末尾に足す列
-const B2B_COLUMNS = ['業種区分', '件名', '本文文字数', '短縮本文', '使用本文', '問い合わせURL', '画像認証', '営業お断り'];
+const B2B_COLUMNS = ['業種区分', '件名', '本文文字数', '短縮本文', '使用本文', '問い合わせURL', '画像認証', '営業お断り', '電話番号', '住所'];
 const ITEM_KEYS = ['cert', 'https_redirect', 'tls_version', 'headers', 'cookies', 'mixed', 'cms', 'js_libs', 'ext_scripts', 'mail'];
 
 const ALIASES = {
@@ -29,7 +29,8 @@ const ALIASES = {
   url: ['url', 'website_url', 'ウェブサイト', '登録url'],
   prefecture: ['prefecture', '都道府県'],
   category: ['category', '業種'],
-  address: ['address', '住所'], // 都道府県の列がないとき、先頭の都道府県名から補う
+  phone: ['phone', '電話番号', '電話'],
+  address: ['address', '住所', 'address_raw'], // 都道府県の列がないとき、先頭の都道府県名から補う
 };
 
 /* ---------- CSV/TSV ---------- */
@@ -78,6 +79,7 @@ function parseInput(text) {
   return table.slice(1).map((r) => ({
     store_id: cell(r, 'store_id'), name: cell(r, 'name'), url: cell(r, 'url'),
     prefecture: cell(r, 'prefecture') || wh.prefectureOf(cell(r, 'address')) || '', category: cell(r, 'category'),
+    phone: cell(r, 'phone'), address: cell(r, 'address'),
   }));
 }
 
@@ -109,7 +111,7 @@ function buildWarehouseQuery(a, { noSalesCol } = {}) {
   // 送信用の文面を作るので、フォームがある店は「営業お断りの記載なし」と確認済み(=0)のものだけにする。
   // 未確認(NULL: 取得失敗・robots除外など)は送らない。find-forms --no-sales-only で確認できる。
   if (noSalesCol) where.push(a.formFound ? 'form_no_sales = 0' : '(form_no_sales IS NULL OR form_no_sales = 0)');
-  let sql = `SELECT id AS store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha${noSalesCol ? ', form_no_sales' : ''}
+  let sql = `SELECT id AS store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha, phone, address_raw${noSalesCol ? ', form_no_sales' : ''}
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;
   if (a.limit > 0) { sql += '\nLIMIT ?'; params.push(a.limit); }
@@ -129,6 +131,7 @@ async function loadWarehouseRows(a) {
       store_id: String(r.store_id), name: r.name || '', url: r.url || '', prefecture: r.prefecture || '', category: r.category || '',
       formUrl: r.form_url || '', captcha: r.form_captcha === null || r.form_captcha === undefined ? '' : (Number(r.form_captcha) ? 'あり' : 'なし'),
       noSales: Number(r.form_no_sales) === 1 ? 'あり' : '',
+      phone: r.phone || '', address: r.address_raw || '',
     }));
   } finally { await pool.end(); }
 }
@@ -252,7 +255,7 @@ async function runBatch({ rows, scan, out, templates, concurrency = 5, templateM
       if (!rec.send) sendCell = '送らない' + (rec.error ? ':診断できず' : rec.reason ? ':' + rec.reason : '');
       const m = rec.b2b;
       extra = [m ? m.industry : '', m ? m.subject : '', m ? m.length : '', m ? m.shortBody : '', m ? m.use : '',
-        row.formUrl || '', row.captcha || '', row.noSales || ''];
+        row.formUrl || '', row.captcha || '', row.noSales || '', row.phone || '', row.address || ''];
     }
     fs.appendFileSync(out, csvLine([
       row.store_id, row.name, row.prefecture, row.category, row.url, rec.domain, rec.grade, rec.score, ...items,

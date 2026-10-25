@@ -276,6 +276,7 @@ function multipart(fields, files) {
     const gd = path.join(ctx.exportDir, gdName);
     fs.mkdirSync(gd);
     fs.writeFileSync(path.join(gd, 'group_mixed_2件.csv'), '\uFEFFstore_id\r\n1\r\n');
+    fs.writeFileSync(path.join(gd, 'group_mixed_2件_確認用.csv'), '\uFEFFstore_id\r\n1\r\n');
     fs.writeFileSync(path.join(gd, 'group_mixed_本文.txt'), 'ご担当者様 <テスト>\n本文です\n');
     fs.writeFileSync(path.join(gd, 'group_mixed_本文_短縮.txt'), '短縮');
     fs.writeFileSync(path.join(gd, 'group_mixed_件名.txt'), '1. 件名');
@@ -284,7 +285,7 @@ function multipart(fields, files) {
     fs.writeFileSync(path.join(gd, 'group_Bad_1件.csv'), 'x');
     fs.writeFileSync(path.join(ctx.exportDir, 'outside.txt'), 'x');
     const jp = await (await ctx.req(BASE + '/jobs/' + scanJobId, { headers: { cookie } })).text();
-    ok(jp.includes('group_mixed_2件.csv') && jp.includes('readonly') && jp.includes('コピー') && jp.includes('ご担当者様 &lt;テスト&gt;'), 'ジョブ画面: グループ・textarea・コピー・エスケープ');
+    ok(jp.includes('group_mixed_2件.csv') && jp.includes('group_mixed_2件_確認用.csv') && jp.includes('readonly') && jp.includes('コピー') && jp.includes('ご担当者様 &lt;テスト&gt;'), 'ジョブ画面: グループ・textarea・コピー・エスケープ');
     ok(!jp.includes('secret.txt') && !jp.includes('group_Bad'), 'ジョブ画面: 不正名は出さない');
     ok((await (await ctx.req(BASE + '/export', { headers: { cookie } })).text()).includes(gdName), '取り出し画面: グループフォルダ一覧');
     const gu = (d, f) => BASE + '/exports/' + d + '/' + encodeURIComponent(f);
@@ -293,6 +294,7 @@ function multipart(fields, files) {
     eq(g1.headers.get('content-type'), 'text/plain; charset=UTF-8', 'txtはtext/plain UTF-8');
     ok(/^attachment; /.test(g1.headers.get('content-disposition')), 'txtはattachment');
     eq((await ctx.req(gu(gdName, 'group_mixed_2件.csv'), { headers: { cookie } })).headers.get('content-type'), 'text/csv; charset=UTF-8', 'csvはUTF-8');
+    eq((await ctx.req(gu(gdName, 'group_mixed_2件_確認用.csv'), { headers: { cookie } })).headers.get('content-type'), 'text/csv; charset=UTF-8', '確認用csvもDLできる');
     eq((await ctx.req(gu(gdName, 'まとめ.txt'), { headers: { cookie } })).status, 200, 'まとめDL');
     for (const [d, f] of [[gdName, 'secret.txt'], [gdName, 'group_Bad_1件.csv'], [gdName, '..%2Foutside.txt'], [gdName, '%2e%2e%2foutside.txt'], [gdName, 'group_mixed_本文.txt%00'],
       ['..', 'outside.txt'], ['b2b_20261025', 'まとめ.txt'], ['b2b_20990101-000000', 'まとめ.txt'], ['%2e%2e', 'まとめ.txt'], [gdName, 'group_mixed_本文.csv']]) {

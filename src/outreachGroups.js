@@ -15,7 +15,12 @@ const GROUP_LABEL = {
   mixed: '混在コンテンツ', https_redirect: 'https未転送', cert_expired: '証明書期限切れ', cert_soon: '証明書期限間近',
   js_libs: '古いJSライブラリ', cms: 'CMS露出', headers: 'セキュリティヘッダー', tls_version: '古いTLS',
 };
-const GROUP_CSV_COLUMNS = ['store_id', '会社名', 'ドメイン', '都道府県', '業種区分', 'URL', '問い合わせURL', '画像認証'];
+// 目視確認用CSVの列(人が送信前に見る)
+const GROUP_CSV_COLUMNS = ['store_id', '会社名', 'ドメイン', '都道府県', '業種区分', 'URL', '問い合わせURL', '画像認証', '電話番号', '住所'];
+// 送信ツール用CSVのヘッダー行。送信ツールは位置で読む(http で始まらない1行目は無視される)。
+// 1=送信先URL 2=会社名[company] 3=空欄[name] 4=レポートURL(ドメイン)[param1] 5=業種[param2] 6=評価・口コミ(空欄)[param3] 7=STOCバッチコード 8=電話番号 9=住所
+// 3列目の見出しは空欄のまま(STOC営業管理の書き出しと同じ)
+const SENDER_CSV_HEADER = '送信先URL,会社名,,レポートURL,業種,評価・口コミ,STOCバッチコード,電話番号,住所';
 
 /** CSVの「指摘種別」(findings-b2b のキー)→ グループキー */
 function groupKeyOfFinding(type) {
@@ -39,7 +44,12 @@ function groupRows(rows) {
   for (const r of rows) {
     const send = String(r['送信推奨'] || '');
     const key = groupKeyOfFinding(String(r['指摘種別'] || ''));
-    if (send === 'はい' && key) { by.get(key).push(r); continue; }
+    if (send === 'はい' && key) {
+      // 送信ツールで送れない行はグループに入れない
+      if (!String(r['問い合わせURL'] || '').trim()) { excluded['送信先URLなし'] = (excluded['送信先URLなし'] || 0) + 1; continue; }
+      if (String(r['画像認証'] || '').trim() === 'あり') { excluded['画像認証あり'] = (excluded['画像認証あり'] || 0) + 1; continue; }
+      by.get(key).push(r); continue;
+    }
     let reason = send.startsWith('送らない:') ? send.slice('送らない:'.length) : (send === 'いいえ' ? '送信推奨なし' : (send || '不明'));
     if (send === 'はい') reason = '指摘種別が不明';
     excluded[reason] = (excluded[reason] || 0) + 1;
@@ -52,7 +62,7 @@ function groupRows(rows) {
 }
 
 /** 差し込みタグの既定(送信ツールの記法に合わせて outreach-config.json の「差し込みタグ」か --merge-tags で変える) */
-const DEFAULT_MERGE_TAGS = { 会社名: '{会社名}', ドメイン: '{ドメイン}' };
+const DEFAULT_MERGE_TAGS = { 会社名: '[company]', ドメイン: '[param1]' };
 
 /** URL → ドメイン(ホスト名。先頭の www. は除く)。解釈できなければ空 */
 function domainOfUrl(url) {
@@ -84,6 +94,20 @@ const csvField = (v) => {
   const s = v === undefined || v === null ? '' : String(v);
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 };
+/** 日本時間の YYYYMMDD */
+function jstYmd(d) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.year}${p.month}${p.day}`;
+}
+/** STOCバッチコード: WD-<キー(_は-)>-<YYYYMMDD>(例 WD-CERT-EXPIRED-20261025) */
+function batchCode(key, scannedAt) {
+  return `WD-${String(key).toUpperCase().replace(/_/g, '-')}-${jstYmd(scannedAt)}`;
+}
+/** 送信ツール用の1行(9列・位置固定) */
+function senderRow(r, code) {
+  return [r['問い合わせURL'], r['店名'], '', domainOfUrl(r['URL']), r['業種'] || r['業種区分'] || '', '', code, r['電話番号'] || '', r['住所'] || ''];
+}
 const len = (s) => [...s].length;
 
 /**
@@ -99,7 +123,12 @@ function writeGroupFiles(dir, rows, templates, scannedAt, mergeTags) {
   const put = (name, text) => { fs.writeFileSync(path.join(dir, name), text); files.push(name); };
   for (const { key, rows: rs } of g.groups) {
     const b = renderGroupBodies(templates, key, scannedAt, mergeTags);
-    put(`group_${key}_${rs.length}件.csv`, '﻿' + GROUP_CSV_COLUMNS.join(',') + '\r\n'
+    const code = batchCode(key, scannedAt);
+    // 送信ツール用(9列・位置固定)
+    put(`group_${key}_${rs.length}件.csv`, '﻿' + SENDER_CSV_HEADER + '\r\n'
+      + rs.map((r) => senderRow(r, code).map(csvField).join(',') + '\r\n').join(''));
+    // 送信前の目視確認用
+    put(`group_${key}_${rs.length}件_確認用.csv`, '﻿' + GROUP_CSV_COLUMNS.join(',') + '\r\n'
       + rs.map((r) => ({ ...r, 会社名: r['店名'], ドメイン: domainOfUrl(r['URL']) })).map((r) => GROUP_CSV_COLUMNS.map((c) => csvField(r[c])).join(',') + '\r\n').join(''));
     put(`group_${key}_本文.txt`, b.body + '\n');
     put(`group_${key}_本文_短縮.txt`, b.shortBody + '\n');
@@ -112,9 +141,11 @@ function writeGroupFiles(dir, rows, templates, scannedAt, mergeTags) {
   lines.push('', `送信対象 合計: ${summary.reduce((a, s) => a + s.count, 0)}社`);
   lines.push(`送らない: ${g.excludedTotal}社`);
   for (const [reason, n] of Object.entries(g.excluded).sort((a, b) => b[1] - a[1])) lines.push(`  ・${reason}: ${n}社`);
-  lines.push('', '1グループ=1回の送信。本文はグループごとに違います。最初の100社は送る前に人が確認してください。');
+  lines.push('', '宛先CSVは送信ツール用の9列(送信先URL,会社名,空欄,ドメイン,業種,空欄,バッチコード,電話番号,住所)。「_確認用.csv」は人が見る用です。');
+  lines.push('送信先URLなし・画像認証ありの会社はグループに入れていません(送信ツールで送れないため)。');
+  lines.push('1グループ=1回の送信。本文はグループごとに違います。最初の100社は送る前に人が確認してください。');
   put('まとめ.txt', lines.join('\n') + '\n');
   return { files, summary, excluded: g.excluded, excludedTotal: g.excludedTotal };
 }
 
-module.exports = { GROUP_ORDER, GROUP_LABEL, GROUP_CSV_COLUMNS, FINDING_KEY, groupKeyOfFinding, jstMonthJa, DEFAULT_MERGE_TAGS, domainOfUrl, groupRows, renderGroupBodies, writeGroupFiles };
+module.exports = { SENDER_CSV_HEADER, batchCode, GROUP_ORDER, GROUP_LABEL, GROUP_CSV_COLUMNS, FINDING_KEY, groupKeyOfFinding, jstMonthJa, DEFAULT_MERGE_TAGS, domainOfUrl, groupRows, renderGroupBodies, writeGroupFiles };

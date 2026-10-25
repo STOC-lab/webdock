@@ -39,7 +39,7 @@ const GMP_CSV = /^gmp_.+\.csv$/i;
 const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,80}\.csv$/;
 // 「診断して文面も作る」のグループ別出力: <exportDir>/b2b_<YYYYMMDD-HHmmss>/ の中の決まった名前のファイルだけ扱う
 const GROUP_DIR = /^b2b_\d{8}-\d{6}$/;
-const GROUP_FILE = /^(?:group_[a-z_]+_(?:\d+件\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)|まとめ\.txt)$/;
+const GROUP_FILE = /^(?:group_[a-z_]+_(?:\d+件(?:_確認用)?\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)|まとめ\.txt)$/;
 const GROUP_TEXT_MAX = 64 * 1024; // 画面に出す本文の上限
 const DEFAULT_MAIN_CATEGORY = '製造,加工,建設,工事,工務店,板金,鉄工,製作所,塗装,設備,機械,金属,工場,整備';
 const VIEWS = path.join(__dirname, '..', 'views', 'admin');
@@ -380,10 +380,12 @@ function registerAdminWarehouse(app, deps = {}) {
       const m = n.match(/^group_([a-z_]+)_(\d+)件\.csv$/);
       if (!m) continue;
       const key = m[1];
+      const checkName = `group_${key}_${m[2]}件_確認用.csv`;
       const nm = { body: `group_${key}_本文.txt`, short: `group_${key}_本文_短縮.txt`, subject: `group_${key}_件名.txt` };
       const has = (x) => g.names.includes(x);
       groups.push({
         key, count: Number(m[2]), csv: { name: n, url: url(n) },
+        check: g.names.includes(checkName) ? { name: checkName, url: url(checkName) } : null,
         body: has(nm.body) ? { name: nm.body, url: url(nm.body), text: readText(g.dir, nm.body) } : null,
         short: has(nm.short) ? { name: nm.short, url: url(nm.short), text: readText(g.dir, nm.short) } : null,
         subject: has(nm.subject) ? { name: nm.subject, url: url(nm.subject), text: readText(g.dir, nm.subject) } : null,

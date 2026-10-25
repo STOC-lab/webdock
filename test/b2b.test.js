@@ -94,7 +94,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     const out = path.join(dir, 'r.csv');
     const scan = async (url) => ({ results: url.includes('good') ? mk() : mk({ mixed: 'bad' }), score: 50, grade: 'D' });
     const rows = [
-      { store_id: '10', name: '甲建設', url: 'https://bad.jp', prefecture: '兵庫県', category: '建設会社', formUrl: 'https://bad.jp/contact', captcha: 'なし', noSales: '' },
+      { store_id: '10', name: '甲建設', url: 'https://bad.jp', prefecture: '兵庫県', category: '建設会社', formUrl: 'https://bad.jp/contact', captcha: 'なし', noSales: '', phone: '079-222-3333', address: '兵庫県姫路市北条1-1' },
       { store_id: '11', name: '乙製作所', url: 'https://good.jp', prefecture: '', category: '金属加工業', formUrl: '', captcha: '', noSales: '' },
     ];
     await runBatch({ rows, scan, out, templates: T, templateMode: 'b2b', log: () => {}, subject: 3, maxChars: 0 });
@@ -108,6 +108,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     eq(Number(r1[col('本文文字数')]), [...r1[col('本文')]].length, '本文文字数');
     eq([r1[col('使用本文')], r1[col('問い合わせURL')], r1[col('画像認証')]], ['標準', 'https://bad.jp/contact', 'なし'], '使用本文/URL/画像認証');
     ok(r1[col('短縮本文')].includes('甲建設 ご担当者様'), '短縮本文あり');
+    eq([t[0][t[0].length - 2], t[0][t[0].length - 1], r1[col('電話番号')], r1[col('住所')]], ['電話番号', '住所', '079-222-3333', '兵庫県姫路市北条1-1'], '電話番号・住所を末尾に引き継ぐ');
     eq(r2[col('送信推奨')], '送らない:初回に使える指摘なし', '送らない+理由');
     eq(r2[col('本文')], '', '送らない時は本文なし');
     // 従来モードの列は増えない
@@ -125,14 +126,14 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   try { new TextDecoder('utf-8', { fatal: true }).decode(sjis); } catch { utf8Fail = true; }
   ok(utf8Fail, 'テスト用データは UTF-8 として読めない(SJIS)');
   const pr = parseInputBuffer(sjis);
-  eq(pr[0], { store_id: '', name: '甲建設', url: 'https://a.jp', prefecture: '兵庫県', category: '建設会社' }, 'SJIS 1行目');
+  eq(pr[0], { store_id: '', name: '甲建設', url: 'https://a.jp', prefecture: '兵庫県', category: '建設会社', phone: '079-000-0000', address: '兵庫県姫路市北条1' }, 'SJIS 1行目(電話番号・住所も読む)');
   eq([pr[1].name, pr[1].url, pr[1].prefecture], ['乙製作所', '', '東京都'], 'SJIS 2行目');
   eq(parseInputBuffer(Buffer.from('﻿' + csv, 'utf8'))[0].name, '甲建設', 'UTF-8(BOM)も読める');
 
   // 倉庫検索SQL
   const q = buildWarehouseQuery({ prefecture: '兵庫県', mainCategory: '製造,建設', excludeLarge: true, formFound: true, limit: 100 }, { noSalesCol: true });
   ok(q.sql.includes('category_main LIKE ? OR category_main LIKE ?') && q.sql.includes("form_status = 'url_found'") && q.sql.includes('form_no_sales = 0')
-    && q.sql.includes("size_class <> 'large'") && q.sql.includes('form_url, form_captcha, form_no_sales'), '倉庫SQL');
+    && q.sql.includes("size_class <> 'large'") && q.sql.includes('form_url, form_captcha, phone, address_raw, form_no_sales'), '倉庫SQL');
   eq(q.params, [['兵庫県'], '%製造%', '%建設%', 100], '倉庫SQLの引数');
   ok(!buildWarehouseQuery({}, { noSalesCol: false }).sql.includes('form_no_sales'), '列なしなら form_no_sales を使わない');
   ok(buildWarehouseQuery({ smallOnly: true, excludeLarge: true }, {}).sql.includes("size_class = 'small'"), 'small-only 優先');
@@ -266,7 +267,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     const grows = [
       ['1', '甲建設', 'mix1.jp'], ['2', '乙工業', 'mix2.jp'], ['3', '丙製作所', 'exp1.jp'], ['4', '丁建設', 'soon1.jp'], ['5', '戊工務店', 'cms1.jp'],
       ['6', '己機械', 'none1.jp'], ['7', '庚金属', 'fail1.jp'], ['8', '辛工場', 'none2.jp'],
-    ].map(([id, name, d]) => ({ store_id: id, name, url: 'https://' + d, prefecture: '兵庫県', category: '建設会社', formUrl: 'https://' + d + '/c', captcha: 'なし', noSales: '' }));
+    ].map(([id, name, d]) => ({ store_id: id, name, url: 'https://' + d, prefecture: '兵庫県', category: '建設会社', formUrl: 'https://' + d + '/c', captcha: 'なし', noSales: '', phone: '079-000-000' + id, address: '兵庫県姫路市テスト' + id }));
     await runBatch({ rows: grows, scan: gscan, out: gout, templates: T, templateMode: 'b2b', log: () => {} });
     const recs = (() => { const t = parseDelimited(fs.readFileSync(gout, 'utf8'), ','); return t.slice(1).map((r) => Object.fromEntries(t[0].map((h, i) => [h, r[i] || '']))); })();
     const gg = G.groupRows(recs);
@@ -282,31 +283,38 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     fs.writeFileSync(path.join(gd, 'group_mixed_99件.csv'), 'old'); // 古いファイルは消える
     const w = G.writeGroupFiles(gd, recs, T, gtime);
     eq(fs.readdirSync(gd).sort(), [...w.files].sort(), '古いファイルは消え、出力だけが残る');
-    eq(w.files.filter((n) => n.endsWith('.csv')).sort(), ['group_cert_expired_1件.csv', 'group_cert_soon_1件.csv', 'group_cms_1件.csv', 'group_mixed_2件.csv'], 'CSVのファイル名');
+    eq(w.files.filter((n) => n.endsWith('.csv')).sort(), ['group_cert_expired_1件.csv', 'group_cert_expired_1件_確認用.csv', 'group_cert_soon_1件.csv', 'group_cert_soon_1件_確認用.csv', 'group_cms_1件.csv', 'group_cms_1件_確認用.csv', 'group_mixed_2件.csv', 'group_mixed_2件_確認用.csv'], 'CSVのファイル名(確認用つき)');
     ok(w.files.includes('group_mixed_本文.txt') && w.files.includes('group_mixed_本文_短縮.txt') && w.files.includes('group_mixed_件名.txt') && w.files.includes('まとめ.txt'), 'txtのファイル名');
-    const adminRe = /^group_[a-z_]+_(\d+件\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)$/;
+    const adminRe = /^group_[a-z_]+_(\d+件(?:_確認用)?\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)$/;
     ok(w.files.every((n) => adminRe.test(n) || n === 'まとめ.txt'), '全ファイル名が管理画面の許可パターンに合う');
     const csvText = fs.readFileSync(path.join(gd, 'group_mixed_2件.csv'), 'utf8');
-    ok(csvText.startsWith('﻿store_id,会社名,ドメイン,都道府県,業種区分,URL,問い合わせURL,画像認証\r\n'), 'CSVはBOM付きUTF-8・列');
-    ok(csvText.includes('1,甲建設,mix1.jp,兵庫県,建設,https://mix1.jp,https://mix1.jp/c,なし') && csvText.includes('2,乙工業'), 'CSVの行');
+    const csvLines = csvText.split('\r\n');
+    eq(csvLines[0], '﻿送信先URL,会社名,,レポートURL,業種,評価・口コミ,STOCバッチコード,電話番号,住所', '送信用CSV: BOM付きUTF-8・ヘッダー行が完全一致');
+    eq(csvLines[1], 'https://mix1.jp/c,甲建設,,mix1.jp,建設会社,,WD-MIXED-20261025,079-000-0001,兵庫県姫路市テスト1', '送信用CSV: 列順(URL,会社名,空,ドメイン,業種,空,バッチコード,電話,住所)');
+    ok(csvLines[2].startsWith('https://mix2.jp/c,乙工業,,mix2.jp,') && csvLines.every((l) => l === '' || parseDelimited(l, ',')[0].length === 9), '送信用CSV: 全行9列');
+    ok(csvLines[1].split(',')[6] === G.batchCode('mixed', gtime) && G.batchCode('cert_expired', gtime) === 'WD-CERT-EXPIRED-20261025' && /^WD-[A-Z0-9-]+-\d{8}$/.test(G.batchCode('cert_soon', gtime)), 'バッチコード形式');
+    const chk = fs.readFileSync(path.join(gd, 'group_mixed_2件_確認用.csv'), 'utf8');
+    ok(chk.startsWith('﻿store_id,会社名,ドメイン,都道府県,業種区分,URL,問い合わせURL,画像認証,電話番号,住所\r\n'), '確認用CSV: 列');
+    ok(chk.includes('1,甲建設,mix1.jp,兵庫県,建設,https://mix1.jp,https://mix1.jp/c,なし,079-000-0001,兵庫県姫路市テスト1') && chk.includes('2,乙工業'), '確認用CSV: 行(電話・住所つき)');
+    ok(adminRe.test('group_mixed_2件_確認用.csv') && !adminRe.test('group_mixed_2件_確認用.txt') && !adminRe.test('group_Mixed_2件_確認用.csv'), '管理画面の許可パターン: 確認用.csv');
     for (const n of w.files.filter((x) => x.endsWith('.txt') && x !== 'まとめ.txt')) {
       const txt = fs.readFileSync(path.join(gd, n), 'utf8');
-      ok(!/[{}]/.test(txt.replace(/\{会社名\}|\{ドメイン\}/g, '')), '設定した差し込みタグ以外のプレースホルダー残りなし: ' + n);
+      ok(!/[{}]/.test(txt), '{}のプレースホルダー残りなし(タグは[company]/[param1]): ' + n);
       ok(!/甲建設|乙工業|丙製作所|丁建設|戊工務店|mix1|exp1|soon1|cms1/.test(txt), '会社固有の文言なし: ' + n);
     }
     const mixedBody = fs.readFileSync(path.join(gd, 'group_mixed_本文.txt'), 'utf8');
     const mixedShort = fs.readFileSync(path.join(gd, 'group_mixed_本文_短縮.txt'), 'utf8');
-    ok(mixedBody.includes('2026年10月に御社サイト「{ドメイン}」を確認したところ、ページの一部(画像や部品など)が暗号化されない通信で読み込まれている状態を確認しました。'), '標準本文: 確認月と指摘');
+    ok(mixedBody.includes('2026年10月に御社サイト「[param1]」を確認したところ、ページの一部(画像や部品など)が暗号化されない通信で読み込まれている状態を確認しました。'), '標準本文: 確認月と指摘');
     ok(mixedBody.includes('morisawa@stoc.co.jp 宛に') && mixedBody.includes('TEL:0120-830-046/兵庫県姫路市北条梅原町229'), '標準本文: 返信先・署名');
     ok([...mixedShort].length < [...mixedBody].length, '短縮は標準より短い');
-    ok(mixedShort.includes('2026年10月に御社サイト「{ドメイン}」を外部から確認したところ'), '短縮本文: 確認月');
-    ok(mixedBody.startsWith('{会社名} ご担当者様\n') && mixedShort.startsWith('{会社名} ご担当者様\n'), '本文: 先頭に会社名タグ');
+    ok(mixedShort.includes('2026年10月に御社サイト「[param1]」を外部から確認したところ'), '短縮本文: 確認月');
+    ok(mixedBody.startsWith('[company] ご担当者様\n') && mixedShort.startsWith('[company] ご担当者様\n'), '本文: 先頭に会社名タグ[company]');
     ok(!mixedBody.includes('御社名') && mixedBody.includes('「レポート希望」とお送りください。') && mixedShort.includes('ご希望の場合は「レポート希望」とご返信ください。'), '御社名を添える文言は無い');
     ok(fs.readFileSync(path.join(gd, 'group_cert_soon_本文.txt'), 'utf8').includes('有効期限が近づいている'), 'cert_soon は期限間近の文言');
     ok(fs.readFileSync(path.join(gd, 'group_cert_expired_本文.txt'), 'utf8').includes('有効期限が切れている'), 'cert_expired は期限切れの文言');
     const subj = fs.readFileSync(path.join(gd, 'group_mixed_件名.txt'), 'utf8').trim().split('\n');
     eq(subj.length, 3, '件名は3候補');
-    ok(subj[1] === '2. 「{ドメイン}」の設定確認に関するご連絡' && !/mix1|exp1|soon1|cms1/.test(subj.join('')), '件名2はドメインタグ・実ドメインなし');
+    ok(subj[1] === '2. 「[param1]」の設定確認に関するご連絡' && !/mix1|exp1|soon1|cms1/.test(subj.join('')), '件名2はドメインタグ・実ドメインなし');
     // 独自の差し込みタグ(引数 --merge-tags 相当)
     const gd3 = path.join(gdir, 'custom');
     G.writeGroupFiles(gd3, recs, T, gtime, { 会社名: '%company%', ドメイン: '%domain%' });
@@ -316,8 +324,24 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     // www. は除く・スキーム無しも可
     eq([G.domainOfUrl('https://www.Example.co.jp/a?b'), G.domainOfUrl('foo.jp/x'), G.domainOfUrl(''), G.domainOfUrl('https://www2.x.jp')], ['example.co.jp', 'foo.jp', '', 'www2.x.jp'], 'ドメイン抽出');
     const gd4 = path.join(gdir, 'www');
-    G.writeGroupFiles(gd4, [{ store_id: '9', 店名: 'W社', 都道府県: '', 業種区分: '', URL: 'https://www.wtest.jp/', 問い合わせURL: '', 画像認証: '', 指摘種別: 'cms', 送信推奨: 'はい' }], T, gtime);
-    ok(fs.readFileSync(path.join(gd4, 'group_cms_1件.csv'), 'utf8').includes('9,W社,wtest.jp,'), 'CSVのドメインはwww除去');
+    G.writeGroupFiles(gd4, [{ store_id: '9', 店名: 'W社', 都道府県: '', 業種区分: '', URL: 'https://www.wtest.jp/', 問い合わせURL: 'https://www.wtest.jp/c', 画像認証: '', 指摘種別: 'cms', 送信推奨: 'はい' }], T, gtime);
+    ok(fs.readFileSync(path.join(gd4, 'group_cms_1件.csv'), 'utf8').includes('https://www.wtest.jp/c,W社,,wtest.jp,'), 'CSVのドメインはwww除去');
+    // 送信先URLなし・画像認証ありはグループに入れない
+    const base = { 都道府県: '', 業種区分: '', 業種: '建設会社', 指摘種別: 'cms', 送信推奨: 'はい', 画像認証: 'なし' };
+    const exRows = [
+      { ...base, store_id: '1', 店名: 'OK社', URL: 'https://ok.jp', 問い合わせURL: 'https://ok.jp/c' },
+      { ...base, store_id: '2', 店名: 'URLなし社', URL: 'https://nu.jp', 問い合わせURL: '' },
+      { ...base, store_id: '3', 店名: 'CAPTCHA社', URL: 'https://cp.jp', 問い合わせURL: 'https://cp.jp/c', 画像認証: 'あり' },
+    ];
+    const ge = G.groupRows(exRows);
+    eq(ge.groups.map((x) => [x.key, x.rows.length]), [['cms', 1]], '除外: OKのみグループ入り');
+    eq(ge.excluded, { '送信先URLなし': 1, '画像認証あり': 1 }, '除外: 理由の集計');
+    const gd5 = path.join(gdir, 'excl');
+    G.writeGroupFiles(gd5, exRows, T, gtime);
+    const sum5 = fs.readFileSync(path.join(gd5, 'まとめ.txt'), 'utf8');
+    ok(sum5.includes('送信先URLなし: 1社') && sum5.includes('画像認証あり: 1社') && sum5.includes('送らない: 2社'), 'まとめ: 送信先URLなし・画像認証あり');
+    const t5 = fs.readFileSync(path.join(gd5, 'group_cms_1件.csv'), 'utf8') + fs.readFileSync(path.join(gd5, 'group_cms_1件_確認用.csv'), 'utf8');
+    ok(t5.includes('OK社') && !t5.includes('URLなし社') && !t5.includes('CAPTCHA社'), '除外した会社はCSVに出ない');
     const sum = fs.readFileSync(path.join(gd, 'まとめ.txt'), 'utf8');
     ok(sum.indexOf('mixed(') < sum.indexOf('cert_expired(') && sum.indexOf('cert_expired(') < sum.indexOf('cert_soon(') && sum.indexOf('cert_soon(') < sum.indexOf('cms('), 'まとめ: 優先順');
     ok(sum.includes('mixed(混在コンテンツ) / 2社 / ' + [...mixedBody.replace(/\n$/, '')].length + '文字 / ' + [...mixedShort.replace(/\n$/, '')].length + '文字'), 'まとめ: 件数と文字数');

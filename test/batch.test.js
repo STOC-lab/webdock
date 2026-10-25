@@ -48,7 +48,7 @@ const mk = (o) => Object.keys({ cert: 1, https_redirect: 1, tls_version: 1, head
   eq(parseDelimited('a,"x,""y""\nz"\r\n', ',')[0], ['a', 'x,"y"\nz'], 'csv roundtrip');
   // TSV with NULL
   const rows = parseInput('id\tname\twebsite_url\tprefecture\tcategory\n1\t店A\tNULL\t兵庫県\tNULL\n2\t店B\texample.com\t\t美容\n');
-  eq(rows[0], { store_id: '1', name: '店A', url: '', prefecture: '兵庫県', category: '' }, 'tsv NULL row');
+  eq(rows[0], { store_id: '1', name: '店A', url: '', prefecture: '兵庫県', category: '', phone: '', address: '' }, 'tsv NULL row');
   eq(rows[1].url, 'example.com', 'tsv row2 url');
 
   // runBatch
