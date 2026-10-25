@@ -130,6 +130,11 @@ node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category
 node cli/batch-scan.js --in data/promote_20261025.csv --template b2b --out data/b2b_scan.csv
 ```
 - 倉庫の絞り込み: `--prefecture` `--main-category`(主業種のLIKE・カンマ区切り) `--exclude-large` `--small-only` `--form-found` `--limit`。「営業お断り」の記載があったフォーム(`form_no_sales=1`)は自動で外す。
+- クレーム登録店の除外: STOC営業管理でクレーム登録された会社(`sales_logs.call_result='クレーム'`、または `store_flags` の未解除の「クレーム」フラグ)には営業をかけない。`--source warehouse` は `stoc_store_id` で営業管理と突き合わせて必ず外し、「クレーム登録で除外: N」を表示する(営業管理に未登録の店は対象外=通す)。DB名は既定 `stoc_sales`(`STOC_DB_NAME` で変更可)。倉庫DBユーザーに営業管理の読み取り権限がないと、黙ってスキップせず中止してエラーを出す。次を root で一度実行しておく(ユーザー名・ホストは `WH_DB_USER` に合わせる)。`warehouse-promote` は営業管理に未登録(`stoc_store_id IS NULL`)の店だけを出すので追加の除外は不要。
+```
+GRANT SELECT ON stoc_sales.sales_logs TO 'stoc_wh'@'localhost';
+GRANT SELECT ON stoc_sales.store_flags TO 'stoc_wh'@'localhost';
+```
 - `--subject 1|2|3` で件名を固定(省略時は store_id で3種を巡回)。`--max-chars N` で、標準本文がN文字を超える行は短縮本文を使う(短縮も超えるなら「送らない:文字数超過」)。
 - 初回に使う指摘は `templates/findings-b2b.json`(混在→https転送→証明書(期限切れ/30日以内)→古いJSライブラリ→CMS露出→ヘッダー→古いTLSの順)。Cookie・外部スクリプト・メールは初回には使わない。使える指摘がなければ「送らない:初回に使える指摘なし」。
 - 末尾に追加される列: `業種区分` `件名` `本文文字数` `短縮本文` `使用本文`(標準/短縮) `問い合わせURL` `画像認証` `営業お断り`。`本文` は標準本文。

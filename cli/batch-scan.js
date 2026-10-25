@@ -92,8 +92,72 @@ function parseInputBuffer(buf) {
 
 function likeEsc(c) { return '%' + String(c).replace(/[\\%_]/g, '\\$&') + '%'; }
 
-/** --source warehouse の検索SQL。noSalesCol=true なら form_no_sales 列も読み、営業お断りの店を外す */
-function buildWarehouseQuery(a, { noSalesCol } = {}) {
+/** 営業管理(STOC)のDB名。warehouse-import の linkStep と同じく既定は stoc_sales(STOC_DB_NAME で上書き可) */
+function stocDbName() {
+  const n = process.env.STOC_DB_NAME || 'stoc_sales';
+  if (!/^[A-Za-z0-9_]+$/.test(n)) throw new Error('STOC_DB_NAME が不正です: ' + n);
+  return n;
+}
+
+/**
+ * クレーム登録済みの店を「除外する」ための条件(営業管理 CallVocabulary::notClaimSqlFor と同じ定義)。
+ * 倉庫の stoc_store_id が NULL(営業管理に未登録)の行は対象外=通す。
+ * 返す2つ: notClaim(NOT EXISTS ...: 通す条件) / isClaim(EXISTS ...: 除外される条件。件数表示用)
+ */
+function claimConditions({ storeFlags = false, db = stocDbName() } = {}) {
+  const parts = [`EXISTS (SELECT 1 FROM ${db}.sales_logs clm WHERE clm.store_id = stoc_store_id AND clm.deleted_at IS NULL AND clm.call_result = 'クレーム')`];
+  if (storeFlags) parts.push(`EXISTS (SELECT 1 FROM ${db}.store_flags f WHERE f.store_id = stoc_store_id AND f.flag = 'クレーム' AND f.cleared_at IS NULL)`);
+  return {
+    isClaim: 'stoc_store_id IS NOT NULL AND (' + parts.join(' OR ') + ')',
+    notClaim: parts.map((x) => 'NOT ' + x),
+  };
+}
+
+/** WH_DB_USER 等から GRANT 文を作る(未設定なら 'stoc_wh'@'localhost') */
+function grantStatements(env = process.env, db = stocDbName()) {
+  const user = env.WH_DB_USER || 'stoc_wh';
+  const host = env.WH_DB_HOST;
+  const h = !host || host === '127.0.0.1' || host === '::1' ? 'localhost' : host;
+  return [`GRANT SELECT ON ${db}.sales_logs TO '${user}'@'${h}';`, `GRANT SELECT ON ${db}.store_flags TO '${user}'@'${h}';`];
+}
+
+function claimPermissionMessage(db, cause, env = process.env) {
+  return `クレーム登録店を除外するために ${db}.sales_logs / ${db}.store_flags を読む必要がありますが、倉庫DBユーザーに権限がありません(${cause})。\n`
+    + 'クレーム除外なしで営業先リストを出すことはできないため、処理を中止しました。root で次を実行してください:\n'
+    + grantStatements(env, db).join('\n');
+}
+
+/**
+ * クレーム除外に必要なテーブルを読めるか確認し、store_flags の有無を返す。読めなければ中止(例外)。
+ * store_flags は情報スキーマ(権限がない表は見えない)で調べ、見えないときは直接SELECTして「権限なし」と「表がない」を区別する。
+ */
+async function checkClaimAccess(pool, env = process.env) {
+  const db = stocDbName();
+  try {
+    await pool.query(`SELECT 1 FROM ${db}.sales_logs LIMIT 1`);
+  } catch (e) {
+    throw Object.assign(new Error(claimPermissionMessage(db, e.message, env)), { claimCheck: true });
+  }
+  let storeFlags = false;
+  try {
+    const [r] = await pool.query('SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?', [db, 'store_flags']);
+    storeFlags = Number(r[0].n) > 0;
+  } catch { /* 下の直接確認へ */ }
+  if (!storeFlags) {
+    try {
+      await pool.query(`SELECT 1 FROM ${db}.store_flags LIMIT 1`);
+      storeFlags = true;
+    } catch (e) {
+      // 1146 = 表がない(旧版の営業管理)→ sales_logs のみで判定。それ以外(権限なし等)は中止
+      if (!(e && (e.errno === 1146 || e.code === 'ER_NO_SUCH_TABLE'))) {
+        throw Object.assign(new Error(claimPermissionMessage(db, e.message, env)), { claimCheck: true });
+      }
+    }
+  }
+  return { storeFlags, db };
+}
+
+function warehouseWhere(a, { noSalesCol, storeFlags } = {}) {
   const where = ["website_url IS NOT NULL AND website_url <> ''",
     "(business_status IS NULL OR (business_status NOT LIKE '%閉業%' AND business_status NOT LIKE '%閉店%'))"];
   const params = [];
@@ -111,11 +175,28 @@ function buildWarehouseQuery(a, { noSalesCol } = {}) {
   // 送信用の文面を作るので、フォームがある店は「営業お断りの記載なし」と確認済み(=0)のものだけにする。
   // 未確認(NULL: 取得失敗・robots除外など)は送らない。find-forms --no-sales-only で確認できる。
   if (noSalesCol) where.push(a.formFound ? 'form_no_sales = 0' : '(form_no_sales IS NULL OR form_no_sales = 0)');
+  return { where, params };
+}
+
+/**
+ * --source warehouse の検索SQL。noSalesCol=true なら form_no_sales 列も読み、営業お断りの店を外す。
+ * クレーム登録店の除外(NOT EXISTS)は常に付ける。storeFlags=true なら store_flags の「クレーム」フラグも見る。
+ */
+function buildWarehouseQuery(a, { noSalesCol, storeFlags } = {}) {
+  const { where, params } = warehouseWhere(a, { noSalesCol, storeFlags });
+  where.push(...claimConditions({ storeFlags }).notClaim);
   let sql = `SELECT id AS store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha, phone, address_raw${noSalesCol ? ', form_no_sales' : ''}
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;
   if (a.limit > 0) { sql += '\nLIMIT ?'; params.push(a.limit); }
   return { sql, params };
+}
+
+/** 「クレーム登録で除外」の件数SQL(他の絞り込みは同じで、クレーム条件だけ反対。LIMIT は付けない) */
+function buildClaimExcludedCountQuery(a, { noSalesCol, storeFlags } = {}) {
+  const { where, params } = warehouseWhere(a, { noSalesCol, storeFlags });
+  where.push(claimConditions({ storeFlags }).isClaim);
+  return { sql: `SELECT COUNT(*) AS n FROM stoc_master.shops WHERE ${where.join(' AND ')}`, params };
 }
 
 async function loadWarehouseRows(a) {
@@ -125,8 +206,13 @@ async function loadWarehouseRows(a) {
   try {
     const noSalesCol = await wh.columnExists(pool, 'shops', 'form_no_sales');
     if (!noSalesCol) console.error('警告: shops.form_no_sales 列がないため「営業お断り」の除外ができません。先に sql/warehouse_migrate_004.sql を適用してください。');
-    const q = buildWarehouseQuery(a, { noSalesCol });
+    // クレーム除外は必須。読めなければここで例外(黙ってスキップしない)
+    const { storeFlags } = await checkClaimAccess(pool);
+    const q = buildWarehouseQuery(a, { noSalesCol, storeFlags });
     const [rows] = await pool.query(q.sql, q.params);
+    const cq = buildClaimExcludedCountQuery(a, { noSalesCol, storeFlags });
+    const [[cr]] = await pool.query(cq.sql, cq.params);
+    console.error('クレーム登録で除外: ' + Number(cr.n));
     return rows.map((r) => ({
       store_id: String(r.store_id), name: r.name || '', url: r.url || '', prefecture: r.prefecture || '', category: r.category || '',
       formUrl: r.form_url || '', captcha: r.form_captcha === null || r.form_captcha === undefined ? '' : (Number(r.form_captcha) ? 'あり' : 'なし'),
@@ -358,6 +444,6 @@ async function main() {
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
-module.exports = { runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
+module.exports = { runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
-if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
+if (require.main === module) main().catch((e) => { console.error(e && e.claimCheck ? 'エラー: ' + e.message : e); process.exit(1); });

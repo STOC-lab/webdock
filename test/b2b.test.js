@@ -138,6 +138,35 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   ok(!buildWarehouseQuery({}, { noSalesCol: false }).sql.includes('form_no_sales'), '列なしなら form_no_sales を使わない');
   ok(buildWarehouseQuery({ smallOnly: true, excludeLarge: true }, {}).sql.includes("size_class = 'small'"), 'small-only 優先');
 
+  // クレーム登録店の除外
+  { const bs = require('../cli/batch-scan.js');
+    const both = bs.buildWarehouseQuery({}, { storeFlags: true }).sql;
+    ok(both.includes('NOT EXISTS (SELECT 1 FROM stoc_sales.sales_logs clm WHERE clm.store_id = stoc_store_id AND clm.deleted_at IS NULL AND clm.call_result = \'クレーム\')')
+      && both.includes('NOT EXISTS (SELECT 1 FROM stoc_sales.store_flags f WHERE f.store_id = stoc_store_id AND f.flag = \'クレーム\' AND f.cleared_at IS NULL)'), 'クレーム除外: 両方のNOT EXISTS');
+    const only = bs.buildWarehouseQuery({}, {}).sql;
+    ok(only.includes('NOT EXISTS (SELECT 1 FROM stoc_sales.sales_logs') && !only.includes('store_flags'), 'クレーム除外: store_flagsなしなら sales_logs のみ');
+    const cq = bs.buildClaimExcludedCountQuery({ prefecture: '兵庫県', limit: 5 }, { storeFlags: true });
+    ok(cq.sql.startsWith('SELECT COUNT(*) AS n FROM stoc_master.shops') && cq.sql.includes('stoc_store_id IS NOT NULL AND (EXISTS (')
+      && cq.sql.includes('store_flags') && !cq.sql.includes('NOT EXISTS') && !cq.sql.includes('LIMIT') && !cq.sql.includes('ORDER BY'), 'クレーム除外: 件数SQL');
+    eq(cq.params, [['兵庫県']], 'クレーム除外: 件数SQLの引数(LIMITなし)');
+    // 権限なし → GRANT 付きで中止
+    const denied = { query: async (sql) => { if (sql.includes('sales_logs')) throw Object.assign(new Error('SELECT command denied'), { errno: 1142 }); return [[{ n: 1 }]]; } };
+    let msg = '';
+    try { await bs.checkClaimAccess(denied, { WH_DB_USER: 'whuser', WH_DB_HOST: '127.0.0.1' }); } catch (e) { msg = e.message; }
+    ok(msg.includes("GRANT SELECT ON stoc_sales.sales_logs TO 'whuser'@'localhost';") && msg.includes("GRANT SELECT ON stoc_sales.store_flags TO 'whuser'@'localhost';"), '権限なしのエラーに GRANT 文');
+    let msg2 = '';
+    try { await bs.checkClaimAccess(denied, {}); } catch (e) { msg2 = e.message; }
+    ok(msg2.includes("TO 'stoc_wh'@'localhost';"), '既定ユーザー stoc_wh');
+    // store_flags が情報スキーマで見えず直接SELECTも「表なし」→ sales_logs のみで続行
+    const noFlags = { query: async (sql) => { if (sql.includes('information_schema')) return [[{ n: 0 }]]; if (sql.includes('store_flags')) throw Object.assign(new Error('no table'), { errno: 1146 }); return [[{ 1: 1 }]]; } };
+    eq((await bs.checkClaimAccess(noFlags, {})).storeFlags, false, 'store_flags なし');
+    // 見えないが権限なし(1142)→ 中止
+    const flagDenied = { query: async (sql) => { if (sql.includes('information_schema')) return [[{ n: 0 }]]; if (sql.includes('store_flags')) throw Object.assign(new Error('denied'), { errno: 1142 }); return [[{ 1: 1 }]]; } };
+    let msg3 = ''; try { await bs.checkClaimAccess(flagDenied, {}); } catch (e) { msg3 = e.message; }
+    ok(msg3.includes('GRANT SELECT ON stoc_sales.store_flags'), 'store_flags 権限なしも中止');
+    const withFlags = { query: async (sql) => (sql.includes('information_schema') ? [[{ n: 1 }]] : [[{ 1: 1 }]]) };
+    eq((await bs.checkClaimAccess(withFlags, {})).storeFlags, true, 'store_flags あり'); }
+
   // 営業お断り検出
   for (const t of ['営業目的のお問い合わせはご遠慮ください', '営業目的でのご連絡はお断りします', '営業のご連絡はお断りしております', '営業メールはご遠慮ください',
     'セールスはお断りします', '売り込みはお断り', '勧誘はお断りいたします', '営業・勧誘のお電話', '営業利用を禁止します', '<p>営業電話は<b>お断り</b>です</p>']) {
