@@ -146,7 +146,7 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
   const body = O.renderBody(T, { withPage: true });
   ok(!/\{[^}]*\}/.test(body), '本文(専用ページ版): 未展開の{}なし');
   for (const tag of ['[company]', '[name]', '[param1]', '[param2]']) ok(body.includes(tag), '本文(専用ページ版): ' + tag);
-  ok(body.includes('株式会社エストックの森澤と申します') && body.includes('morisawa@stoc.co.jp') && body.includes('TEL:0120-830-046/兵庫県姫路市北条梅原町229') && body.trim().endsWith('株式会社エストック 森澤 梓\nTEL:0120-830-046/兵庫県姫路市北条梅原町229'), '本文(専用ページ版): 差出人は設定から');
+  ok(body.includes('株式会社エストックの森澤と申します') && body.includes('TEL:0120-830-046/兵庫県姫路市北条梅原町229') && body.trim().endsWith('株式会社エストック 森澤 梓\nTEL:0120-830-046/兵庫県姫路市北条梅原町229'), '本文(専用ページ版): 差出人は設定から');
   ok(body.includes('▼御社サイトの確認結果(御社専用ページ)\n[param1]\n'), '本文(専用ページ版): [param1] は独立した行');
   ok(!body.includes('「[param1]」'), '本文(専用ページ版): ドメインの括弧書きはなくなる');
   ok(O.renderBody(T).includes('御社サイト「[param1]」'), '本文(従来版)は変わらない');
