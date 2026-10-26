@@ -141,12 +141,13 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
 
   /* ---------- STOC営業管理側 ---------- */
 
-  /** 店のレポート(store_reports)の id。なければ作る。STOC側の token は長いランダム値で、お客様には出さない */
+  /** 店のレポート(store_reports)の id。なければ作る。STOC側の token は長いランダム値で、お客様には出さない。
+   *  STOCの ensureReport は店ごとに既存の行を使い回すため、のちにMEOのレポートとしても使われる。題名・ボタン文はSTOCと同じにしておく */
   async function ensureReport(q, page) {
     const [found] = await q.query(`SELECT id FROM ${db}.store_reports WHERE store_id = ? ORDER BY id LIMIT 1`, [page.stoc_store_id]);
     if (found && found[0]) return Number(found[0].id);
     const [ins] = await q.query(`INSERT INTO ${db}.store_reports (store_id, token, title, cta_text) VALUES (?,?,?,?)`,
-      [page.stoc_store_id, crypto.randomBytes(32).toString('hex'), `${page.company_name} 様 WEBドック点検ページ`, '簡易レポートを希望する']);
+      [page.stoc_store_id, crypto.randomBytes(32).toString('hex'), `${page.company_name} 様 MEO診断レポート`, '無料相談フォームはこちら']);
     return Number(ins.insertId);
   }
 
