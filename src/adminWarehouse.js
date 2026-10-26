@@ -226,6 +226,38 @@ function buildB2bScanArgs(body, { exportDir, now }) {
   return { args, exportFile, singleDir, withPage, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
 }
 
+/**
+ * 「診断して文面も作る」(送信成功済みの店・営業管理の全業種): batch-scan.js --source stoc-sent に渡す引数にする。
+ * 県を選ぶか、「全国」を明示するか、どちらか一方(何も選ばないまま全国で動かさない)。
+ */
+function buildStocSentScanArgs(body, { exportDir, now }) {
+  const prefs = toList(body.pref).filter((p, i, a) => a.indexOf(p) === i);
+  const nationwide = !!body.nationwide;
+  if (prefs.length && nationwide) return { error: '都道府県を選ぶか「全国」にするか、どちらか一方にしてください。' };
+  if (!prefs.length && !nationwide) return { error: '都道府県を1つ以上選ぶか、「全国」にチェックを入れてください。' };
+  if (prefs.some((p) => !PREFECTURES.includes(p))) return { error: '都道府県の指定が正しくありません。' };
+  let limit = 2000;
+  if (body.limit_stoc !== undefined && String(body.limit_stoc).trim() !== '') {
+    limit = Number(String(body.limit_stoc).trim());
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000000) return { error: '上限件数は1以上の整数で入力してください。' };
+  }
+  let days = 14;
+  if (body.min_days !== undefined && String(body.min_days).trim() !== '') {
+    days = Number(String(body.min_days).trim());
+    if (!Number.isInteger(days) || days < 0 || days > 3650) return { error: '最終送信からの日数は0以上の整数で入力してください。' };
+  }
+  const withPage = !!body.with_page_stoc;
+  const args = ['cli/batch-scan.js', '--source', 'stoc-sent', '--template', 'b2b'];
+  if (nationwide) args.push('--nationwide'); else args.push('--prefecture', prefs.join(','));
+  args.push('--min-days-since-sent', String(days));
+  if (body.exclude_hospital) args.push('--exclude-category-like', '病院');
+  const exportFile = `b2b_scan_${stamp(now)}.csv`;
+  const singleDir = `b2b_${stamp(now)}`;
+  args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile), '--single-out', path.join(exportDir, singleDir));
+  if (withPage) args.push('--with-page');
+  return { args, exportFile, singleDir, withPage, preset: 'stocsent', estimateHours: Math.max(1, Math.round(limit / 2000)) };
+}
+
 // ---- 倉庫の件数(読み取り専用) ----
 function createDefaultQueryStats() {
   let pool = null;
@@ -577,8 +609,11 @@ function registerAdminWarehouse(app, deps = {}) {
   }, status);
   router.get('/export', wrap((req, res) => exportPage(req, res)));
   router.post('/export', wrap(async (req, res) => {
+    if (req.body.preset === 'stocsent' && req.body.action !== 'scan') {
+      return exportPage(req, res, { error: '「送信成功済みの店」は「診断して文面も作る」だけです(CSVの書き出しはありません)。', form: req.body }, 400);
+    }
     if (req.body.action === 'scan') {
-      const sb = buildB2bScanArgs(req.body, { exportDir, now: now() });
+      const sb = req.body.preset === 'stocsent' ? buildStocSentScanArgs(req.body, { exportDir, now: now() }) : buildB2bScanArgs(req.body, { exportDir, now: now() });
       if (sb.error) return exportPage(req, res, { error: sb.error, form: req.body }, 400);
       const sr = jobs.start({ title: sb.withPage ? '診断して文面も作る(御社専用ページ付き)' : '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile, singleDir: sb.singleDir, withPage: sb.withPage } });
       if (!sr.ok) return exportPage(req, res, { error: sr.message, runningId: sr.runningId, form: req.body }, 409);
@@ -684,4 +719,4 @@ function registerAdminWarehouse(app, deps = {}) {
   return { enabled: true, uploadDir, exportDir, jobs };
 }
 
-module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };

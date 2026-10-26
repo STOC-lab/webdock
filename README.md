@@ -184,6 +184,17 @@ GRANT UPDATE (exported_at, export_count) ON stoc_sales.stores TO 'stoc_wh'@'loca
 - 指摘の一文は `templates/findings-b2b.json` の `一文`。業種区分は 整備 → 医療 → 製造 → 建設 → 美容 → 飲食 → その他の順で判定し、閲覧者の文言は `src/outreach.js` の `AUDIENCE`。
 - 管理画面の「診断して文面も作る」はこの方式(`--single-out <書き出しフォルダ>/b2b_<日時>/`)を使う。終了後の作業画面に、本文(コピーボタン)・送信ツール用CSV・確認用・まとめのダウンロードと、登録したSTOCバッチコードが出る。**最初の100社は送る前に人が確認する。**
 
+#### 5-1b2. 入力元「送信成功済みの店(営業管理・全業種)」(`--source stoc-sent`)
+営業管理(`stoc_sales.stores`)で `inquiry_form_result='成功'` の店(業種不問・取り込み不要)から選ぶ。送信ツールで実際に送れたフォームなので、フォーム探しは要らない。`--template b2b --single-out` と一緒にだけ使える。
+```
+node cli/batch-scan.js --source stoc-sent --template b2b --single-out data/b2b_20261026 \
+  (--prefecture 兵庫県,大阪府 | --nationwide) [--category-like ラーメン,美容] [--exclude-category-like 病院] [--min-days-since-sent 14] --limit 2000
+```
+- 県を選ばないときは `--nationwide`(全国)を明示する(うっかり全国で動かさないため。管理画面も同じ)。順番は最終送信が古い店から。
+- 送信先URLは営業管理と同じ優先順: 手入力URL → 送信成功URL → 有効な候補URL(成功回数が多い順・試行回数が少ない順) → ウェブサイトURL。
+- 診断前に外すもの(件数は まとめ.txt): クレーム登録 / 営業管理で失注・契約 / 最終送信から日が浅い(`--min-days-since-sent`、既定14日) / WEBドック送信済み・送信予定 / 除外ドメイン / チェーン・共通ドメイン(営業管理)(営業管理の全店で同じホストが3店以上)。
+- 営業管理に画像認証の列はないので、画像認証での除外はしない。管理画面は取り出し画面の「送信成功済みの店(営業管理・全業種)」(県または「全国」、上限2000、日数14、病院を除く=既定ON、専用ページ=既定OFF)。
+
 
 #### 5-1c. サイトのホスト名の列(移行005)とバックフィル
 `shops.site_host`(サイトのホスト名。`www.` 除去・小文字)と索引 `idx_site_host` を足す。何度実行しても安全。約250万行への索引追加には数分かかることがある。

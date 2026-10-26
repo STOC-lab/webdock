@@ -3,7 +3,8 @@
   var f = form || {};
   var sel = toArr(f.pref);
   function toArr(v) { return v === undefined ? [] : Array.isArray(v) ? v : [v]; }
-  var preset = f.preset === 'b2b' ? 'b2b' : 'meo';
+  var preset = f.preset === 'b2b' ? 'b2b' : f.preset === 'stocsent' ? 'stocsent' : 'meo';
+  var hasForm = form && Object.keys(form).length;
   var size = f.size || 'none';
   var formFound = form && Object.keys(form).length ? !!f.form_found : true;
 %>
@@ -15,6 +16,7 @@
 
     <h3>1. どの県?</h3>
     <p><button type="button" class="adm-mini" id="selall">全部選ぶ</button> <button type="button" class="adm-mini" id="selnone">全部外す</button></p>
+    <label class="adm-check" id="natbox" style="display:none"><input type="checkbox" name="nationwide" value="1" <%= f.nationwide ? 'checked' : '' %>> 全国(県を選ばず、全国の店を対象にする)</label>
     <div class="adm-grid">
       <% prefectures.forEach(function (p) { %>
       <label class="adm-check"><input type="checkbox" name="pref" value="<%= p %>" <%= sel.indexOf(p) >= 0 ? 'checked' : '' %>> <%= p %></label>
@@ -24,6 +26,14 @@
     <h3>2. 何用?</h3>
     <label class="adm-radio"><input type="radio" name="preset" value="meo" <%= preset === 'meo' ? 'checked' : '' %>> MEO用(飲食・美容など)<span class="adm-help">除外ルールをかけて、業種は絞りません。</span></label>
     <label class="adm-radio"><input type="radio" name="preset" value="b2b" <%= preset === 'b2b' ? 'checked' : '' %>> 工場・建設用(UTM・PC PATROL)<span class="adm-help">主業種で絞り、除外ルールはかけません。</span></label>
+    <label class="adm-radio"><input type="radio" name="preset" value="stocsent" <%= preset === 'stocsent' ? 'checked' : '' %>> 送信成功済みの店(営業管理・全業種)<span class="adm-help">営業管理で、問い合わせフォームの送信に成功した店。業種は問いません。取り込みは要りません。</span></label>
+    <div id="stocbox" class="adm-sub">
+      <p class="adm-help">上の「どの県?」で県を選ぶか、「全国」にチェックを入れてください(どちらも無いときは始まりません)。クレーム登録・失注/契約・WEBドックで送信済み・チェーン/共通ドメイン・除外ドメインの店は自動で外します。</p>
+      <label>最終送信から何日空けるか <input class="adm-input adm-short" type="number" name="min_days" min="0" max="3650" value="<%= f.min_days !== undefined && f.min_days !== '' ? f.min_days : 14 %>"></label>
+      <label class="adm-check"><input type="checkbox" name="exclude_hospital" value="1" <%= hasForm ? (f.exclude_hospital ? 'checked' : '') : 'checked' %>> 病院を除く(業種に「病院」を含む店)</label>
+      <label>上限件数 <input class="adm-input adm-short" type="number" name="limit_stoc" min="1" value="<%= f.limit_stoc || 2000 %>"></label>
+      <label class="adm-check"><input type="checkbox" name="with_page_stoc" value="1" <%= f.with_page_stoc ? 'checked' : '' %>> 御社専用ページのURLを入れる(既定はOFF)</label>
+    </div>
     <div id="b2bbox" class="adm-sub">
       <label>主業種のキーワード(カンマ区切り)</label>
       <textarea class="adm-input" name="main_category" rows="3"><%= f.main_category || defaultMain %></textarea>
@@ -31,6 +41,7 @@
       <p class="adm-help">「診断して文面も作る」のとき、会社ごとの専用ページ(/r/…)を作り、送信用CSVの4列目にそのURLを入れます(本文もページ版に変わります)。ページの閲覧と「簡易レポート希望」のボタンは、営業管理の見込み客に届きます。事前に <code>sql/warehouse_migrate_006.sql</code> の適用とDB権限(GRANT)が必要です(足りなければ診断を始める前に中止して、必要なGRANTを表示します)。</p>
     </div>
 
+    <div id="filterbox">
     <h3>3. 絞り込み</h3>
     <label class="adm-check"><input type="checkbox" name="form_found" value="1" <%= formFound ? 'checked' : '' %>> フォームが見つかった店だけ</label>
     <p class="adm-help">会社の規模:</p>
@@ -39,13 +50,14 @@
     <label class="adm-radio"><input type="radio" name="size" value="none" <%= size === 'none' ? 'checked' : '' %>> 絞らない</label>
     <p class="adm-help">※ 規模で絞るには、先に「会社の規模チェック」を済ませておく必要があります。</p>
     <label>上限件数 <input class="adm-input adm-short" type="number" name="limit" min="1" value="<%= f.limit || 5000 %>"></label>
+    </div>
 
     <div class="adm-actions">
       <button class="adm-btn adm-btn2" type="submit" name="action" value="report">件数を確認(CSVは作らない)</button>
       <button class="adm-btn" type="submit" name="action" value="make" id="makebtn">CSVを作る</button>
       <button class="adm-btn adm-btn2" type="submit" name="action" value="scan" id="scanbtn">診断して文面も作る</button>
     </div>
-    <p class="adm-help" id="scanhelp">「診断して文面も作る」は工場・建設用だけです。各サイトを診断し、問い合わせ用の文面(件名・本文)つきのCSV(UTF-8)を作ります。出力済みの印は付きません。1サイト1〜3秒ほどかかり、2,000サイトでおよそ1時間前後です(この間、他の作業は始められません)。</p>
+    <p class="adm-help" id="scanhelp">「診断して文面も作る」は工場・建設用と、送信成功済みの店だけです。各サイトを診断し、問い合わせ用の文面(件名・本文)つきのCSV(UTF-8)を作ります。出力済みの印は付きません。1サイト1〜3秒ほどかかり、2,000サイトでおよそ1時間前後です(この間、他の作業は始められません)。</p>
     <div class="adm-warn">「CSVを作る」を押すと、出した店には「出力済み」の印が付き、次回からは出ません。作ったCSVは必ずダウンロードしてから画面を離れてください(下の一覧からあとでもダウンロードできます)。</div>
   </form>
 </section>
@@ -72,16 +84,22 @@
   var form = document.getElementById('exform');
   var box = document.getElementById('b2bbox');
   function sync() {
-    var b = form.preset.value === 'b2b';
+    var v = form.preset.value;
+    var b = v === 'b2b', st = v === 'stocsent';
     box.style.display = b ? '' : 'none';
-    document.getElementById('scanbtn').style.display = b ? '' : 'none';
-    document.getElementById('scanhelp').style.display = b ? '' : 'none';
+    document.getElementById('stocbox').style.display = st ? '' : 'none';
+    document.getElementById('natbox').style.display = st ? '' : 'none';
+    document.getElementById('filterbox').style.display = st ? 'none' : '';
+    document.getElementById('scanbtn').style.display = b || st ? '' : 'none';
+    document.getElementById('scanhelp').style.display = b || st ? '' : 'none';
+    document.getElementById('makebtn').style.display = st ? 'none' : '';
+    document.querySelector('button[value=report]').style.display = st ? 'none' : '';
   }
   Array.prototype.forEach.call(form.preset, function (r) {
     r.addEventListener('change', function () {
       sync();
       // 工場・建設用は「大きい会社を外す」、MEO用は「絞らない」を初期値にする
-      form.size.value = r.value === 'b2b' ? 'exclude_large' : 'none';
+      if (r.value !== 'stocsent') form.size.value = r.value === 'b2b' ? 'exclude_large' : 'none';
     });
   });
   sync();

@@ -98,7 +98,7 @@ async function loadChainHosts(pool, candidateHosts, { columnExists, warn = (m) =
 
 /**
  * 行(url, stocStoreId を持つ)から除外対象を外す。理由の判定順: 送信済み → 配信不要の申し出 → 除外ドメイン指定 → チェーン。
- * ctx: { resendSet?:Set<number>, optOutSet?:Set<number>(専用ページで「今後の案内は不要」), excludeList?:string[], chainHosts?:Set<string> }
+ * ctx: { chainReason?:string(チェーンの理由の表示名。省略時 REASON.chain), resendSet?:Set<number>, optOutSet?:Set<number>(専用ページで「今後の案内は不要」), excludeList?:string[], chainHosts?:Set<string> }
  * 戻り: { rows, counts:{理由:件数} }(件数0の理由は含めない)
  */
 function applyPreScanExclusions(rows, ctx = {}) {
@@ -111,7 +111,7 @@ function applyPreScanExclusions(rows, ctx = {}) {
     if (ctx.optOutSet && sid && ctx.optOutSet.has(sid)) { bump(REASON.optout); continue; }
     const host = siteHostOf(r.url);
     if (host && ctx.excludeList && matchesExcludeList(host, ctx.excludeList)) { bump(REASON.listed); continue; }
-    if (host && ctx.chainHosts && ctx.chainHosts.has(host)) { bump(REASON.chain); continue; }
+    if (host && ctx.chainHosts && ctx.chainHosts.has(host)) { bump(ctx.chainReason || REASON.chain); continue; }
     kept.push(r);
   }
   return { rows: kept, counts };

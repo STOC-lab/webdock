@@ -23,6 +23,7 @@
     "test:report": "node test/report.test.js",
     "test:exclude": "node test/exclude.test.js",
     "test:pages": "node test/pages.test.js",
+    "test:stocsent": "node test/stocsent.test.js",
     "wh:sitehost": "node cli/warehouse-sitehost.js"
   },
   "keywords": [],
