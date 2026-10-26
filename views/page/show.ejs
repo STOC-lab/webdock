@@ -12,6 +12,7 @@
 <section class="pg-card pg-main">
   <h2 class="pg-h2">今回、最初にお伝えしたい点</h2>
   <p class="pg-sentence"><%= sentence %></p>
+  <% if (main) { %><p class="pg-sub"><strong><%= main.title %></strong><br><%= main.summary %></p><% } %>
   <p class="pg-note">被害を示すものではありません。制作会社様・保守ご担当者様へのご確認をおすすめします。</p>
 </section>
 <% } %>
@@ -22,7 +23,7 @@
   <% if (others.length) { %>
   <ul class="pg-list">
     <% others.forEach(function (it) { %>
-    <li><span class="pg-tag">確認をおすすめ</span> <strong><%= it.title %></strong><br><span class="pg-sub"><%= it.summary %></span></li>
+    <li><span class="pg-tag">確認をおすすめ</span> <strong><%= it.title %></strong><% if (variant === 'full') { %><br><span class="pg-sub"><%= it.summary %></span><% } %></li>
     <% }) %>
   </ul>
   <% } else { %>
@@ -39,6 +40,7 @@
 
 <section class="pg-card pg-cta" id="request">
   <h2 class="pg-h2">詳しい簡易レポートを希望する</h2>
+  <% if (variant === 'titles') { %><p class="pg-note pg-variant-note">各項目の詳しい内容・どれから対応すべきか(優先順位)・制作会社様へそのままお渡しいただける確認依頼文は、簡易レポートでお送りします。</p><% } %>
   <p>確認項目の優先順位と、制作会社様へそのままお渡しいただける確認依頼文をまとめた簡易レポートを、無料でお送りします。<% if (requested) { %><br><span class="pg-sub">(すでにお申し込みいただいています。内容を変えて送り直すこともできます)</span><% } %></p>
   <% if (error) { %><div class="alert" role="alert"><%= error %></div><% } %>
   <form method="post" action="/r/<%= token %>/request" class="pg-form" novalidate>

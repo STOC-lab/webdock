@@ -61,6 +61,8 @@ function viewModel(page, { env = process.env } = {}) {
   return {
     company: page.company_name, domain: page.domain, dateJa: jstDateJa(page.created_at ? new Date(page.created_at) : new Date()),
     sentence: page.finding_sentence || '',
+    variant: C.variantOf(page.token, env),
+    main: items.find((x) => x.key === mainCheck && x.status !== 'ok') || null,
     others: recommended.filter((x) => x.key !== mainCheck),
     okCount: items.filter((x) => x.status === 'ok').length,
     hasItems: items.length > 0,
@@ -142,7 +144,7 @@ function registerPages(app, deps = {}) {
     if (!page) return;
     const uaClass = C.classifyUa(req.headers['user-agent'], req.method);
     if (req.method === 'HEAD') { await store.recordView(page, { uaClass }); return res.status(200).type('html').end(); }
-    const r = await store.recordView(page, { uaClass, ip: getIp(req), ua: req.headers['user-agent'], referer: req.headers.referer });
+    const r = await store.recordView(page, { uaClass, ip: getIp(req), ua: req.headers['user-agent'], referer: req.headers.referer, variant: C.variantOf(page.token, env) });
     return render(res, 'show', pageData(page, { viewToken: C.makeViewToken(secret, page.token, r.viewId) }));
   }));
 
@@ -163,7 +165,7 @@ function registerPages(app, deps = {}) {
     if (!v.ok) return redo('入力内容をご確認ください。', { form: v.values, errors: v.errors });
     const viewId = C.verifyViewToken(secret, page.token, body.vt) || 0;
     const ip = getIp(req);
-    const r = await store.submitLead(page, v.values, { ip, ua: req.headers['user-agent'], viewId });
+    const r = await store.submitLead(page, v.values, { ip, ua: req.headers['user-agent'], viewId, variant: C.variantOf(page.token, env) });
     if (!r.duplicate) {
       try {
         await notify({ company: page.company_name, domain: page.domain, ...v.values, pageUrl: C.pageUrl(page.token, env), stocStoreId: page.stoc_store_id, batchCode: page.stoc_batch_code, stocOk: r.stoc, stocError: r.error });

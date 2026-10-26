@@ -9,13 +9,21 @@
   <% if (counts) { %>
   <p>作成 <strong><%= counts.total %></strong>件 ／ 開かれた <strong><%= counts.viewed %></strong> ／ 操作あり <strong><%= counts.human %></strong> ／ 申込 <strong><%= counts.leads %></strong> ／ 配信不要 <strong><%= counts.optout %></strong></p>
   <% } %>
+  <% if (typeof variants !== 'undefined' && variants && variants.length) { %>
+  <div class="adm-sub">
+    <p class="adm-help">表示の版ごとの成績(人が開いたページのみ)。申込率 = 申込 ÷ 開かれたページ。</p>
+    <% variants.forEach(function (v) { %>
+    <p><strong><%= v.variant %></strong>: 開かれた <strong><%= v.viewed %></strong> ／ 申込 <strong><%= v.leads %></strong> ／ 申込率 <strong><%= v.viewed ? (v.leads / v.viewed * 100).toFixed(1) + '%' : '-' %></strong></p>
+    <% }) %>
+  </div>
+  <% } %>
   <p>
     <% tabs.forEach(function (x) { %><a class="adm-mini<%= filter === x[0] ? ' on' : '' %>" href="<%= BASE %>/pages?filter=<%= x[0] %>"><%= x[1] %></a> <% }) %>
   </p>
   <% if (!rows.length && !error) { %><p class="adm-help">該当するページはありません。</p><% } %>
   <% if (rows.length) { %>
   <div class="adm-scroll"><table class="adm-table">
-    <thead><tr><th>会社</th><th>サイト</th><th>閲覧</th><th>最後に開いた</th><th>操作</th><th>申込</th><th>STOC</th><th>バッチ</th><th>URL</th></tr></thead>
+    <thead><tr><th>会社</th><th>サイト</th><th>閲覧</th><th>最後に開いた</th><th>操作</th><th>申込</th><th>版</th><th>STOC</th><th>バッチ</th><th>URL</th></tr></thead>
     <tbody>
     <% rows.forEach(function (r) { %>
     <tr>
@@ -25,6 +33,7 @@
       <td><%= t(r.last_viewed_at) %></td>
       <td><%= r.human_at ? '○ ' + t(r.human_at) : '' %></td>
       <td><%= r.lead_at ? t(r.lead_at) : '' %></td>
+      <td><%= r.variant || '' %></td>
       <td><% if (r.lead_at) { %><%= r.lead_stoc_at ? '登録済み' : '未登録(メール通知を確認)' %><% } %></td>
       <td><%= r.stoc_batch_code || '' %></td>
       <td><code><%= pageBase %>/r/<%= r.token %></code></td>

@@ -213,12 +213,14 @@ node cli/warehouse-sitehost.js                 # 既存行の site_host を埋�
 node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 --form-found \
   --template b2b --limit 2000 --single-out data/b2b_20261026 --with-page [--dry-run-stoc]
 ```
-管理画面では「取り出し」→ 工場・建設用 →「御社専用ページのURLを入れる」にチェックして「診断して文面も作る」。
+管理画面では「取り出し」→ 工場・建設用 /送信成功済みの店 →「御社専用ページのURLを入れる」(どちらも既定でON)のまま「診断して文面も作る」。
 
 - 送信CSV(9列)の4列目 `[param1]` がページのURL、3列目 `[name]` の一文は「御社サイト(ドメイン)を確認したところ、…」(ドメインは一文の先頭に移る)。本文は `templates/outreach-b2b-single-url.txt`(差出人・返信先は `outreach-config.json`)。STOCの明細 `report_url` にも同じURLを入れる。`--dry-run-stoc` のときはページを作らず、URLは仮(まとめ.txtに明記)。
 - ページは STOC登録(バッチ)の直前に作り、登録に失敗したら作ったページを消す。ページの表は `stoc_master.webdock_pages`(移行006)。
 - 公開ページ `/r/<token>`(ログイン不要): トークンは英数字10文字(約59ビット)のみ受け付け、それ以外は404。`noindex`(meta と `X-Robots-Tag`)・外部スクリプトなし(CSP)・IPごとの軽いレート制限(閲覧90回/10分・申込20回/時)。内容は「{会社名} 御中」・対象サイト・確認日・主な指摘(一文)・「確認をおすすめする項目」(要確認・要対応を同じ言い方で)・「問題が見つからなかった項目: N件」・点検の範囲・申込フォーム(担当者名・メール=必須、電話・ひとこと=任意)。申込フォームは署名つき(`WEBDOCK_SECRET` の HMAC。1日を過ぎると無効)と、見えない罠の欄(ハニーポット)つき。
 - 「今後の案内は不要」リンク → 確認ページ → 停止を記録。
+- **見せ方の版(A/B)**: 専用ページは、トークンから決まる2つの版が半々で出る(`sha256(token)` の先頭1バイトの偶奇。DBに持たなくても同じページは常に同じ版)。`titles` = 主な指摘は全文、ほかの確認項目は題名だけ+「詳しい内容・優先順位・確認依頼文は簡易レポートで」の注記 / `full` = 題名+要約(従来どおり)。どちらも直し方の文は出さない。緊急時は `.env` の `PAGE_VARIANT_FORCE=titles|full` で全ページを固定できる(再起動が必要)。
+- **版の記録(移行007)**: `mysql < sql/warehouse_migrate_007.sql` で `webdock_pages.variant` を追加(何度実行しても安全。未適用でもページは動き、版の記録だけ飛ばす)。人が開いたとき・申し込んだときに控え、管理画面「専用ページ」に版ごとの 開かれた/申込/申込率 と一覧の「版」列が出る。STOCの履歴メモ(`sales_logs`)の末尾には「(表示:titles|full)」が付く(`report_inquiries` には入れない)。既存の行は列がNULLのままで、開かれたときに入る。
 
 **STOC営業管理との対応**(`src/pages.js`。MEOレポートの `/report/<token>` と同じ表・列に書くので、STOCの画面に同じように出る)
 

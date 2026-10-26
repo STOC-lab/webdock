@@ -38,7 +38,16 @@ function buildSelectQuery(a = {}, { db = S.stocDbName(), storeFlags = false } = 
   const cats = list(a.categoryLike);
   if (cats.length) { where.push('(' + cats.map(() => 's.category LIKE ?').join(' OR ') + ')'); for (const c of cats) params.push(likeEsc(c)); }
   const ex = list(a.excludeCategoryLike);
-  if (ex.length) { where.push('(s.category IS NULL OR (' + ex.map(() => 's.category NOT LIKE ?').join(' AND ') + '))'); for (const c of ex) params.push(likeEsc(c)); }
+  if (ex.length) {
+    // 「病院」だけは特例: 動物病院(ペット向け)は残す = 病院を含み、かつ動物病院を含まない業種だけを外す
+    const parts = [];
+    const ps = [];
+    for (const c of ex) {
+      if (c === '病院') { parts.push('NOT (s.category LIKE ? AND s.category NOT LIKE ?)'); ps.push(likeEsc('病院'), likeEsc('動物病院')); } else { parts.push('s.category NOT LIKE ?'); ps.push(likeEsc(c)); }
+    }
+    where.push('(s.category IS NULL OR (' + parts.join(' AND ') + '))');
+    params.push(...ps);
+  }
   const claim = [`EXISTS (SELECT 1 FROM ${db}.sales_logs clm WHERE clm.store_id = s.id AND clm.deleted_at IS NULL AND clm.call_result = 'クレーム')`];
   if (storeFlags) claim.push(`EXISTS (SELECT 1 FROM ${db}.store_flags f WHERE f.store_id = s.id AND f.flag = 'クレーム' AND f.cleared_at IS NULL)`);
   const sql = `SELECT s.id, s.name, s.website_url, s.prefecture, s.category, s.phone, s.phone_mobile, s.phone_free, s.address, s.status, s.inquiry_form_sent_at,

@@ -16,13 +16,22 @@ const ok = (c, msg) => eq(!!c, true, msg);
 
 (async () => {
   // ---- 選ぶSQL ----
-  const q = X.buildSelectQuery({ prefecture: '兵庫県,大阪府', categoryLike: 'ラーメン,美容', excludeCategoryLike: '病院' }, { db: 'stoc_sales', storeFlags: true });
+  const q = X.buildSelectQuery({ prefecture: '兵庫県,大阪府', categoryLike: 'ラーメン,美容', excludeCategoryLike: 'ゴルフ' }, { db: 'stoc_sales', storeFlags: true });
   ok(q.sql.includes("s.inquiry_form_result = '成功'"), 'SQL: 送信成功');
   ok(q.sql.includes("s.website_url IS NOT NULL AND s.website_url <> ''"), 'SQL: URLあり');
   ok(q.sql.includes('s.prefecture IN (?)'), 'SQL: 県');
   ok(q.sql.includes('(s.category LIKE ? OR s.category LIKE ?)'), 'SQL: 業種LIKE');
   ok(q.sql.includes('(s.category IS NULL OR (s.category NOT LIKE ?))'), 'SQL: 業種除外(NULLは残す)');
-  eq(q.params, [['兵庫県', '大阪府'], '%ラーメン%', '%美容%', '%病院%'], 'SQL: パラメータ');
+  eq(q.params, [['兵庫県', '大阪府'], '%ラーメン%', '%美容%', '%ゴルフ%'], 'SQL: パラメータ');
+  {
+    // 「病院」だけは動物病院を残す特例
+    const h = X.buildSelectQuery({ excludeCategoryLike: '病院' }, { db: 'stoc_sales' });
+    ok(h.sql.includes('(s.category IS NULL OR (NOT (s.category LIKE ? AND s.category NOT LIKE ?)))'), 'SQL: 病院除外は動物病院を残す');
+    eq(h.params, ['%病院%', '%動物病院%'], 'SQL: 病院除外のパラメータ');
+    const h2 = X.buildSelectQuery({ excludeCategoryLike: '病院,ゴルフ' }, { db: 'stoc_sales' });
+    ok(h2.sql.includes('NOT (s.category LIKE ? AND s.category NOT LIKE ?) AND s.category NOT LIKE ?'), 'SQL: 他の語との併用');
+    eq(h2.params, ['%病院%', '%動物病院%', '%ゴルフ%'], 'SQL: 併用のパラメータ');
+  }
   ok(q.sql.includes("clm.call_result = 'クレーム'") && q.sql.includes('clm.deleted_at IS NULL') && q.sql.includes('clm.store_id = s.id'), 'SQL: クレーム(sales_logs)');
   ok(q.sql.includes("f.flag = 'クレーム' AND f.cleared_at IS NULL"), 'SQL: クレーム(store_flags)');
   ok(q.sql.includes('ORDER BY s.inquiry_form_sent_at IS NULL, s.inquiry_form_sent_at ASC'), 'SQL: 古い順');

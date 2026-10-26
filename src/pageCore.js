@@ -82,7 +82,20 @@ function classifyUa(ua, method = 'GET') {
   return BOT_UA.test(String(ua || '').trim()) ? 'bot' : 'human';
 }
 
+/**
+ * 見せ方の版(トークンから決まる。DBに持たなくても同じページは常に同じ版)。
+ *   titles: 他の項目は題名だけ / full: 題名+要約(従来どおり)。sha256(token) の先頭1バイトの偶奇で半々。
+ * 緊急時は環境変数 PAGE_VARIANT_FORCE=titles|full で全ページを固定できる(それ以外の値は無視)。
+ */
+const VARIANTS = ['titles', 'full'];
+function variantOf(token, env = process.env) {
+  const f = String((env && env.PAGE_VARIANT_FORCE) || '').trim();
+  if (VARIANTS.includes(f)) return f;
+  return VARIANTS[crypto.createHash('sha256').update(String(token)).digest()[0] % 2];
+}
+
 module.exports = {
+  VARIANTS, variantOf,
   ALPHABET, TOKEN_RE, TOKEN_LEN, FORM_MAX_AGE_MS, FORM_FUTURE_MS, DEFAULT_BASE_URL, BOT_UA,
   newToken, isToken, baseUrl, pageUrl, makeFormToken, verifyFormToken, makeViewToken, verifyViewToken, classifyUa,
 };

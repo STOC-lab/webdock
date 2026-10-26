@@ -13,6 +13,8 @@ const crypto = require('crypto');
 const S = require('./stocBatch');
 const { newToken } = require('./pageCore');
 
+const isNoColumn = (e) => !!e && (e.errno === 1054 || e.code === 'ER_BAD_FIELD_ERROR');
+
 const WH = 'stoc_master.webdock_pages';
 const MARK = '【WEBドック】';
 const LEAD_DUP_MS = 10 * 60 * 1000; // 同じページからの申込をこの間隔内に重ねて押したら1件にする
@@ -154,15 +156,31 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
   const clip = (s, n) => [...String(s === undefined || s === null ? '' : s)].slice(0, n).join('');
 
   /**
+   * 見せた版(titles/full)を最初の1回だけ webdock_pages.variant に控える。移行007が未適用(列なし)なら黙って飛ばす(ログは1回だけ)。
+   * 失敗してもページの表示・申込は止めない。
+   */
+  let variantWarned = false;
+  async function recordVariant(page, variant) {
+    if (!variant) return;
+    try {
+      await pool.query(`UPDATE ${WH} SET variant = COALESCE(variant, ?) WHERE id = ?`, [variant, page.id]);
+    } catch (e) {
+      if (isNoColumn(e)) { if (!variantWarned) { variantWarned = true; log('[pages] webdock_pages.variant 列がありません(sql/warehouse_migrate_007.sql 未適用)。版の記録は飛ばします。'); } return; }
+      log(`[pages] 版の記録に失敗: ${e.message}`);
+    }
+  }
+
+  /**
    * 閲覧を1件記録する(人と思われるアクセスのみ)。戻り: { viewId } (STOC側に書けなければ viewId: 0)
    * bot / HEAD は bot_view_count だけ増やし、STOCには書かない。
    */
-  async function recordView(page, { uaClass, ip, ua, referer }) {
+  async function recordView(page, { uaClass, ip, ua, referer, variant }) {
     if (uaClass === 'bot') {
       await pool.query(`UPDATE ${WH} SET bot_view_count = bot_view_count + 1, last_ua_class = 'bot' WHERE id = ?`, [page.id]);
       return { viewId: 0 };
     }
     await pool.query(`UPDATE ${WH} SET view_count = view_count + 1, first_viewed_at = COALESCE(first_viewed_at, NOW()), last_viewed_at = NOW(), last_ua_class = 'human' WHERE id = ?`, [page.id]);
+    await recordVariant(page, variant);
     if (!page.stoc_store_id) return { viewId: 0 };
     try {
       const reportId = await ensureReport(pool, page);
@@ -191,10 +209,12 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
    * 「詳しい簡易レポートを希望する」。倉庫に申込の内容を控え、STOCの見込み客(report_inquiries)・閲覧のCTA・履歴メモを1トランザクションで書く。
    * 戻り: { duplicate, stoc: true|false, error? }。STOCへ書けなくても例外にせず stoc:false で返す(通知メールで取りこぼさないため)。
    */
-  async function submitLead(page, form, { ip, ua, viewId = 0 } = {}) {
+  async function submitLead(page, form, { ip, ua, viewId = 0, variant } = {}) {
     if (page.lead_at && now().getTime() - new Date(page.lead_at).getTime() < LEAD_DUP_MS) return { duplicate: true, stoc: !!page.lead_stoc_at };
     const contact = { name: form.name, email: form.email, phone: form.phone || '', message: form.message || '' };
     await pool.query(`UPDATE ${WH} SET lead_at = NOW(), lead_stoc_at = NULL, lead_contact = ? WHERE id = ?`, [JSON.stringify(contact), page.id]);
+    await recordVariant(page, variant);
+    const shown = variant || page.variant || '';
     if (!page.stoc_store_id) return { duplicate: false, stoc: false, error: '営業管理の店舗IDがありません' };
     const conn = await pool.getConnection();
     try {
@@ -212,7 +232,7 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
       const [st] = await conn.query(`SELECT status FROM ${db}.stores WHERE id = ? LIMIT 1`, [page.stoc_store_id]);
       const status = (st && st[0] && st[0].status) || '未対応';
       const memo = [`${MARK}御社専用ページから「詳しい簡易レポートを希望する」`, `担当者: ${form.name}`, `メール: ${form.email}`, `電話: ${form.phone || '(未入力)'}`,
-        `ひとこと: ${form.message || '(なし)'}`, `対象サイト: ${page.domain}`, `バッチ: ${page.stoc_batch_code || '-'}`].join(' / ');
+        `ひとこと: ${form.message || '(なし)'}`, `対象サイト: ${page.domain}`, `バッチ: ${page.stoc_batch_code || '-'}`].join(' / ') + (shown ? `(表示:${shown})` : '');
       await conn.query(`INSERT INTO ${db}.sales_logs (${LOG_COLS.join(',')}) VALUES (?,?,?,?,?,?)`, [page.stoc_store_id, null, 'WEBドック', status, null, memo]);
       await conn.commit();
     } catch (e) {
@@ -251,11 +271,24 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
   async function listRecent({ filter = 'all', limit = 200 } = {}) {
     const where = FILTERS[filter] !== undefined ? FILTERS[filter] : '';
     const lim = Math.max(1, Math.min(Number(limit) || 200, 500));
-    const [rows] = await pool.query(`SELECT id, token, company_name, domain, stoc_store_id, stoc_batch_code, created_at, first_viewed_at, last_viewed_at, view_count, bot_view_count,
-      human_at, lead_at, lead_stoc_at, opt_out_at FROM ${WH} ${where} ORDER BY COALESCE(lead_at, last_viewed_at, created_at) DESC, id DESC LIMIT ${lim}`);
+    const listSql = (cols) => `SELECT id, token, company_name, domain, stoc_store_id, stoc_batch_code, created_at, first_viewed_at, last_viewed_at, view_count, bot_view_count,
+      human_at, lead_at, lead_stoc_at, opt_out_at${cols} FROM ${WH} ${where} ORDER BY COALESCE(lead_at, last_viewed_at, created_at) DESC, id DESC LIMIT ${lim}`;
+    let rows, hasVariant = true;
+    try { [rows] = await pool.query(listSql(', variant')); } catch (e) {
+      if (!isNoColumn(e)) throw e;
+      hasVariant = false; // 移行007が未適用
+      [rows] = await pool.query(listSql(''));
+    }
+    let variants = [];
+    if (hasVariant) {
+      try {
+        const [vr] = await pool.query(`SELECT variant, COUNT(*) AS viewed, SUM(lead_at IS NOT NULL) AS leads FROM ${WH} WHERE variant IS NOT NULL GROUP BY variant`);
+        variants = (Array.isArray(vr) ? vr : []).map((x) => ({ variant: x.variant, viewed: Number(x.viewed) || 0, leads: Number(x.leads) || 0 }));
+      } catch (e) { if (!isNoColumn(e)) throw e; }
+    }
     const [[c]] = await pool.query(`SELECT COUNT(*) AS total, SUM(view_count > 0) AS viewed, SUM(human_at IS NOT NULL) AS human, SUM(lead_at IS NOT NULL) AS leads, SUM(opt_out_at IS NOT NULL) AS optout FROM ${WH}`);
     return {
-      rows, counts: { total: Number(c.total) || 0, viewed: Number(c.viewed) || 0, human: Number(c.human) || 0, leads: Number(c.leads) || 0, optout: Number(c.optout) || 0 },
+      rows, variants, counts: { total: Number(c.total) || 0, viewed: Number(c.viewed) || 0, human: Number(c.human) || 0, leads: Number(c.leads) || 0, optout: Number(c.optout) || 0 },
     };
   }
 

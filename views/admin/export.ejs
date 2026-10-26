@@ -30,14 +30,14 @@
     <div id="stocbox" class="adm-sub">
       <p class="adm-help">上の「どの県?」で県を選ぶか、「全国」にチェックを入れてください(どちらも無いときは始まりません)。クレーム登録・失注/契約・WEBドックで送信済み・チェーン/共通ドメイン・除外ドメインの店は自動で外します。</p>
       <label>最終送信から何日空けるか <input class="adm-input adm-short" type="number" name="min_days" min="0" max="3650" value="<%= f.min_days !== undefined && f.min_days !== '' ? f.min_days : 14 %>"></label>
-      <label class="adm-check"><input type="checkbox" name="exclude_hospital" value="1" <%= hasForm ? (f.exclude_hospital ? 'checked' : '') : 'checked' %>> 病院を除く(業種に「病院」を含む店)</label>
+      <label class="adm-check"><input type="checkbox" name="exclude_hospital" value="1" <%= hasForm ? (f.exclude_hospital ? 'checked' : '') : 'checked' %>> 病院を除く(業種に「病院」を含む店。動物病院は残します)</label>
       <label>上限件数 <input class="adm-input adm-short" type="number" name="limit_stoc" min="1" value="<%= f.limit_stoc || 2000 %>"></label>
-      <label class="adm-check"><input type="checkbox" name="with_page_stoc" value="1" <%= f.with_page_stoc ? 'checked' : '' %>> 御社専用ページのURLを入れる(既定はOFF)</label>
+      <label class="adm-check"><input type="checkbox" name="with_page_stoc" value="1" <%= hasForm ? (f.with_page_stoc ? 'checked' : '') : 'checked' %>> 御社専用ページのURLを入れる(既定はON。外すこともできます)</label>
     </div>
     <div id="b2bbox" class="adm-sub">
       <label>主業種のキーワード(カンマ区切り)</label>
       <textarea class="adm-input" name="main_category" rows="3"><%= f.main_category || defaultMain %></textarea>
-      <label class="adm-check"><input type="checkbox" name="with_page" value="1" <%= f.with_page ? 'checked' : '' %>> 御社専用ページのURLを入れる</label>
+      <label class="adm-check"><input type="checkbox" name="with_page" value="1" <%= hasForm ? (f.with_page ? 'checked' : '') : 'checked' %>> 御社専用ページのURLを入れる(既定はON。外すこともできます)</label>
       <p class="adm-help">「診断して文面も作る」のとき、会社ごとの専用ページ(/r/…)を作り、送信用CSVの4列目にそのURLを入れます(本文もページ版に変わります)。ページの閲覧と「簡易レポート希望」のボタンは、営業管理の見込み客に届きます。事前に <code>sql/warehouse_migrate_006.sql</code> の適用とDB権限(GRANT)が必要です(足りなければ診断を始める前に中止して、必要なGRANTを表示します)。</p>
     </div>
 

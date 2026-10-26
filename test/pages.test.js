@@ -301,7 +301,8 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     ok(html.includes('株式会社サンプル製作所 御中'), '宛名');
     ok(html.includes('example-seisakusho.co.jp') && html.includes('2026年10月26日'), '対象サイトと確認日');
     ok(html.includes('御社サイト(example-seisakusho.co.jp)を確認したところ、サイト全体が暗号化'), '主な指摘の一文');
-    ok(html.includes('セキュリティ用ヘッダー設定') && !html.includes('HTTPSへの自動転送'), 'その他の確認項目(主な指摘に対応する項目は除く)');
+    ok(html.includes('セキュリティ用ヘッダー設定') && /<ul class="pg-list">(?:(?!<\/ul>)[\s\S])*セキュリティ用ヘッダー設定/.test(html) && !/<ul class="pg-list">(?:(?!<\/ul>)[\s\S])*HTTPSへの自動転送/.test(html), 'その他の確認項目(主な指摘に対応する項目は一覧に重ねない)');
+    ok(html.includes('HTTPSへの自動転送') && html.includes('サイトがHTTPSになっていません'), '主な指摘は題名・要約つきで必ず出る');
     ok(html.includes('問題が見つからなかった項目: <strong>2件</strong>'), 'ok件数');
     ok(!html.includes('CMS') , 'unknownは出さない');
     ok(html.includes('点検の範囲') && html.includes('侵入') , '点検の範囲');
@@ -514,6 +515,7 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     ok((await (await rq(B + '/', { headers: { cookie } })).text()).includes('>専用ページ</a>'), '一覧: ナビに「専用ページ」');
     const ex = await (await rq(B + '/export', { headers: { cookie } })).text();
     ok(ex.includes('name="with_page"') && ex.includes('御社専用ページのURLを入れる'), '取り出し画面: チェックボックス');
+    ok(/name="with_page" value="1" checked>/.test(ex) && /name="with_page_stoc" value="1" checked>/.test(ex), '取り出し画面: 専用ページのURLは両プリセットとも既定でON');
     server.close();
   }
 
@@ -557,6 +559,82 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     const inj = fakePool({ handlers: [[/COUNT\(\*\) AS total/, () => [[{ total: 0 }]]]] });
     await P.createPageStore(inj, { env: ENV }).listRecent({ filter: "x'; DROP TABLE y;--", limit: 'abc' });
     ok(!/DROP/.test(inj.log[0].sql) && /LIMIT 200/.test(inj.log[0].sql), '一覧SQL: 不正なフィルタ・上限は無視');
+  }
+
+  // ---- 見せ方の版(titles / full) ----
+  {
+    const gen = (n) => Array.from({ length: n }, () => C.newToken());
+    const toks = gen(1000);
+    const vs = toks.map((t) => C.variantOf(t, {}));
+    const nFull = vs.filter((v) => v === 'full').length;
+    ok(vs.every((v) => v === 'titles' || v === 'full'), '版: titles か full');
+    ok(nFull >= 450 && nFull <= 550, `版: 1000件でほぼ半々(full=${nFull})`);
+    eq(toks.slice(0, 50).map((t) => C.variantOf(t, {})), toks.slice(0, 50).map((t) => C.variantOf(t, {})), '版: 同じトークンは毎回同じ');
+    eq(C.variantOf('AbCdEfGh12', {}), require('crypto').createHash('sha256').update('AbCdEfGh12').digest()[0] % 2 ? 'full' : 'titles', '版: sha256先頭バイトの偶奇');
+    ok(toks.every((t) => C.variantOf(t, { PAGE_VARIANT_FORCE: 'titles' }) === 'titles') && toks.every((t) => C.variantOf(t, { PAGE_VARIANT_FORCE: 'full' }) === 'full'), '版: PAGE_VARIANT_FORCE で固定');
+    ok(toks.slice(0, 20).every((t) => C.variantOf(t, { PAGE_VARIANT_FORCE: 'bogus' }) === C.variantOf(t, {})), '版: 不正な PAGE_VARIANT_FORCE は無視');
+
+    const pick = (v) => { for (;;) { const t = C.newToken(); if (C.variantOf(t, {}) === v) return t; } };
+    const tT = pick('titles'), tF = pick('full');
+    const withFix = (t) => PAGE({ token: t, findings_json: JSON.stringify([
+      { key: 'https_redirect', title: 'HTTPSへの自動転送', status: 'bad', summary: 'MAIN要約テキスト', remedy: 'site', why: 'WHYTEXT', fix: 'FIXTEXT' },
+      { key: 'headers', title: 'セキュリティ用ヘッダー設定', status: 'warn', summary: 'OTHER要約テキスト', remedy: 'site', why: 'WHYTEXT', fix: 'FIXTEXT' },
+      { key: 'mail', title: 'メール対策', status: 'ok', summary: 'OK要約', remedy: 'dns' },
+    ]) });
+    const ctx = await boot({ pages: { [tT]: withFix(tT), [tF]: withFix(tF) } });
+    const NOTE = '制作会社様へそのままお渡しいただける確認依頼文は、簡易レポートでお送りします。';
+    const ht = await (await ctx.req(`/r/${tT}`)).text();
+    const hf = await (await ctx.req(`/r/${tF}`)).text();
+    ok(ht.includes('セキュリティ用ヘッダー設定') && !ht.includes('OTHER要約テキスト'), 'titles: 他の項目は題名だけ(要約なし)');
+    ok(ht.includes(NOTE) && ht.indexOf(NOTE) < ht.indexOf('name="ft"'), 'titles: 注記がCTA(フォーム)の手前にある');
+    ok(hf.includes('OTHER要約テキスト') && !hf.includes(NOTE), 'full: 題名+要約(従来どおり)、注記なし');
+    ok(hf.includes('優先順位') && hf.includes('確認依頼文'), 'full: CTAに優先順位・確認依頼文の説明');
+    for (const [n, h] of [['titles', ht], ['full', hf]]) {
+      ok(h.includes('MAIN要約テキスト') && h.includes('HTTPSへの自動転送') && h.includes('サイト全体が暗号化'), `${n}: 主な指摘は常に全文`);
+      ok(h.includes('問題が見つからなかった項目: <strong>1件</strong>'), `${n}: 問題が見つからなかった項目の件数`);
+      ok(!h.includes('FIXTEXT') && !h.includes('WHYTEXT'), `${n}: 直し方・理由の文は出さない`);
+    }
+    // 版の記録: 人の閲覧・申込で COALESCE 更新
+    const upd = sqls(ctx.fp, /SET variant = COALESCE\(variant, \?\)/);
+    ok(upd.length === 2 && upd[0].params[0] === 'titles' && upd[1].params[0] === 'full', '版の記録: 人の閲覧ごとに UPDATE ... COALESCE(variant, ?)');
+    await ctx.req(`/r/${tT}`, { method: 'HEAD' });
+    await ctx.req(`/r/${tT}`, { headers: { 'User-Agent': 'curl/8 bot' } });
+    eq(sqls(ctx.fp, /SET variant = COALESCE/).length, 2, '版の記録: bot/HEAD では記録しない');
+    // 申込: sales_logs のメモにだけ版を付ける
+    const page1 = await ctx.req(`/r/${tF}`);
+    const h1 = await page1.text();
+    const body = form({ name: '山田', email: 'y@example.co.jp', phone: '', message: '', ft: attr(h1, 'ft'), vt: attr(h1, 'vt'), website: '' });
+    eq((await ctx.req(`/r/${tF}/request`, { method: 'POST', headers: URLENC, body })).status, 303, '申込: 受付');
+    const lg = sqls(ctx.fp, /^INSERT INTO \S*\.sales_logs/)[0];
+    ok(lg && lg.params[5].endsWith('(表示:full)'), '申込: sales_logs のメモ末尾に(表示:full)');
+    const inq = sqls(ctx.fp, /^INSERT INTO \S*\.report_inquiries/)[0];
+    ok(inq && !inq.params.some((p) => String(p).includes('表示:')), '申込: report_inquiries には版を入れない');
+    ctx.server.close();
+
+    // PAGE_VARIANT_FORCE が画面に効く
+    const { viewModel } = require('../src/pageRoutes');
+    eq(viewModel(withFix(tF), { env: { PAGE_VARIANT_FORCE: 'titles' } }).variant, 'titles', 'viewModel: 強制した版');
+
+    // 移行007の書き方(PREPARE文字列内の引用符は2つ重ね)
+    const mig = fs.readFileSync(path.join(__dirname, '..', 'sql', 'warehouse_migrate_007.sql'), 'utf8');
+    ok(/ADD COLUMN variant VARCHAR\(10\) NULL COMMENT ''[^']+''/.test(mig) && /COLUMN_NAME = 'variant'/.test(mig) && /PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;/.test(mig), '移行007: 冪等(列の有無を見て追加)・引用符を2つ重ね');
+    const lits = [...mig.matchAll(/IF\(COUNT\(\*\) = 0, '((?:[^']|'')*)', 'SELECT 1'\)/g)];
+    ok(lits.length === 1, '移行007: PREPARE文字列の引用符が崩れていない');
+
+    // 列がない環境(移行007未適用)でも表示・申込は動き、ログは1回だけ
+    const logs = [];
+    const noCol = fakePool({ pages: { [tT]: withFix(tT) }, handlers: [[/SET variant = COALESCE/, () => { throw Object.assign(new Error('Unknown column'), { errno: 1054, code: 'ER_BAD_FIELD_ERROR' }); }]] });
+    const st0 = P.createPageStore(noCol, { env: ENV, log: (m) => logs.push(m) });
+    const pg = withFix(tT);
+    await st0.recordView(pg, { uaClass: 'human', variant: 'titles' });
+    await st0.recordView(pg, { uaClass: 'human', variant: 'titles' });
+    eq(logs.filter((m) => m.includes('variant')).length, 1, '列なし: 版の記録は黙って飛ばし、ログは1回だけ');
+    // 一覧: 列がなければ variant なしで読み直す
+    const lp = fakePool({ handlers: [[/, variant FROM/, () => { throw Object.assign(new Error('Unknown column'), { errno: 1054 }); }], [/FROM stoc_master\.webdock_pages ORDER/, () => [[{ id: 1 }]]], [/COUNT\(\*\) AS total/, () => [[{ total: 1 }]]]] });
+    const lr = await P.createPageStore(lp, { env: ENV }).listRecent({});
+    ok(lr.rows.length === 1 && lr.variants.length === 0, '一覧: 列なしでも読める');
+    const lp2 = fakePool({ handlers: [[/GROUP BY variant/, () => [[{ variant: 'titles', viewed: '10', leads: '2' }, { variant: 'full', viewed: 8, leads: 1 }]]], [/FROM stoc_master\.webdock_pages ORDER/, () => [[]]], [/COUNT\(\*\) AS total/, () => [[{ total: 0 }]]]] });
+    eq((await P.createPageStore(lp2, { env: ENV }).listRecent({})).variants, [{ variant: 'titles', viewed: 10, leads: 2 }, { variant: 'full', viewed: 8, leads: 1 }], '一覧: 版ごとの 開かれた・申込');
   }
 
   console.log(`pages: ${pass} passed, ${fail} failed`);

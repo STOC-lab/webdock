@@ -637,7 +637,7 @@ function registerAdminWarehouse(app, deps = {}) {
       error = '専用ページの一覧を読み込めませんでした。sql/warehouse_migrate_006.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。';
     }
     const baseUrl = require('./pageCore').baseUrl();
-    await page(req, res, 'pages', { nav: 'pages', error, filter, rows: data.rows, counts: data.counts, pageBase: baseUrl });
+    await page(req, res, 'pages', { nav: 'pages', error, filter, rows: data.rows, counts: data.counts, variants: data.variants || [], pageBase: baseUrl });
   }));
 
   // ===== 営業管理とつなぐ =====
