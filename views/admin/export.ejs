@@ -27,6 +27,8 @@
     <div id="b2bbox" class="adm-sub">
       <label>主業種のキーワード(カンマ区切り)</label>
       <textarea class="adm-input" name="main_category" rows="3"><%= f.main_category || defaultMain %></textarea>
+      <label class="adm-check"><input type="checkbox" name="with_page" value="1" <%= f.with_page ? 'checked' : '' %>> 御社専用ページのURLを入れる</label>
+      <p class="adm-help">「診断して文面も作る」のとき、会社ごとの専用ページ(/r/…)を作り、送信用CSVの4列目にそのURLを入れます(本文もページ版に変わります)。ページの閲覧と「簡易レポート希望」のボタンは、営業管理の見込み客に届きます。事前に <code>sql/warehouse_migrate_006.sql</code> の適用とDB権限(GRANT)が必要です(足りなければ診断を始める前に中止して、必要なGRANTを表示します)。</p>
     </div>
 
     <h3>3. 絞り込み</h3>

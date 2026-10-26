@@ -22,6 +22,7 @@
     "test:single": "node test/single.test.js",
     "test:report": "node test/report.test.js",
     "test:exclude": "node test/exclude.test.js",
+    "test:pages": "node test/pages.test.js",
     "wh:sitehost": "node cli/warehouse-sitehost.js"
   },
   "keywords": [],

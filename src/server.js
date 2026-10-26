@@ -11,9 +11,10 @@ const { fetchHomepage, withHttpProbe } = require('./safeFetch');
 const { runChecks } = require('./checks');
 const db = require('./db');
 const { verifyTurnstile } = require('./turnstile');
-const { notifyLead } = require('./notify');
+const { notifyLead, notifyPageLead } = require('./notify');
 const { PREFECTURES, routeByPrefecture, COMPANY_INFO } = require('./regions');
 const { registerAdminWarehouse } = require('./adminWarehouse');
+const { registerPages } = require('./pageRoutes');
 const { groupItems, buildRequestText, BUCKETS, BUCKET_ORDER, statusLabel } = require('./reportBuckets');
 const { loadTemplates, jstDateJa } = require('./outreach');
 
@@ -241,6 +242,17 @@ function reportViewModel(scan, company, input) {
     siteRequest: buildRequestText(siteItems, 'site', company ? company + ' 御中' : ''),
     dnsRequest: buildRequestText(g.dns, 'dns', company ? company + ' 御中' : ''),
   };
+}
+
+// 御社専用ページ(/r/<token>。公開・ログイン不要)。倉庫DB(WH_DB_*)が設定されているときだけ有効。起動時に権限を確認し、足りなければ必要なGRANTをログに出す
+if (process.env.WH_DB_USER) {
+  const S = require('./stocBatch');
+  const pagesPool = S.createStocPool();
+  const pageStore = require('./pages').createPageStore(pagesPool);
+  registerPages(app, { store: pageStore, secret: SECRET, notify: notifyPageLead });
+  require('./pages').checkPageAccess(pagesPool).catch((e) => console.error('[pages] ' + (e && e.pageCheck ? e.message : '専用ページの確認に失敗しました: ' + (e && e.message))));
+} else {
+  app.use('/r', (req, res) => res.status(404).type('text/plain').send('Not Found'));
 }
 
 // 倉庫の管理画面(WAREHOUSE_ADMIN_PASS と ADMIN_ALLOW_IPS の両方が設定されたときだけ有効。未設定なら /admin は404)

@@ -1,12 +1,13 @@
 'use strict';
 /**
  * 一括診断(問い合わせ営業用)
- * node cli/batch-scan.js --in list.tsv --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--resume]
+ * node cli/batch-scan.js --in list.tsv --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] [--with-page] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--resume]
  * 入力は TSV/CSV(UTF-8 または Shift_JIS。warehouse-promote の11列CSVもそのまま使える)。
  * グループ本文の差し込みタグ: --merge-tags '{"会社名":"%company%","ドメイン":"%domain%"}' (省略時は outreach-config.json の「差し込みタグ」)
  * 倉庫から直接: node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 [--exclude-large|--small-only]
  *              [--form-found] --template b2b --out result.csv   (WH_DB_* が必要)
  * B2B(建設・製造向け): --template b2b [--subject 1|2|3] [--max-chars N]
+ * 御社専用ページ(単一本文のみ): --single-out dir --with-page  会社ごとの専用ページ(/r/<token>)を作り、CSVの4列目にそのURLを入れる(sql/warehouse_migrate_006.sql が必要)
  */
 const fs = require('fs');
 const path = require('path');
@@ -388,6 +389,24 @@ async function runBatch({ rows, scan, out, templates, concurrency = 5, templateM
   return stats;
 }
 
+/**
+ * 診断の記録(<out>.jsonl)から、店(倉庫の store_id)ごとの診断項目を読む。専用ページに載せる項目(key,title,status,summary,remedy)だけにする。
+ * 同じ店の行が複数あれば(--resume)後のものを使う。
+ */
+function loadResultsByStore(jsonlFile) {
+  const map = new Map();
+  if (!fs.existsSync(jsonlFile)) return map;
+  const { summarizeFindings } = require('../src/pages');
+  for (const line of fs.readFileSync(jsonlFile, 'utf8').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const j = JSON.parse(line);
+      if (j && j.store_id !== undefined && Array.isArray(j.results)) map.set(String(j.store_id), summarizeFindings(j.results));
+    } catch { /* 壊れた行は読み飛ばす */ }
+  }
+  return map;
+}
+
 /* ---------- CLI ---------- */
 
 function parseArgs(argv) {
@@ -402,6 +421,7 @@ function parseArgs(argv) {
     else if (k === '--group-out') a.groupOut = argv[++i];
     else if (k === '--single-out') a.singleOut = argv[++i];
     else if (k === '--dry-run-stoc') a.dryRunStoc = true;
+    else if (k === '--with-page') a.withPage = true;
     else if (k === '--merge-tags') a.mergeTags = argv[++i];
     else if (k === '--resume') a.resume = true;
     else if (k === '--source') a.source = argv[++i];
@@ -422,10 +442,10 @@ async function main() {
   // --group-out(b2bのみ)があれば --out は省略可。省略時は <group-out>/scan_all.csv に全件の診断結果を書く
   if (a.groupOut && !a.out && a.template === 'b2b') a.out = path.join(a.groupOut, 'scan_all.csv');
   if (a.singleOut && !a.out && a.template === 'b2b') a.out = path.join(a.singleOut, 'scan_all.csv');
-  if ((!a.in && !fromWh) || !a.out || (a.groupOut && a.template !== 'b2b') || (a.singleOut && (a.template !== 'b2b' || a.groupOut)) || (a.dryRunStoc && !a.singleOut) || !['west', 'east', 'auto', 'b2b'].includes(a.template) || (a.source && !fromWh)
+  if ((!a.in && !fromWh) || !a.out || (a.groupOut && a.template !== 'b2b') || (a.singleOut && (a.template !== 'b2b' || a.groupOut)) || (a.dryRunStoc && !a.singleOut) || (a.withPage && !a.singleOut) || !['west', 'east', 'auto', 'b2b'].includes(a.template) || (a.source && !fromWh)
     || (a.subject !== undefined && !(a.subject >= 1 && a.subject <= 3))) {
     console.error('使い方: node cli/batch-scan.js (--in list.tsv | --source warehouse --prefecture 兵庫県 [--main-category 製造,建設] [--exclude-large|--small-only] [--form-found])\n'
-      + '        --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]');
+      + '        --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] [--with-page] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]');
     process.exit(2);
   }
   let mergeTags;
@@ -443,7 +463,11 @@ async function main() {
   if (a.singleOut) {
     try { require('dotenv').config(); } catch { /* なくても動く */ }
     stocPool = require('../src/stocBatch').createStocPool();
-    try { await require('../src/stocBatch').checkStocAccess(stocPool, { readOnly: !!a.dryRunStoc }); } catch (e) { await stocPool.end(); throw e; }
+    try {
+      await require('../src/stocBatch').checkStocAccess(stocPool, { readOnly: !!a.dryRunStoc });
+      // 専用ページ版: ページの表と、STOCの見込み客・閲覧への書き込み権限も、診断の前に確認する(試しのときはページを作らないので確認しない)
+      if (a.withPage && !a.dryRunStoc) await require('../src/pages').checkPageAccess(stocPool);
+    } catch (e) { await stocPool.end(); throw e; }
   }
   let rows;
   const preExcluded = {};
@@ -454,7 +478,10 @@ async function main() {
     if (loaded.claimExcluded) preExcluded[EX.REASON.claim] = loaded.claimExcluded;
     // 診断前の除外。--single-out のときは、すでにWEBドックで送った・送信予定の店(STOC営業管理のバッチ)も外す(二重送信防止。再送信のオプションはない)
     const ctx = { excludeList: EX.loadExcludeDomains(), chainHosts: loaded.chain.hosts };
-    if (stocPool) ctx.resendSet = await EX.loadResendSet(stocPool, require('../src/stocBatch').stocDbName());
+    if (stocPool) {
+      ctx.resendSet = await EX.loadResendSet(stocPool, require('../src/stocBatch').stocDbName());
+      ctx.optOutSet = await require('../src/pages').loadOptOutSet(stocPool); // 専用ページで「今後の案内は不要」と申し出た店
+    }
     const sel = selectForScan(loaded.rows, ctx, a.limit);
     rows = sel.rows;
     Object.assign(preExcluded, sel.counts);
@@ -487,7 +514,9 @@ async function main() {
       const { buildSingleFiles } = require('../src/outreachSingle');
       const now = new Date();
       const uid = process.env.STOC_EXPORT_USER_ID;
+      const pageStore = a.withPage && !a.dryRunStoc ? require('../src/pages').createPageStore(stocPool) : null;
       const res = await buildSingleFiles({
+        withPage: !!a.withPage, pages: pageStore, resultsByStore: a.withPage ? loadResultsByStore(a.out + '.jsonl') : undefined,
         rows: recs, outDir: a.singleOut, templates: loadTemplates(), now, dryRun: !!a.dryRunStoc,
         userId: /^\d+$/.test(uid || '') ? Number(uid) : null, memoDate: new Date(now.getTime() + 9 * 3600e3).toISOString().slice(0, 10),
         filter: { prefecture: a.prefecture || '', main_category: a.mainCategory || '', exclude_large: !!a.excludeLarge, small_only: !!a.smallOnly, form_found: !!a.formFound, limit: a.limit || 0 },
@@ -500,6 +529,6 @@ async function main() {
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
-module.exports = { selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
+module.exports = { loadResultsByStore, selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
-if (require.main === module) main().catch((e) => { console.error(e && (e.claimCheck || e.stocCheck) ? 'エラー: ' + e.message : e); process.exit(1); });
+if (require.main === module) main().catch((e) => { console.error(e && (e.claimCheck || e.stocCheck || e.pageCheck) ? 'エラー: ' + e.message : e); process.exit(1); });

@@ -176,7 +176,7 @@ async function registerBatch(pool, opts) {
         const s = it.store;
         return [batchId, it.stocId, s.name, historyPhone(contactPhone(s)), s.address === undefined ? null : s.address, s.prefecture === undefined ? null : s.prefecture,
           s.category === undefined ? null : s.category, formAsSite ? (it.formUrl || '') : (s.website_url || it.websiteUrl || ''), it.formUrl || null, s.gbp_url === undefined ? null : s.gbp_url,
-          '', s.score === undefined ? null : s.score, 'WEBドック:' + it.key, [...String(it.sentence || '')].slice(0, 200).join(''), 'pending'];
+          it.reportUrl || '', s.score === undefined ? null : s.score, 'WEBドック:' + it.key, [...String(it.sentence || '')].slice(0, 200).join(''), 'pending'];
       });
       await conn.query(`INSERT INTO ${db}.inquiry_export_items (${ITEM_COLUMNS}) VALUES ?`, [values]);
     }

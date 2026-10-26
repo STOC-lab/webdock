@@ -1,0 +1,17 @@
+<%- include('_head') %>
+<section class="pg-card">
+  <h1 class="pg-h1">今後のご案内の停止</h1>
+  <p><%= company %> 御中</p>
+  <% if (error) { %><div class="alert"><%= error %></div><% } %>
+  <% if (optedOut) { %>
+    <p>すでに停止のお申し出を受け付けています。今後、こちらからのご案内はお送りしません。</p>
+  <% } else { %>
+    <p>御社サイト(<%= domain %>)に関する、<%= OPERATOR_NAME %>からの今後のご案内を停止します。よろしければ下のボタンを押してください。</p>
+    <form method="post" action="/r/<%= token %>/optout" class="pg-form">
+      <input type="hidden" name="ft" value="<%= optToken %>">
+      <button type="submit" class="pg-btn pg-btn-sub">今後の案内を停止する</button>
+    </form>
+  <% } %>
+  <p><a href="/r/<%= token %>">確認結果のページに戻る</a></p>
+</section>
+<%- include('_foot') %>

@@ -8,6 +8,7 @@
  *   使い方: registerAdminWarehouse(app, deps)
  *     deps.jobs       作業実行係(src/adminJobs.js の createJobRunner)
  *     deps.queryStats 倉庫の件数を返す関数(テスト用に差し替え可能)
+ *     deps.listPages  専用ページの一覧を返す関数 async ({filter, limit}) => ({rows, counts})(テスト用に差し替え可能。既定は stoc_master.webdock_pages)
  *     deps.uploadDir / deps.exportDir / deps.password / deps.allowIps / deps.secret
  *
  *   WAREHOUSE_ADMIN_PASS が未設定なら、/admin 以下はすべて 404(機能ごと無効)。
@@ -214,13 +215,15 @@ function buildB2bScanArgs(body, { exportDir, now }) {
     return { error: '業種キーワードの入力が正しくありません(カンマ区切り・1語20文字まで)。' };
   }
   const args = ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', prefs.join(','), '--main-category', cats.join(',')];
+  const withPage = !!body.with_page;
   if (body.form_found) args.push('--form-found');
   if (size === 'exclude_large') args.push('--exclude-large');
   else if (size === 'small_only') args.push('--small-only');
   const exportFile = `b2b_scan_${stamp(now)}.csv`;
   const singleDir = `b2b_${stamp(now)}`;
   args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile), '--single-out', path.join(exportDir, singleDir));
-  return { args, exportFile, singleDir, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
+  if (withPage) args.push('--with-page');
+  return { args, exportFile, singleDir, withPage, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
 }
 
 // ---- 倉庫の件数(読み取り専用) ----
@@ -271,6 +274,11 @@ function registerAdminWarehouse(app, deps = {}) {
   const exportDir = path.resolve(deps.exportDir || process.env.WAREHOUSE_EXPORT_DIR || path.join(__dirname, '..', 'data', 'exports'));
   const jobs = deps.jobs || createJobRunner();
   const queryStats = deps.queryStats || createDefaultQueryStats();
+  let pagePool = null;
+  const listPages = deps.listPages || (async (q) => {
+    if (!pagePool) pagePool = require('./stocBatch').createStocPool();
+    return require('./pages').createPageStore(pagePool).listRecent(q);
+  });
   const now = deps.now || (() => new Date());
 
   // --- 署名つきセッション(有効期限を署名の中に入れる) ---
@@ -412,7 +420,7 @@ function registerAdminWarehouse(app, deps = {}) {
       .map((b) => ({ code: b.code, count: Number(b.count) || 0, file: `send_${b.code}.csv`, url: url(`send_${b.code}.csv`) }));
     const link = (n) => (g.names.includes(n) ? { name: n, url: url(n) } : null);
     return {
-      dirName, dryRun: !!r.dryRun, count: Number(r.count) || 0, batches,
+      dirName, dryRun: !!r.dryRun, withPage: !!r.withPage, count: Number(r.count) || 0, batches,
       body: g.names.includes('本文.txt') ? { ...link('本文.txt'), text: readText(g.dir, '本文.txt') } : null,
       check: link('確認用.csv'),
       summary: g.names.includes('まとめ.txt') ? { ...link('まとめ.txt'), text: readText(g.dir, 'まとめ.txt') } : null,
@@ -572,7 +580,7 @@ function registerAdminWarehouse(app, deps = {}) {
     if (req.body.action === 'scan') {
       const sb = buildB2bScanArgs(req.body, { exportDir, now: now() });
       if (sb.error) return exportPage(req, res, { error: sb.error, form: req.body }, 400);
-      const sr = jobs.start({ title: '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile, singleDir: sb.singleDir } });
+      const sr = jobs.start({ title: sb.withPage ? '診断して文面も作る(御社専用ページ付き)' : '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile, singleDir: sb.singleDir, withPage: sb.withPage } });
       if (!sr.ok) return exportPage(req, res, { error: sr.message, runningId: sr.runningId, form: req.body }, 409);
       return res.redirect(303, `${BASE}/jobs/${sr.id}`);
     }
@@ -583,6 +591,18 @@ function registerAdminWarehouse(app, deps = {}) {
     const r = jobs.start({ title, args: built.args, meta: { exportFile: built.exportFile } });
     if (!r.ok) return exportPage(req, res, { error: r.message, runningId: r.runningId, form: req.body }, 409);
     res.redirect(303, `${BASE}/jobs/${r.id}`);
+  }));
+
+  // ===== 御社専用ページの一覧(閲覧・申込) =====
+  router.get('/pages', wrap(async (req, res) => {
+    const filter = ['all', 'viewed', 'human', 'lead', 'optout'].includes(req.query.filter) ? req.query.filter : 'all';
+    let data = { rows: [], counts: null }, error = null;
+    try { data = await listPages({ filter, limit: 200 }); } catch (e) {
+      console.error('[admin] pages list error:', e && e.message);
+      error = '専用ページの一覧を読み込めませんでした。sql/warehouse_migrate_006.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。';
+    }
+    const baseUrl = require('./pageCore').baseUrl();
+    await page(req, res, 'pages', { nav: 'pages', error, filter, rows: data.rows, counts: data.counts, pageBase: baseUrl });
   }));
 
   // ===== 営業管理とつなぐ =====

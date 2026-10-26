@@ -11,10 +11,12 @@ const { audienceOf } = require('./outreach');
 const { classifyIndustry } = require('./outreach');
 const { domainOfUrl, groupKeyOfFinding, FINDING_KEY, GROUP_ORDER, GROUP_LABEL } = require('./outreachGroups');
 const S = require('./stocBatch');
+const PC = require('./pageCore');
 
 // 送信ツール用ヘッダー行(3列目は空欄のまま。STOC営業管理の書き出しと同じ)
 const SENDER_HEADER = ['送信先URL', '会社名', '', 'レポートURL', '業種', '評価・口コミ', 'STOCバッチコード', '電話番号', '住所'];
 const CHECK_HEADER = ['store_id', 'stoc_store_id', '会社名', 'ドメイン', '業種区分', '指摘', '一文', '送信先URL', '電話番号', '住所', 'バッチコード'];
+const CHECK_HEADER_PAGE = [...CHECK_HEADER, '専用ページURL'];
 const FORM_LIMIT_HINT = 500; // 送信先フォームの文字数上限の目安
 
 const csvField = (v) => {
@@ -24,12 +26,27 @@ const csvField = (v) => {
 const csvLine = (vals) => vals.map(csvField).join(',') + '\r\n';
 const len = (s) => [...s].length;
 
-/** 本文(タグは [company] [name] [param1] [param2] のまま)。差出人情報は outreach-config.json から */
-function renderBody(templates) {
-  if (!templates.b2bSingle) throw new Error('templates/outreach-b2b-single.txt がありません');
+/**
+ * 本文(タグは [company] [name] [param1] [param2] のまま)。差出人情報は outreach-config.json から。
+ * withPage=true は御社専用ページ版(templates/outreach-b2b-single-url.txt。[param1] にページのURLが入る)
+ */
+function renderBody(templates, { withPage = false } = {}) {
+  const tpl = withPage ? templates.b2bSingleUrl : templates.b2bSingle;
+  if (!tpl) throw new Error(withPage ? 'templates/outreach-b2b-single-url.txt がありません' : 'templates/outreach-b2b-single.txt がありません');
   const cfg = templates.config || {};
   const vars = { ...cfg, 担当者姓: String(cfg.担当者名 || '').trim().split(/[\s　]+/)[0] || '' };
-  return fillTemplate(templates.b2bSingle, vars).replace(/\n+$/, '');
+  return fillTemplate(tpl, vars).replace(/\n+$/, '');
+}
+
+/**
+ * 専用ページ版の一文。ドメインは本文に出さなくなるので、一文の先頭に入れる。
+ * 「確認したところ、…」→「御社サイト(example.co.jp)を確認したところ、…」(それ以外の書き出しなら「御社サイト(…)について、」を前に付ける)
+ */
+function pageSentence(sentence, domain) {
+  const s = String(sentence || '');
+  const d = String(domain || '');
+  if (!d) return s;
+  return s.startsWith('確認したところ、') ? `御社サイト(${d})を${s}` : `御社サイト(${d})について、${s}`;
 }
 
 /**
@@ -63,37 +80,40 @@ function pickCandidates(rows) {
 }
 
 /** 候補 + STOC店舗 → 送信項目。STOC側で見つからない・失注/契約の店は除外 */
-function buildItems(candidates, storeMap, templates, excluded) {
+function buildItems(candidates, storeMap, templates, excluded, { withPage = false } = {}) {
   const f = templates.findingsB2b || {};
   const items = [];
   for (const c of candidates) {
     const store = storeMap.get(c.stocId);
     if (!store) { excluded['営業管理に未登録'] = (excluded['営業管理に未登録'] || 0) + 1; continue; }
     if (store.status === '失注' || store.status === '契約') { excluded['営業管理で失注・契約'] = (excluded['営業管理で失注・契約'] || 0) + 1; continue; }
-    const sentence = (f[FINDING_KEY[c.key] || c.key] || {})['一文'];
-    if (!sentence) throw new Error(`findings-b2b.json の ${FINDING_KEY[c.key] || c.key} に「一文」がありません`);
+    const baseSentence = (f[FINDING_KEY[c.key] || c.key] || {})['一文'];
+    if (!baseSentence) throw new Error(`findings-b2b.json の ${FINDING_KEY[c.key] || c.key} に「一文」がありません`);
     const industry = c.rec['業種区分'] || classifyIndustry(c.rec['業種']);
+    const domain = domainOfUrl(c.rec['URL']);
+    const sentence = withPage ? pageSentence(baseSentence, domain) : baseSentence;
     items.push({
       ...c, store, sentence, industry, audience: audienceOf(industry),
       company: store.name || c.rec['店名'] || '',
-      domain: domainOfUrl(c.rec['URL']),
+      domain,
       websiteUrl: store.website_url || c.rec['URL'] || '',
     });
   }
   return items;
 }
 
-/** 送信ツール用の1行(9列・位置固定)。col3=[name]=指摘の一文、col6 は STOC と同じ書式 */
+/** 送信ツール用の1行(9列・位置固定)。col3=[name]=指摘の一文、col4=[param1]=ドメイン(専用ページ版はページのURL)、col6 は STOC と同じ書式 */
 function senderRow(it, code) {
-  return [it.formUrl, it.company, it.sentence, it.domain, it.audience, S.ratingInfo(it.store), code, S.contactPhone(it.store), it.store.address || ''];
+  return [it.formUrl, it.company, it.sentence, it.pageUrl || it.domain, it.audience, S.ratingInfo(it.store), code, S.contactPhone(it.store), it.store.address || ''];
 }
 
 /**
  * 本文の文字数の目安。[company] などを典型的な値に置き換えた長さ。
  * 戻り: { typical, longest }(最頻の一文の場合 / 最長の一文の場合)
  */
-function bodyLengths(body, items) {
-  const sub = (sentence, audience) => body.replace('[company]', '株式会社サンプル製作所').replace('[param1]', 'example-seisakusho.co.jp')
+function bodyLengths(body, items, { withPage = false } = {}) {
+  const p1 = withPage ? PC.pageUrl('AbCdEfGh12') : 'example-seisakusho.co.jp';
+  const sub = (sentence, audience) => body.replace('[company]', '株式会社サンプル製作所').replace('[param1]', p1)
     .replace('[param2]', audience).replace('[name]', sentence);
   const cnt = new Map();
   for (const it of items) cnt.set(it.sentence, (cnt.get(it.sentence) || 0) + 1);
@@ -105,11 +125,16 @@ function bodyLengths(body, items) {
   return { typical: len(sub(top, aud)), longest: len(sub(longest, aud)) };
 }
 
-function summaryText({ batches, items, excluded, body, dryRun, now, scanned, preExcluded = {} }) {
+function summaryText({ batches, items, excluded, body, dryRun, now, scanned, preExcluded = {}, withPage = false }) {
   const L = [];
   const sorted = Object.entries(excluded).sort((a, b) => b[1] - a[1]);
   L.push('【B2B送信 まとめ(単一本文)】', '');
   L.push(dryRun ? '*** STOC未登録(--dry-run-stoc) ***  バッチコードは仮です。このまま送信しても結果はSTOCへ戻りません。' : 'STOC営業管理にバッチを登録済みです(結果はバッチコードでSTOCへ戻ります)。');
+  if (withPage) {
+    L.push(dryRun
+      ? '*** 御社専用ページ版(--with-page)です。--dry-run-stoc のためページは作っていません。CSVの4列目のURLは仮で、開いてもページはありません。***'
+      : `御社専用ページ版(--with-page): ${items.length}社分のページを作りました(stoc_master.webdock_pages)。CSVの4列目[param1]がページのURLです。閲覧・申込は管理画面の「専用ページ」と、STOC営業管理の見込み客(/report-leads)に出ます。`);
+  }
   L.push('', `診断した会社: ${scanned}社 / 送信対象: ${items.length}社 / 送らない: ${scanned - items.length}社`, '');
   L.push('バッチ(送信ツールに読み込ませるCSV)');
   for (const b of batches) L.push(`  ${b.code} / ${b.count}社 / ${b.file}`);
@@ -126,12 +151,18 @@ function summaryText({ batches, items, excluded, body, dryRun, now, scanned, pre
   L.push('', '送らない理由(診断した会社のうち)');
   for (const [r, n] of sorted) L.push(`  ・${r}: ${n}社`);
   if (!sorted.length) L.push('  (なし)');
-  const bl = bodyLengths(body, items);
-  L.push('', `本文の文字数(会社名・ドメイン・業種・指摘の一文を典型的な値に置き換えた場合): 最頻の一文 ${bl.typical}文字 / 最長の一文 ${bl.longest}文字`);
+  const bl = bodyLengths(body, items, { withPage });
+  L.push('', `本文の文字数(会社名・${withPage ? 'ページURL' : 'ドメイン'}・業種・指摘の一文を典型的な値に置き換えた場合): 最頻の一文 ${bl.typical}文字 / 最長の一文 ${bl.longest}文字`);
   if (bl.longest > FORM_LIMIT_HINT) L.push(`  注意: 最長の場合 ${FORM_LIMIT_HINT}文字を超えます。送信先フォームの上限(約${FORM_LIMIT_HINT}文字のものが多い)に注意してください。`);
   L.push('', '送信前の確認');
-  L.push('・本文は全社共通です(本文.txt)。送信ツールの3列目[name]に指摘の一文、[param1]にドメイン、[param2]に閲覧者の文言が入ります。');
-  L.push('・CSVは9列(送信先URL,会社名,指摘の一文,レポートURL=ドメイン,業種=閲覧者,評価・口コミ,STOCバッチコード,電話番号,住所)。7列目のバッチコードは変えないでください。');
+  if (withPage) {
+    L.push('・本文は全社共通です(本文.txt。御社専用ページ版)。送信ツールの3列目[name]に「御社サイト(ドメイン)を確認したところ、…」の一文、[param1]に専用ページのURL、[param2]に閲覧者の文言が入ります。');
+    L.push('・CSVは9列(送信先URL,会社名,指摘の一文,レポートURL=専用ページのURL,業種=閲覧者,評価・口コミ,STOCバッチコード,電話番号,住所)。4列目のURLと7列目のバッチコードは変えないでください。');
+    L.push('・STOCの明細の report_url にも専用ページのURLを入れています。');
+  } else {
+    L.push('・本文は全社共通です(本文.txt)。送信ツールの3列目[name]に指摘の一文、[param1]にドメイン、[param2]に閲覧者の文言が入ります。');
+    L.push('・CSVは9列(送信先URL,会社名,指摘の一文,レポートURL=ドメイン,業種=閲覧者,評価・口コミ,STOCバッチコード,電話番号,住所)。7列目のバッチコードは変えないでください。');
+  }
   L.push('・最初の100社は送る前に人が確認してください(確認用.csv で本文の差し込み結果を見られます)。');
   L.push('・送信先URLが同じ会社は1社だけにしています(送信ツールの重複排除と結果の戻しが送信先URLで行われるため)。');
   L.push(`作成: ${now.toISOString()}`);
@@ -146,15 +177,16 @@ function summaryText({ batches, items, excluded, body, dryRun, now, scanned, pre
  * 途中のバッチで登録が失敗したら、登録済みバッチのコードを含めて例外にする(登録済み分はSTOCに残る)。
  */
 async function buildSingleFiles(opts) {
-  const { rows, outDir, templates, now = new Date(), stoc, dryRun = false, filter = {}, preExcluded = {} } = opts;
+  const { rows, outDir, templates, now = new Date(), stoc, dryRun = false, filter = {}, preExcluded = {}, withPage = false, pages, resultsByStore, env = process.env } = opts;
+  if (withPage && !dryRun && !pages) throw new Error('専用ページ版(--with-page)にはページの作成先(pages)が必要です');
   fs.mkdirSync(outDir, { recursive: true });
   for (const n of fs.readdirSync(outDir)) {
     if (/^send_.+\.csv$/.test(n) || ['確認用.csv', '本文.txt', 'まとめ.txt', 'result.json'].includes(n)) fs.unlinkSync(path.join(outDir, n));
   }
-  const body = renderBody(templates);
+  const body = renderBody(templates, { withPage });
   const { candidates, excluded } = pickCandidates(rows);
   const storeMap = candidates.length ? await stoc.fetchStores(candidates.map((c) => c.stocId)) : new Map();
-  const items = buildItems(candidates, storeMap, templates, excluded);
+  const items = buildItems(candidates, storeMap, templates, excluded, { withPage });
   const files = [];
   const put = (name, text) => { fs.writeFileSync(path.join(outDir, name), text); files.push(name); };
   const batches = [];
@@ -163,13 +195,26 @@ async function buildSingleFiles(opts) {
   for (let i = 0; i < parts.length; i++) {
     const code = dryRun ? (i === 0 ? 'DRYRUN' : `DRYRUN-${i + 1}`) : S.newBatchCode(now);
     const file = `send_${code}.csv`;
+    let tokens = [];
+    if (withPage) {
+      // 専用ページ: 試し(--dry-run-stoc)ではページを作らず仮のURL。本番はSTOCへ登録する前に作り、登録に失敗したら消す
+      if (dryRun) tokens = parts[i].map(() => PC.newToken());
+      else {
+        tokens = await pages.create(parts[i].map((it) => ({
+          shopId: it.rec['store_id'], stocStoreId: it.stocId, batchCode: code, domain: it.domain, company: it.company, findingKey: it.key,
+          sentence: it.sentence, findings: resultsByStore ? resultsByStore.get(String(it.rec['store_id'])) : null, audience: it.audience,
+        })));
+      }
+      parts[i].forEach((it, k) => { it.pageToken = tokens[k]; it.pageUrl = PC.pageUrl(tokens[k], env); });
+    }
     if (!dryRun) {
       try {
         await stoc.register({
-          code, fileName: file, memo, userId: opts.userId, filter: { ...filter, batch_no: i + 1, batch_total: parts.length },
-          items: parts[i].map((it) => ({ stocId: it.stocId, store: it.store, formUrl: it.formUrl, key: it.key, sentence: it.sentence, websiteUrl: it.websiteUrl })),
+          code, fileName: file, memo, userId: opts.userId, filter: { ...filter, batch_no: i + 1, batch_total: parts.length, ...(withPage ? { with_page: true } : {}) },
+          items: parts[i].map((it) => ({ stocId: it.stocId, store: it.store, formUrl: it.formUrl, key: it.key, sentence: it.sentence, websiteUrl: it.websiteUrl, reportUrl: it.pageUrl || '' })),
         });
       } catch (e) {
+        if (withPage && tokens.length) { try { await pages.remove(tokens); } catch (e2) { e.message += `\n(作成した専用ページの削除にも失敗しました: ${e2.message})`; } }
         const done = batches.map((b) => b.code);
         if (done.length) e.message += `\n(この前に登録済みのバッチ: ${done.join(', ')}。STOC営業管理に残っています)`;
         throw e;
@@ -179,13 +224,13 @@ async function buildSingleFiles(opts) {
     put(file, '﻿' + csvLine(SENDER_HEADER) + parts[i].map((it) => csvLine(senderRow(it, code))).join(''));
     batches.push({ code, count: parts[i].length, file });
   }
-  put('確認用.csv', '﻿' + csvLine(CHECK_HEADER) + items.map((it) => csvLine([
+  put('確認用.csv', '﻿' + csvLine(withPage ? CHECK_HEADER_PAGE : CHECK_HEADER) + items.map((it) => csvLine([
     it.rec['store_id'], it.stocId, it.company, it.domain, it.industry, GROUP_LABEL[it.key], it.sentence, it.formUrl,
-    S.contactPhone(it.store), it.store.address || '', it.batchCode])).join(''));
+    S.contactPhone(it.store), it.store.address || '', it.batchCode, ...(withPage ? [it.pageUrl] : [])])).join(''));
   put('本文.txt', body + '\n');
-  put('まとめ.txt', summaryText({ batches, items, excluded, body, dryRun, now, scanned: rows.length, preExcluded }));
-  put('result.json', JSON.stringify({ dryRun, batches, count: items.length, excluded, preExcluded }, null, 2) + '\n');
+  put('まとめ.txt', summaryText({ batches, items, excluded, body, dryRun, now, scanned: rows.length, preExcluded, withPage }));
+  put('result.json', JSON.stringify({ dryRun, withPage, batches, count: items.length, excluded, preExcluded }, null, 2) + '\n');
   return { batches, items, excluded, files, body };
 }
 
-module.exports = { SENDER_HEADER, CHECK_HEADER, renderBody, pickCandidates, buildItems, senderRow, bodyLengths, summaryText, buildSingleFiles, csvLine };
+module.exports = { SENDER_HEADER, CHECK_HEADER, CHECK_HEADER_PAGE, pageSentence, renderBody, pickCandidates, buildItems, senderRow, bodyLengths, summaryText, buildSingleFiles, csvLine };

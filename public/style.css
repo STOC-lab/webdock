@@ -193,3 +193,46 @@ code{background:#eef2f8;padding:2px 6px;border-radius:5px;font-size:13px}
 .adm-badge{display:inline-block;border-radius:999px;padding:2px 12px;font-size:13px;font-weight:700;color:#fff;background:var(--unknown)}
 .adm-running{background:var(--warn)}.adm-success{background:var(--ok)}.adm-failed{background:var(--bad)}
 .adm-log{background:#0f1a2b;color:#d7e3f5;border-radius:10px;padding:12px;max-height:480px;overflow:auto;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-all}
+
+/* ===== 御社専用ページ(/r/<token>) ===== */
+.pg-wrap{max-width:720px}
+.pg-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px 24px;margin:0 0 16px}
+.pg-top{background:linear-gradient(160deg,#ffffff,#eef4fe)}
+.pg-kicker{margin:0;font-size:13px;color:var(--muted)}
+.pg-h1{font-size:24px;line-height:1.4;margin:.2em 0 .6em}
+.pg-h2{font-size:17px;margin:0 0 .6em;border-left:4px solid var(--blue);padding-left:10px}
+.pg-meta{display:flex;flex-wrap:wrap;gap:6px 28px;margin:0}
+.pg-meta div{display:flex;gap:8px;align-items:baseline}
+.pg-meta dt{font-size:12px;color:var(--muted)}
+.pg-meta dd{margin:0;font-weight:700;word-break:break-all}
+.pg-main{border-color:#cfe0f8;background:#f5f9ff}
+.pg-sentence{font-size:17px;font-weight:700;margin:0 0 .6em}
+.pg-note,.pg-sub{font-size:13px;color:var(--muted)}
+.pg-note{margin:.6em 0 0}
+.pg-list{list-style:none;margin:0;padding:0}
+.pg-list li{padding:10px 0;border-top:1px solid var(--line)}
+.pg-list li:first-child{border-top:0}
+.pg-tag{display:inline-block;font-size:11px;font-weight:700;color:#8a5a0b;background:#fdf1dc;border-radius:999px;padding:1px 9px;margin-right:6px}
+.pg-okcount{margin:.8em 0 0;font-size:14px}
+.pg-form{display:flex;flex-direction:column;gap:12px}
+.pg-field{display:flex;flex-direction:column;gap:4px;font-size:14px;font-weight:700}
+.pg-field input,.pg-field textarea{padding:12px 14px;font-size:16px;font-family:inherit;border:1.5px solid var(--line);border-radius:10px;background:#fff;font-weight:400}
+.pg-field input:focus,.pg-field textarea:focus{outline:none;border-color:var(--blue)}
+.pg-req{font-size:11px;color:#fff;background:var(--bad);border-radius:4px;padding:0 6px;margin-left:4px}
+.pg-opt{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 6px;margin-left:4px}
+.pg-err{color:var(--bad);font-size:13px;font-weight:400}
+.pg-btn{background:var(--blue);color:#fff;border:0;border-radius:10px;padding:14px 18px;font-size:17px;font-weight:700;cursor:pointer}
+.pg-btn:hover{background:var(--blue-d)}
+.pg-btn-sub{background:#fff;color:var(--ink);border:1.5px solid var(--line)}
+.pg-btn-sub:hover{background:#f3f6fb}
+.pg-hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.pg-optout{text-align:center;font-size:13px;color:var(--muted);margin:20px 0 0}
+.pg-cta{border-color:#bcd3f6}
+@media (max-width:520px){.pg-card{padding:18px 16px}.pg-h1{font-size:21px}}
+
+/* 管理画面: 専用ページの一覧 */
+.adm-table{width:100%;border-collapse:collapse;font-size:13px}
+.adm-table th,.adm-table td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.adm-table th{background:#f3f6fb;white-space:nowrap}
+.adm-scroll{overflow-x:auto}
+.adm-mini.on{background:#2a3f63;color:#fff;border-color:#2a3f63}

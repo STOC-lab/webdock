@@ -1,0 +1,9 @@
+<%- include('_head') %>
+<section class="pg-card">
+  <h1 class="pg-h1">お申し込みを受け付けました</h1>
+  <p><%= company %> 御中</p>
+  <p>詳しい簡易レポートを、ご入力いただいたメールアドレス宛にお送りします。内容の確認のため、数営業日いただく場合があります。</p>
+  <p class="pg-note">ご不明な点は、<%= sender.company %>(<% if (sender.tel) { %>TEL <%= sender.tel %><% } %><% if (sender.tel && sender.mail) { %> ／ <% } %><%= sender.mail %>)までお知らせください。</p>
+  <p><a href="/r/<%= token %>">確認結果のページに戻る</a></p>
+</section>
+<%- include('_foot') %>

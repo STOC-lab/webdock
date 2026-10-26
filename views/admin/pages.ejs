@@ -1,0 +1,37 @@
+<%- include('_head') %>
+<%
+  function t(d) { return d ? fmtTime(new Date(d).getTime()) : ''; }
+  var tabs = [['all', 'すべて'], ['viewed', '開かれた'], ['human', '操作あり(人らしい)'], ['lead', '申込あり'], ['optout', '配信不要']];
+%>
+<section class="adm-card">
+  <h1>御社専用ページ(閲覧・申込)</h1>
+  <p class="adm-help">B2B送信で「御社専用ページのURLを入れる」を使うと、会社ごとに作られるページです。ここでは新しい順に200件まで出します。管理画面からページを開くと閲覧に数えられるので、URLは文字で出しています。</p>
+  <% if (counts) { %>
+  <p>作成 <strong><%= counts.total %></strong>件 ／ 開かれた <strong><%= counts.viewed %></strong> ／ 操作あり <strong><%= counts.human %></strong> ／ 申込 <strong><%= counts.leads %></strong> ／ 配信不要 <strong><%= counts.optout %></strong></p>
+  <% } %>
+  <p>
+    <% tabs.forEach(function (x) { %><a class="adm-mini<%= filter === x[0] ? ' on' : '' %>" href="<%= BASE %>/pages?filter=<%= x[0] %>"><%= x[1] %></a> <% }) %>
+  </p>
+  <% if (!rows.length && !error) { %><p class="adm-help">該当するページはありません。</p><% } %>
+  <% if (rows.length) { %>
+  <div class="adm-scroll"><table class="adm-table">
+    <thead><tr><th>会社</th><th>サイト</th><th>閲覧</th><th>最後に開いた</th><th>操作</th><th>申込</th><th>STOC</th><th>バッチ</th><th>URL</th></tr></thead>
+    <tbody>
+    <% rows.forEach(function (r) { %>
+    <tr>
+      <td><%= r.company_name %><% if (r.opt_out_at) { %> <span class="adm-badge adm-failed">配信不要</span><% } %></td>
+      <td><%= r.domain %></td>
+      <td><%= r.view_count %><% if (r.bot_view_count) { %> <span class="adm-help">(機械 <%= r.bot_view_count %>)</span><% } %></td>
+      <td><%= t(r.last_viewed_at) %></td>
+      <td><%= r.human_at ? '○ ' + t(r.human_at) : '' %></td>
+      <td><%= r.lead_at ? t(r.lead_at) : '' %></td>
+      <td><% if (r.lead_at) { %><%= r.lead_stoc_at ? '登録済み' : '未登録(メール通知を確認)' %><% } %></td>
+      <td><%= r.stoc_batch_code || '' %></td>
+      <td><code><%= pageBase %>/r/<%= r.token %></code></td>
+    </tr>
+    <% }) %>
+    </tbody>
+  </table></div>
+  <% } %>
+</section>
+<%- include('_foot') %>

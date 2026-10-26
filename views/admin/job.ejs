@@ -9,6 +9,7 @@
   <% } %></div>
   <% if (typeof singleView !== 'undefined' && singleView) { %>
   <h3>送信用ファイル(全社共通の本文・1つの宛先CSV)</h3>
+  <% if (singleView.withPage) { %><div class="adm-help">モード: <strong>御社専用ページ付き</strong>(送信用CSVの4列目が専用ページのURL。閲覧・申込は <a href="<%= BASE %>/pages">専用ページの一覧</a> と営業管理の見込み客に出ます)<% if (singleView.dryRun) { %>。試しのためページは作っていません<% } %></div><% } %>
   <% if (singleView.dryRun) { %><div class="adm-warn">STOC未登録(試し)です。バッチコードは仮で、このまま送信しても結果はSTOCへ戻りません。</div>
   <% } else { %><div class="adm-help">STOC営業管理に登録したバッチコード(送信結果はこのコードでSTOCへ戻ります):</div>
   <% } %>

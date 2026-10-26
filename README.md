@@ -195,6 +195,59 @@ node cli/warehouse-sitehost.js                 # 既存行の site_host を埋�
 - 以降の `node cli/warehouse-import.js` は新規・更新行の `site_host` を自動で入れる(列がなければ警告して従来どおり)。既存の `website_url` が埋まっている行は、バックフィルで直す。
 - テスト: `npm run test:exclude`
 
+#### 5-1d. 御社専用ページ付きで送る(`--with-page`。単一本文のみ)
+会社ごとに短い専用ページ(`https://webdock.stoc-plus.site/r/<10文字>`)を作り、メール(問い合わせ文)の中にそのURLを入れる方式。受け取った人はページで確認結果を見て、ボタンで「詳しい簡易レポート」を希望できる。**ボタンを押すとSTOC営業管理の見込み客に入り、ページを開いたことも記録される。**
+
+```
+node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 --form-found \
+  --template b2b --limit 2000 --single-out data/b2b_20261026 --with-page [--dry-run-stoc]
+```
+管理画面では「取り出し」→ 工場・建設用 →「御社専用ページのURLを入れる」にチェックして「診断して文面も作る」。
+
+- 送信CSV(9列)の4列目 `[param1]` がページのURL、3列目 `[name]` の一文は「御社サイト(ドメイン)を確認したところ、…」(ドメインは一文の先頭に移る)。本文は `templates/outreach-b2b-single-url.txt`(差出人・返信先は `outreach-config.json`)。STOCの明細 `report_url` にも同じURLを入れる。`--dry-run-stoc` のときはページを作らず、URLは仮(まとめ.txtに明記)。
+- ページは STOC登録(バッチ)の直前に作り、登録に失敗したら作ったページを消す。ページの表は `stoc_master.webdock_pages`(移行006)。
+- 公開ページ `/r/<token>`(ログイン不要): トークンは英数字10文字(約59ビット)のみ受け付け、それ以外は404。`noindex`(meta と `X-Robots-Tag`)・外部スクリプトなし(CSP)・IPごとの軽いレート制限(閲覧90回/10分・申込20回/時)。内容は「{会社名} 御中」・対象サイト・確認日・主な指摘(一文)・「確認をおすすめする項目」(要確認・要対応を同じ言い方で)・「問題が見つからなかった項目: N件」・点検の範囲・申込フォーム(担当者名・メール=必須、電話・ひとこと=任意)。申込フォームは署名つき(`WEBDOCK_SECRET` の HMAC。1日を過ぎると無効)と、見えない罠の欄(ハニーポット)つき。
+- 「今後の案内は不要」リンク → 確認ページ → 停止を記録。
+
+**STOC営業管理との対応**(`src/pages.js`。MEOレポートの `/report/<token>` と同じ表・列に書くので、STOCの画面に同じように出る)
+
+| 動き | 書き込み先(`stoc_sales`) | 参照したSTOC側の処理 |
+|---|---|---|
+| ページを開く(人らしいアクセスのみ) | `store_report_views`(report_id, store_id, ip_address, user_agent, referer)に1行、`store_reports.view_count`+1・`last_viewed_at` | `StoreReportController::show` |
+| 画面の操作(スクロール・タップ) | その閲覧行の `last_activity_at`・`view_duration_seconds`・`max_scroll_percentage` | `ReportViewApiController::update` |
+| 「詳しい簡易レポートを希望する」 | `report_inquiries`(store_id, report_id, name, phone, preferred_time, inquiry_type=`consultation`, ip_address, email)に1行。閲覧行を `reached_cta`/`cta_clicked`/`cta_action='consultation'` に。`sales_logs` に履歴メモ(`legacy_rep_name='WEBドック'`・メモの先頭に【WEBドック】・担当者名/メール/電話/ひとこと/ドメイン/バッチ) | `ReportInquiryController::submit`、`ReportLeadController`(一覧は閲覧・申込の表から作る) |
+| 「今後の案内は不要」 | `sales_logs` に `call_result='クレーム'`(メモ「【WEBドック】…今後の案内は不要」) = 問い合わせ営業・AIダイアラーから外れる | `CallVocabulary::CLAIM` / `notClaimSql` |
+
+- STOCの見込み客一覧(`/report-leads`)では「相談・受取希望」に出る。`store_reports` の行がない店は初回の閲覧/申込のときに作る(STOC側の `token` は長い乱数で、お客様には出さない。STOCの一覧からその「レポート」リンクを開くと、MEOのレポートページが開く点に注意)。STOCの閲覧判定(`ReportViewClass`)は、画面の操作が届いた閲覧を「人」とみなす。メールの自動巡回(操作が届かない)は「不確実」のままになり、`cli/classify_report_views.php` の判定とAIダイアラーの優先判定に、MEOの閲覧と同じ扱いで効く。
+- **数えないアクセス**: User-Agent に bot/crawl/spider/preview/curl 等を含むもの、HEAD は `bot_view_count` に分けて数え、STOCには書かない(メールの自動確認・プレビュー対策)。それ以外は閲覧に数え、`human_at`(画面の操作が届いた最初の時刻)で人らしさを見分ける。管理画面「専用ページ」に閲覧・操作・申込・STOC連携の状態が出る。
+- STOCへ書けなかったときも申込は受け付ける(内容は `webdock_pages.lead_contact` と通知メールに残り、管理画面に「未登録」と出る)。通知先は `STOC_NOTIFY_TO`(なければ `LEAD_NOTIFY_TO`)、SMTP未設定ならログのみ。
+- 配信不要の店(`opt_out_at`)は、次回以降の batch-scan の診断前に「専用ページで配信不要の申し出」として外れる(STOCのクレーム除外と二重)。
+
+**VPSでの手順(初回のみ)**
+```
+cd /var/www/webdock && git pull && npm install --omit=dev
+# 1) 移行(何度実行しても安全)
+mysql < sql/warehouse_migrate_006.sql
+# 2) 権限(root。ユーザー名・ホストは WH_DB_USER / WH_DB_HOST に合わせる。足りないと診断を始める前/サーバー起動時に、下の文を日本語メッセージで表示して止まる)
+mysql -uroot <<'SQL'
+GRANT SELECT, INSERT, UPDATE, DELETE ON stoc_master.webdock_pages TO 'stoc_wh'@'localhost';
+GRANT SELECT, INSERT ON stoc_sales.store_reports TO 'stoc_wh'@'localhost';
+GRANT UPDATE (view_count, last_viewed_at) ON stoc_sales.store_reports TO 'stoc_wh'@'localhost';
+GRANT SELECT, INSERT ON stoc_sales.store_report_views TO 'stoc_wh'@'localhost';
+GRANT UPDATE (last_activity_at, view_duration_seconds, max_scroll_percentage, reached_cta, cta_clicked, cta_action, cta_action_at) ON stoc_sales.store_report_views TO 'stoc_wh'@'localhost';
+GRANT INSERT ON stoc_sales.report_inquiries TO 'stoc_wh'@'localhost';
+GRANT INSERT ON stoc_sales.sales_logs TO 'stoc_wh'@'localhost';
+GRANT SELECT ON stoc_sales.stores TO 'stoc_wh'@'localhost';
+SQL
+# 3) .env: WH_DB_*(すでにあれば不要)と WEBDOCK_SECRET(必須・変更するとフォームの署名が無効になる)。
+#    PUBLIC_BASE_URL は既定 https://webdock.stoc-plus.site なので、ドメインが違うときだけ設定
+pm2 restart webdock   # 起動ログに [pages] の警告が出なければ権限OK
+```
+- nginx は追加不要(`/r/` は既存の `location /` がそのままNode(3020)へ渡す。`proxy_set_header X-Forwarded-For $remote_addr;` が閲覧のIPに使われる)。
+- STOC側の既存GRANT(`inquiry_export_batches` / `inquiry_export_items` / `stores` / `sales_logs` の SELECT など)は引き続き必要。`sales_logs` は SELECT(クレーム除外の読み取り)に加えて INSERT が必要になる。
+- `store_reports` / `store_report_views` / `report_inquiries` の作成SQLはSTOCのリポジトリにない(列は STOC の `StoreReportController` / `ReportViewApiController` / `ReportInquiryController` が使うものに合わせた)。`sales_logs` の `user_id` が NULL 不可の環境では、履歴メモの INSERT が失敗し「STOC未登録」になる(その場合は教えてください)。
+- テスト: `npm run test:pages`
+
 #### 5-2. グループ別に送る(旧方式。STOCへ結果が戻らないため通常は使わない)
 問い合わせの送信ツールが「1回の送信=全社まったく同じ本文」しか送れない場合は、`--group-out <フォルダ>` を付ける。各社に選ばれた指摘(1社1つ)ごとにグループ分けし、グループごとに固定の本文・件名・宛先CSVを作る。本文・件名・CSVには会社ごとの値は入らず、会社名とドメインは送信ツールの差し込み(差込)タグで入れる(下記)。
 ```

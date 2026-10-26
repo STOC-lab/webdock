@@ -16,6 +16,7 @@ const REASON = {
   listed: '除外ドメイン指定',
   chain: 'チェーン・共通ドメイン',
   claim: 'クレーム登録で除外',
+  optout: '専用ページで配信不要の申し出',
 };
 // 誤って旧MEO文面で送ってしまった明細に運用者がSQLで付けるラベル。この明細はWEBドック送信済みに数えない(後でWEBドック文面を送れる)
 const MEO_WRONG_LABEL = 'MEO文面で送信(誤)';
@@ -96,8 +97,8 @@ async function loadChainHosts(pool, candidateHosts, { columnExists, warn = (m) =
 /* ---------- 適用 ---------- */
 
 /**
- * 行(url, stocStoreId を持つ)から除外対象を外す。理由の判定順: 送信済み → 除外ドメイン指定 → チェーン。
- * ctx: { resendSet?:Set<number>, excludeList?:string[], chainHosts?:Set<string> }
+ * 行(url, stocStoreId を持つ)から除外対象を外す。理由の判定順: 送信済み → 配信不要の申し出 → 除外ドメイン指定 → チェーン。
+ * ctx: { resendSet?:Set<number>, optOutSet?:Set<number>(専用ページで「今後の案内は不要」), excludeList?:string[], chainHosts?:Set<string> }
  * 戻り: { rows, counts:{理由:件数} }(件数0の理由は含めない)
  */
 function applyPreScanExclusions(rows, ctx = {}) {
@@ -107,6 +108,7 @@ function applyPreScanExclusions(rows, ctx = {}) {
   for (const r of rows) {
     const sid = /^\d+$/.test(String(r.stocStoreId || '')) ? Number(r.stocStoreId) : 0;
     if (ctx.resendSet && sid && ctx.resendSet.has(sid)) { bump(REASON.resend); continue; }
+    if (ctx.optOutSet && sid && ctx.optOutSet.has(sid)) { bump(REASON.optout); continue; }
     const host = siteHostOf(r.url);
     if (host && ctx.excludeList && matchesExcludeList(host, ctx.excludeList)) { bump(REASON.listed); continue; }
     if (host && ctx.chainHosts && ctx.chainHosts.has(host)) { bump(REASON.chain); continue; }

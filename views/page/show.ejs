@@ -1,0 +1,90 @@
+<%- include('_head') %>
+<section class="pg-card pg-top">
+  <p class="pg-kicker">御社サイトの確認結果(御社専用ページ)</p>
+  <h1 class="pg-h1"><%= company %> 御中</h1>
+  <dl class="pg-meta">
+    <div><dt>対象サイト</dt><dd><%= domain %></dd></div>
+    <div><dt>確認日</dt><dd><%= dateJa %></dd></div>
+  </dl>
+</section>
+
+<% if (sentence) { %>
+<section class="pg-card pg-main">
+  <h2 class="pg-h2">今回、最初にお伝えしたい点</h2>
+  <p class="pg-sentence"><%= sentence %></p>
+  <p class="pg-note">被害を示すものではありません。制作会社様・保守ご担当者様へのご確認をおすすめします。</p>
+</section>
+<% } %>
+
+<% if (hasItems) { %>
+<section class="pg-card">
+  <h2 class="pg-h2">確認をおすすめする項目<% if (sentence) { %>(上記以外)<% } %></h2>
+  <% if (others.length) { %>
+  <ul class="pg-list">
+    <% others.forEach(function (it) { %>
+    <li><span class="pg-tag">確認をおすすめ</span> <strong><%= it.title %></strong><br><span class="pg-sub"><%= it.summary %></span></li>
+    <% }) %>
+  </ul>
+  <% } else { %>
+  <p class="pg-sub">ほかに、確認をおすすめする項目はありませんでした。</p>
+  <% } %>
+  <p class="pg-okcount">問題が見つからなかった項目: <strong><%= okCount %>件</strong></p>
+</section>
+<% } %>
+
+<section class="pg-card">
+  <h2 class="pg-h2">点検の範囲について</h2>
+  <p class="pg-sub">ホームページの公開情報(どなたでも見られる範囲)だけを確認しています。ログインや侵入、サーバーへ負荷をかける検査は行っていません。また、ここに載せたのは確認できた事実で、被害や不正があったことを示すものではありません。</p>
+</section>
+
+<section class="pg-card pg-cta" id="request">
+  <h2 class="pg-h2">詳しい簡易レポートを希望する</h2>
+  <p>確認項目の優先順位と、制作会社様へそのままお渡しいただける確認依頼文をまとめた簡易レポートを、無料でお送りします。<% if (requested) { %><br><span class="pg-sub">(すでにお申し込みいただいています。内容を変えて送り直すこともできます)</span><% } %></p>
+  <% if (error) { %><div class="alert" role="alert"><%= error %></div><% } %>
+  <form method="post" action="/r/<%= token %>/request" class="pg-form" novalidate>
+    <input type="hidden" name="ft" value="<%= reqToken %>">
+    <input type="hidden" name="vt" value="<%= viewToken %>">
+    <div class="pg-hp" aria-hidden="true"><label>こちらは空のままにしてください <input type="text" name="website" value="" tabindex="-1" autocomplete="off"></label></div>
+    <label class="pg-field">ご担当者名 <span class="pg-req">必須</span>
+      <input type="text" name="name" value="<%= form.name %>" maxlength="100" autocomplete="name" required>
+      <% if (errors.name) { %><span class="pg-err"><%= errors.name %></span><% } %>
+    </label>
+    <label class="pg-field">メールアドレス <span class="pg-req">必須</span>
+      <input type="email" name="email" value="<%= form.email %>" maxlength="255" autocomplete="email" required>
+      <% if (errors.email) { %><span class="pg-err"><%= errors.email %></span><% } %>
+    </label>
+    <label class="pg-field">電話番号 <span class="pg-opt">任意</span>
+      <input type="tel" name="phone" value="<%= form.phone %>" maxlength="20" autocomplete="tel">
+      <% if (errors.phone) { %><span class="pg-err"><%= errors.phone %></span><% } %>
+    </label>
+    <label class="pg-field">ひとこと <span class="pg-opt">任意</span>
+      <textarea name="message" rows="3" maxlength="500"><%= form.message %></textarea>
+    </label>
+    <button type="submit" class="pg-btn">詳しい簡易レポートを希望する</button>
+    <p class="pg-note">ご入力いただいた内容は、簡易レポートのご連絡の目的にのみ使用します。</p>
+  </form>
+</section>
+
+<p class="pg-optout"><% if (optedOut) { %>今後のご案内の停止は受け付け済みです。<% } else { %><a href="/r/<%= token %>/optout">今後の案内は不要</a><% } %></p>
+
+<script nonce="<%= nonce %>">
+(function () {
+  var started = false, t0 = Date.now(), maxScroll = 0;
+  function scrollPct() {
+    var d = document.documentElement, h = d.scrollHeight - d.clientHeight;
+    return h > 0 ? Math.min(100, Math.round((window.pageYOffset || d.scrollTop) / h * 100)) : 100;
+  }
+  function send() {
+    var p = new URLSearchParams();
+    p.set('vt', <%- JSON.stringify(viewToken) %>);
+    p.set('s', String(Math.max(maxScroll, scrollPct())));
+    p.set('d', String(Math.round((Date.now() - t0) / 1000)));
+    try { navigator.sendBeacon('/r/<%= token %>/seen', p); } catch (e) {}
+  }
+  window.addEventListener('scroll', function () { maxScroll = Math.max(maxScroll, scrollPct()); }, { passive: true });
+  function first() { if (started) return; started = true; send(); }
+  ['scroll', 'touchstart', 'pointerdown', 'keydown', 'mousemove'].forEach(function (ev) { window.addEventListener(ev, first, { once: true, passive: true }); });
+  window.addEventListener('pagehide', function () { if (started) send(); });
+})();
+</script>
+<%- include('_foot') %>

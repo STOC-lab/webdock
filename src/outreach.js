@@ -163,6 +163,7 @@ function loadTemplates(dir) {
     b2b: opt(() => t('outreach-b2b.txt')),
     b2bShort: opt(() => t('outreach-b2b-short.txt')),
     b2bSingle: opt(() => t('outreach-b2b-single.txt')),
+    b2bSingleUrl: opt(() => t('outreach-b2b-single-url.txt')),
     b2bGroup: opt(() => t('outreach-b2b-group.txt')),
     b2bGroupShort: opt(() => t('outreach-b2b-group-short.txt')),
     groupSubjects: opt(() => t('outreach-b2b-group-subjects.txt').split(/\r?\n/).map((x) => x.trim()).filter(Boolean)),
