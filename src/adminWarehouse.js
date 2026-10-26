@@ -331,7 +331,7 @@ function registerAdminWarehouse(app, deps = {}) {
   let statsCache = null;
   async function getStats() {
     const t = Date.now();
-    if (statsCache && t - statsCache.at < (statsCache.value.ok ? STATS_TTL_MS : 15000)) return statsCache.value;
+    if (statsCache && statsCache.value && t - statsCache.at < (statsCache.value.ok ? STATS_TTL_MS : 15000)) return statsCache.value; // 集計中(value=null)は下で待つ
     if (!statsCache || !statsCache.pending) {
       const pending = Promise.resolve().then(() => queryStats()).then(
         (v) => ({ ok: true, ...v, at: Date.now() }),
