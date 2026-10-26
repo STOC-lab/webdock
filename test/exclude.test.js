@@ -57,6 +57,10 @@ const ok = (c, msg) => eq(!!c, true, msg);
   // 送信済みの店を読むSQL
   const q = EX.resendQuery('stoc_sales');
   ok(q.includes("JSON_UNQUOTE(JSON_EXTRACT(b.filter_json, '$.source')) = 'webdock_b2b'") && !/send_status/.test(q) && q.includes('JOIN stoc_sales.inquiry_export_batches b ON b.id = i.batch_id'), '送信済み: source=webdock_b2b の全明細(send_status 不問)');
+  ok(q.includes('AND (i.approach_label IS NULL OR i.approach_label <> ?)') && EX.MEO_WRONG_LABEL === 'MEO文面で送信(誤)', '誤MEO文面のラベルの明細は除外しない(条件)');
+  let rp = null;
+  await EX.loadResendSet({ query: async (sql, params) => { rp = { sql, params }; return [[]]; } }, 'stoc_sales');
+  eq(rp.params, ['MEO文面で送信(誤)'], 'ラベルをパラメータで渡す');
   const set = await EX.loadResendSet({ query: async () => [[{ store_id: 5 }, { store_id: '7' }, { store_id: null }, { store_id: 5 }]] }, 'stoc_sales');
   eq([...set].sort(), [5, 7], '送信済みの集合');
   let err = null;

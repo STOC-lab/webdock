@@ -171,6 +171,7 @@ GRANT UPDATE (exported_at, export_count) ON stoc_sales.stores TO 'stoc_wh'@'loca
 ```
 - **診断前の除外**(倉庫から選ぶ段階で外すので診断の時間もかからない。件数は `まとめ.txt` の「診断前に除外した会社」と `result.json` の `preExcluded` に出る。`--limit` は除外のあとに数える):
   - 「WEBドック送信済み・送信予定」: STOC営業管理で `inquiry_export_batches.filter_json` の `source` が `webdock_b2b` のバッチに、1回でも入っている店(`inquiry_export_items.store_id`。`send_status` は問わない)。再送信のオプションはない。読めなければ中止する(二重送信を防ぐため)。
+  - 注意: 誤って旧MEO文面で送った明細に `approach_label = 'MEO文面で送信(誤)'` を付けると(SQLで更新)、その明細はWEBドック送信済みに数えず除外しない(あとでWEBドック文面を送れる)。
   - 「除外ドメイン指定」: `rules/b2b_exclude_domains.txt`(1行1ドメイン・`#` でコメント)。サイトのホスト名がそのドメインと同じ、または `.<ドメイン>` で終わる(サブドメイン・`www.` 付きも)会社を外す。初期値は `autozam.jp` と `bunsen-kk.co.jp`。
   - 「チェーン・共通ドメイン」: サイトのホスト名(`www.` 除去・小文字)を、倉庫(全都道府県)の3店舗以上が使っている会社。`shops.site_host` 列を使うため、**移行 `sql/warehouse_migrate_005.sql` の適用と `node cli/warehouse-sitehost.js` の実行が必要**(下記)。列がないときは警告を出してこの除外だけスキップする。
   - 大きな会社は従来どおり `size_class`(`--exclude-large` / `--small-only`)で外す。

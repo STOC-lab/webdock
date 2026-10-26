@@ -1,7 +1,7 @@
 'use strict';
 /**
  * B2B送信の「診断前の除外」(倉庫から選んだ会社を、診断する前に外す)。
- *  1. WEBドック送信済み・送信予定 … STOC営業管理の inquiry_export_items に、source='webdock_b2b' のバッチで入っている店(send_status を問わない)
+ *  1. WEBドック送信済み・送信予定(approach_label='MEO文面で送信(誤)' の明細は除く) … STOC営業管理の inquiry_export_items に、source='webdock_b2b' のバッチで入っている店(send_status を問わない)
  *  2. 除外ドメイン指定 … rules/b2b_exclude_domains.txt のドメイン(サブドメインも)
  *  3. チェーン・共通ドメイン … 同じサイトのホスト名を使う店が倉庫に CHAIN_MIN 件以上ある(全都道府県の合計)
  * 外した件数は理由ごとに数え、まとめ.txt に出す。
@@ -17,6 +17,8 @@ const REASON = {
   chain: 'チェーン・共通ドメイン',
   claim: 'クレーム登録で除外',
 };
+// 誤って旧MEO文面で送ってしまった明細に運用者がSQLで付けるラベル。この明細はWEBドック送信済みに数えない(後でWEBドック文面を送れる)
+const MEO_WRONG_LABEL = 'MEO文面で送信(誤)';
 const DEFAULT_LIST_FILE = path.join(__dirname, '..', 'rules', 'b2b_exclude_domains.txt');
 
 /* ---------- 除外ドメイン一覧 ---------- */
@@ -48,15 +50,17 @@ function matchesExcludeList(host, list) {
 /* ---------- DB から読む ---------- */
 
 function resendQuery(db) {
+  // approach_label が MEO_WRONG_LABEL の明細は除外対象から外す(?には MEO_WRONG_LABEL を渡す)
   return `SELECT DISTINCT i.store_id AS store_id FROM ${db}.inquiry_export_items i
 JOIN ${db}.inquiry_export_batches b ON b.id = i.batch_id
-WHERE JSON_UNQUOTE(JSON_EXTRACT(b.filter_json, '$.source')) = 'webdock_b2b' AND i.store_id IS NOT NULL`;
+WHERE JSON_UNQUOTE(JSON_EXTRACT(b.filter_json, '$.source')) = 'webdock_b2b' AND i.store_id IS NOT NULL
+AND (i.approach_label IS NULL OR i.approach_label <> ?)`;
 }
 
 /** 送信済み・送信予定の店(STOC営業管理の店舗ID)の集合。読めなければ例外(二重送信を防ぐため、黙ってスキップしない) */
 async function loadResendSet(pool, db) {
   let rows;
-  try { [rows] = await pool.query(resendQuery(db)); } catch (e) {
+  try { [rows] = await pool.query(resendQuery(db), [MEO_WRONG_LABEL]); } catch (e) {
     throw Object.assign(new Error(`送信済みの店を除外するため ${db}.inquiry_export_items / inquiry_export_batches を読む必要がありますが、読めませんでした(${e.message})。\n二重送信を防ぐため処理を中止しました。`), { stocCheck: true });
   }
   return new Set(rows.map((r) => Number(r.store_id)).filter((n) => n > 0));
@@ -112,6 +116,6 @@ function applyPreScanExclusions(rows, ctx = {}) {
 }
 
 module.exports = {
-  CHAIN_MIN, REASON, DEFAULT_LIST_FILE, parseExcludeDomains, loadExcludeDomains, matchesExcludeList,
+  CHAIN_MIN, REASON, MEO_WRONG_LABEL, DEFAULT_LIST_FILE, parseExcludeDomains, loadExcludeDomains, matchesExcludeList,
   resendQuery, loadResendSet, loadChainHosts, applyPreScanExclusions,
 };
