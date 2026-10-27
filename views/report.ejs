@@ -19,6 +19,7 @@
   h2 { font-size:16px; margin:22px 0 8px; padding:3px 10px; border-left:6px solid #333; background:#f2f2f2; }
   .meta { width:100%; border-collapse:collapse; margin:10px 0; }
   .meta th, .meta td { border:1px solid var(--line); padding:4px 10px; text-align:left; vertical-align:top; }
+  .meta td { overflow-wrap:anywhere; }
   .meta th { width:8em; background:#f6f6f6; font-weight:700; }
   .addressee { font-size:18px; font-weight:700; margin:12px 0 0; }
   .summary { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid #333; margin:8px 0; }
@@ -33,13 +34,14 @@
   .item dl { margin:0; display:grid; grid-template-columns:8.5em 1fr; gap:2px 8px; }
   .item dt { font-weight:700; color:var(--sub); font-size:12.5px; }
   .item dd { margin:0; word-break:break-all; }
-  .oklist { columns:2; margin:4px 0; padding-left:1.2em; }
-  .reqbox { border:1px solid #333; padding:10px 14px; white-space:pre-wrap; word-break:break-all; font-family:inherit; margin:6px 0; background:#fafafa; break-inside:avoid; page-break-inside:avoid; }
+  .oklist { columns:2; margin:4px 0; padding-left:1.2em; overflow-wrap:anywhere; }
+  .reqbox { border:1px solid #333; padding:10px 14px; white-space:pre-wrap; word-break:break-all; font-family:inherit; margin:6px 0; overflow-wrap:anywhere; background:#fafafa; break-inside:avoid; page-break-inside:avoid; }
+  .print-hint { font-size:12px; color:#a5302b; }
   .note { font-size:12.5px; color:var(--sub); }
   .footer { margin-top:20px; border-top:1px solid #333; padding-top:8px; break-inside:avoid; }
   .nobreak { break-inside:avoid; page-break-inside:avoid; }
   .newpage { break-before:page; page-break-before:always; }
-  @page { size:A4; margin:12mm; }
+  @page { size: 210mm 297mm; margin:12mm; }
   @media print {
     body { background:#fff; color:#000; font-size:11pt; }
     .page { box-shadow:none; margin:0; padding:0; max-width:none; }
@@ -53,6 +55,7 @@
 <% const total = g.urgent.length + g.partial.length + g.renewal.length + g.dns.length; %>
 <div class="toolbar no-print">
   <button type="button" class="primary" onclick="window.print()">印刷・PDF保存</button>
+  <span class="print-hint">※A3で出る場合は、印刷画面の「詳細設定」→「用紙サイズ」を A4 にしてください（次回から記憶されます）</span>
   <form method="get" action="/sales/report">
     <input type="hidden" name="url" value="<%= input %>">
     <label>宛名(会社名) <input name="company" value="<%= company %>" placeholder="例: 株式会社○○"></label>

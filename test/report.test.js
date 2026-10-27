@@ -95,6 +95,7 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   ok(html.includes('Webサイト 簡易点検レポート'), 'タイトル');
   ok(html.includes('印刷・PDF保存'), '印刷ボタン');
   ok(html.includes('@media print') && html.includes('.no-print'), '印刷CSS');
+  ok(/@page\s*\{\s*size:\s*210mm 297mm/.test(html), '@pageがA4寸法(210mm 297mm)');
   ok(html.includes('すぐにご確認いただきたい項目') && html.includes('メール・ドメイン設定'), '区分見出し');
   ok(html.includes('問題が見つからなかった項目'), 'ok一覧');
   ok(html.includes('0120-830-046') && html.includes('morisawa@stoc.co.jp') && html.includes('株式会社エストック 森澤'), 'フッター');
