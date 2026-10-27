@@ -7,6 +7,9 @@
   var hasForm = form && Object.keys(form).length;
   var size = f.size || 'none';
   var formFound = form && Object.keys(form).length ? !!f.form_found : true;
+  var pf = phoneForm || {};
+  var pSel = toArr(pf.pref);
+  var pSize = pf.size || 'none';
 %>
 <section class="adm-card">
   <h1>取り出し(営業管理に入れるCSVを作る)</h1>
@@ -61,6 +64,33 @@
     <div class="adm-warn">「CSVを作る」を押すと、出した店には「出力済み」の印が付き、次回からは出ません。作ったCSVは必ずダウンロードしてから画面を離れてください(下の一覧からあとでもダウンロードできます)。</div>
   </form>
 </section>
+<section class="adm-card" id="phonecard">
+  <h2>電話営業リスト(点数 × ブログ・お知らせの更新)</h2>
+  <p class="adm-help">点数が範囲内のサイトだけ更新日を調べます。1時間に約2,000件。日付を出していないサイトは対象外になります。電話番号が空の店と、同じ電話番号の重複は外します。結果のCSV(UTF-8)は、直近に更新した会社が上に並びます。出力済みの印は付きません。</p>
+  <form method="post" action="<%= BASE %>/export" id="phoneform">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <h3>1. どの県?</h3>
+    <div class="adm-grid">
+      <% prefectures.forEach(function (p) { %>
+      <label class="adm-check"><input type="checkbox" name="pref" value="<%= p %>" <%= (phoneForm ? pSel.indexOf(p) >= 0 : p === '兵庫県') ? 'checked' : '' %>> <%= p %></label>
+      <% }) %>
+    </div>
+    <h3>2. 絞り込み</h3>
+    <label>業種キーワード(カンマ区切り。空なら全業種)</label>
+    <input class="adm-input" type="text" name="main_category" value="<%= pf.main_category || '' %>" placeholder="例: 製造,建設,工務店(空=全業種)">
+    <p class="adm-help">会社の規模:</p>
+    <label class="adm-radio"><input type="radio" name="size" value="none" <%= pSize === 'none' ? 'checked' : '' %>> 指定なし</label>
+    <label class="adm-radio"><input type="radio" name="size" value="exclude_large" <%= pSize === 'exclude_large' ? 'checked' : '' %>> 大きい会社を除く<span class="adm-help">規模が未調査・不明の会社は残ります。</span></label>
+    <label class="adm-radio"><input type="radio" name="size" value="small_only" <%= pSize === 'small_only' ? 'checked' : '' %>> 小規模のみ</label>
+    <h3>3. 点数と更新日</h3>
+    <label>点数 <input class="adm-input adm-short" type="number" name="min_score" min="0" max="100" value="<%= pf.min_score !== undefined && pf.min_score !== '' ? pf.min_score : 50 %>"> 〜 <input class="adm-input adm-short" type="number" name="max_score" min="0" max="100" value="<%= pf.max_score !== undefined && pf.max_score !== '' ? pf.max_score : 70 %>"> 点</label>
+    <label>直近 <input class="adm-input adm-short" type="number" name="days" min="1" max="365" value="<%= pf.days || 7 %>"> 日以内に更新があった会社</label>
+    <label>上限件数 <input class="adm-input adm-short" type="number" name="limit" min="1" value="<%= pf.limit || 3000 %>"></label>
+    <div class="adm-actions">
+      <button class="adm-btn" type="submit" name="action" value="phonelist" id="phonebtn">電話営業リストを作る</button>
+    </div>
+  </form>
+</section>
 <section class="adm-card">
   <h2>作ったCSV</h2>
   <% if (!exports.length) { %><p class="adm-help">まだありません。</p><% } else { %>
@@ -108,6 +138,9 @@
   document.getElementById('selnone').onclick = function () { all(false); };
   document.getElementById('scanbtn').addEventListener('click', function (e) {
     if (!confirm('選んだ条件の店をすべて診断します。時間がかかります(2,000サイトで1時間前後)。始めますか?')) e.preventDefault();
+  });
+  document.getElementById('phonebtn').addEventListener('click', function (e) {
+    if (!confirm('選んだ条件の店をすべて診断し、点数が範囲内のサイトの更新日を調べます。時間がかかります(2,000件で1時間前後)。始めますか?')) e.preventDefault();
   });
   document.getElementById('makebtn').addEventListener('click', function (e) {
     if (!confirm('CSVを作ると、出した店に「出力済み」の印が付き、次回からは出なくなります。作りますか?')) e.preventDefault();

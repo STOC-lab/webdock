@@ -24,7 +24,10 @@
     "test:exclude": "node test/exclude.test.js",
     "test:pages": "node test/pages.test.js",
     "test:stocsent": "node test/stocsent.test.js",
-    "wh:sitehost": "node cli/warehouse-sitehost.js"
+    "wh:sitehost": "node cli/warehouse-sitehost.js",
+    "test:freshness": "node test/freshness.test.js",
+    "test:phone": "node test/phone.test.js",
+    "phone-list": "node cli/phone-list.js"
   },
   "keywords": [],
   "author": "",

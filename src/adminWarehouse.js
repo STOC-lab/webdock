@@ -227,6 +227,48 @@ function buildB2bScanArgs(body, { exportDir, now }) {
 }
 
 /**
+ * 「電話営業リストを作る」: cli/phone-list.js に渡す引数にする。
+ * 点数が範囲内のサイトだけ更新日を調べ、直近N日以内に更新があった会社を phone_list_<日時>.csv(UTF-8・BOM付き)に出す。
+ * 業種キーワードは空なら絞らない。倉庫には「出力済み」の印を付けない。
+ */
+function buildPhoneListArgs(body, { exportDir, now }) {
+  const prefs = toList(body.pref).filter((p, i, a) => a.indexOf(p) === i);
+  if (!prefs.length) return { error: '都道府県を1つ以上選んでください。' };
+  if (prefs.some((p) => !PREFECTURES.includes(p))) return { error: '都道府県の指定が正しくありません。' };
+  const size = ['exclude_large', 'small_only', 'none'].includes(body.size) ? body.size : 'none';
+  const num = (v, def, min, max, label) => {
+    if (v === undefined || v === null || String(v).trim() === '') return def;
+    const n = Number(String(v).trim());
+    if (!Number.isInteger(n) || n < min || n > max) return { error: `${label}は${min}以上${max}以下の整数で入力してください。` };
+    return n;
+  };
+  const minScore = num(body.min_score, 50, 0, 100, '点数の下限');
+  if (minScore.error) return minScore;
+  const maxScore = num(body.max_score, 70, 0, 100, '点数の上限');
+  if (maxScore.error) return maxScore;
+  if (minScore > maxScore) return { error: '点数の下限は上限以下にしてください。' };
+  const days = num(body.days, 7, 1, 365, '更新日数');
+  if (days.error) return days;
+  const limit = num(body.limit, 3000, 1, 1000000, '上限件数');
+  if (limit.error) return limit;
+  const args = ['cli/phone-list.js', '--prefecture', prefs.join(',')];
+  const raw = String(body.main_category || '').trim();
+  if (raw) {
+    const cats = raw.split(/[,、，\s]+/).map((x) => x.trim()).filter(Boolean);
+    if (!cats.length || cats.length > 60 || cats.some((c) => c.length > 20 || /[\u0000-\u001f]/.test(c))) {
+      return { error: '業種キーワードの入力が正しくありません(カンマ区切り・1語20文字まで)。' };
+    }
+    args.push('--main-category', cats.join(','));
+  }
+  if (size === 'exclude_large') args.push('--exclude-large');
+  else if (size === 'small_only') args.push('--small-only');
+  const exportFile = `phone_list_${stamp(now)}.csv`;
+  args.push('--min-score', String(minScore), '--max-score', String(maxScore), '--days', String(days), '--limit', String(limit),
+    '--concurrency', '5', '--out', path.join(exportDir, exportFile));
+  return { args, exportFile, preset: 'phonelist', minScore, maxScore, days, limit, estimateHours: Math.max(1, Math.round(limit / 2000)) };
+}
+
+/**
  * 「診断して文面も作る」(送信成功済みの店・営業管理の全業種): batch-scan.js --source stoc-sent に渡す引数にする。
  * 県を選ぶか、「全国」を明示するか、どちらか一方(何も選ばないまま全国で動かさない)。
  */
@@ -605,10 +647,18 @@ function registerAdminWarehouse(app, deps = {}) {
 
   // ===== 取り出し(CSVを作る) =====
   const exportPage = (req, res, extra = {}, status = 200) => page(req, res, 'export', {
-    nav: 'export', prefectures: PREFECTURES, defaultMain: DEFAULT_MAIN_CATEGORY, exports: listExports(), groupDirs: listGroupDirs(), form: {}, ...extra,
+    nav: 'export', prefectures: PREFECTURES, defaultMain: DEFAULT_MAIN_CATEGORY, exports: listExports(), groupDirs: listGroupDirs(), form: {}, phoneForm: null, ...extra,
   }, status);
   router.get('/export', wrap((req, res) => exportPage(req, res)));
   router.post('/export', wrap(async (req, res) => {
+    // 電話営業リスト(別フォーム)。preset の判定より前に分岐する
+    if (req.body.action === 'phonelist') {
+      const pb = buildPhoneListArgs(req.body, { exportDir, now: now() });
+      if (pb.error) return exportPage(req, res, { error: pb.error, phoneForm: req.body }, 400);
+      const pr = jobs.start({ title: '電話営業リストを作る', args: pb.args, meta: { exportFile: pb.exportFile } });
+      if (!pr.ok) return exportPage(req, res, { error: pr.message, runningId: pr.runningId, phoneForm: req.body }, 409);
+      return res.redirect(303, `${BASE}/jobs/${pr.id}`);
+    }
     if (req.body.preset === 'stocsent' && req.body.action !== 'scan') {
       return exportPage(req, res, { error: '「送信成功済みの店」は「診断して文面も作る」だけです(CSVの書き出しはありません)。', form: req.body }, 400);
     }
@@ -679,8 +729,8 @@ function registerAdminWarehouse(app, deps = {}) {
     try { st = fs.lstatSync(full); } catch { return res.status(404).type('text/plain').send('Not Found'); }
     if (!st.isFile()) return res.status(404).type('text/plain').send('Not Found');
     res.set({
-      // 診断結果(b2b_scan_*)はUTF-8(BOM付き)、取り出しCSVはShift_JIS
-      'Content-Type': name.startsWith('b2b_scan_') ? 'text/csv; charset=UTF-8' : 'text/csv; charset=Shift_JIS',
+      // 診断結果(b2b_scan_*)・電話営業リスト(phone_list_*)はUTF-8(BOM付き)、取り出しCSVはShift_JIS
+      'Content-Type': name.startsWith('b2b_scan_') || name.startsWith('phone_list_') ? 'text/csv; charset=UTF-8' : 'text/csv; charset=Shift_JIS',
       'Content-Disposition': `attachment; filename="${name}"`,
       'Content-Length': String(st.size),
     });
@@ -719,4 +769,4 @@ function registerAdminWarehouse(app, deps = {}) {
   return { enabled: true, uploadDir, exportDir, jobs };
 }
 
-module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };

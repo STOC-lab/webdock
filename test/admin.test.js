@@ -266,6 +266,26 @@ function multipart(fields, files) {
     eq((await ctx.req(BASE + '/exports/meo_20261025-101500.csv')).status, 302, '未ログインはダウンロード不可');
     ok((await (await ctx.req(BASE + '/export', { headers: { cookie } })).text()).includes('meo_20261025-101500.csv'), '一覧に出る');
 
+    // 電話営業リスト(別フォーム・preset なしでも始まる)
+    {
+      const html = await (await ctx.req(BASE + '/export', { headers: { cookie } })).text();
+      ok(html.includes('電話営業リスト(点数 × ブログ・お知らせの更新)') && html.includes('value="phonelist"') && html.includes('id="phoneform"'), '電話営業リスト: フォームが出る');
+      ok(/name="pref" value="兵庫県" checked/.test(html.split('id="phoneform"')[1]), '電話営業リスト: 既定は兵庫県だけチェック');
+      const before = ctx.jobs.started.length;
+      const pp = await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ pref: ['兵庫県'], action: 'phonelist', _csrf: csrf }) });
+      eq(pp.status, 303, '電話営業リスト: 開始');
+      const ps = ctx.jobs.started[ctx.jobs.started.length - 1];
+      eq([ctx.jobs.started.length, ps.title, ps.args[0]], [before + 1, '電話営業リストを作る', 'cli/phone-list.js'], '電話営業リスト: 作業の中身');
+      ok(/^phone_list_\d{8}-\d{6}\.csv$/.test(ps.meta.exportFile), '電話営業リスト: meta.exportFile');
+      const pbad = await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ action: 'phonelist', _csrf: csrf }) });
+      eq(pbad.status, 400, '電話営業リスト: 県なしは400');
+      fs.writeFileSync(path.join(ctx.exportDir, ps.meta.exportFile), '\uFEFFx');
+      const pd = await ctx.req(BASE + '/exports/' + ps.meta.exportFile, { headers: { cookie } });
+      eq(pd.headers.get('content-type'), 'text/csv; charset=UTF-8', '電話営業リスト: UTF-8で配信');
+      const jp = await (await ctx.req(BASE + '/jobs/' + ctx.jobs.started.length, { headers: { cookie } })).text();
+      ok(jp.includes(ps.meta.exportFile) && jp.includes('電話営業リスト(UTF-8)'), '電話営業リスト: 作業画面にダウンロードリンク');
+    }
+
     // グループ別ファイル(診断して文面も作る)
     const scanPost = await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ pref: ['兵庫県'], preset: 'b2b', action: 'scan', _csrf: csrf }) });
     eq(scanPost.status, 303, '診断開始');

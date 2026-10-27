@@ -5,7 +5,8 @@
     <span class="adm-help" id="times">開始 <%= fmtTime(job.startedAt) %><%= job.endedAt ? ' ／ 終了 ' + fmtTime(job.endedAt) : '' %></span></p>
   <div id="dl"><% if (job.downloadUrl) { %>
     <a class="adm-btn adm-link" href="<%= job.downloadUrl %>">CSVをダウンロード(<%= job.exportFile %>)</a>
-    <div class="adm-warn">出した店には「出力済み」の印が付いています。ダウンロードしてから画面を離れてください。</div>
+    <% if (/^phone_list_/.test(job.exportFile || '')) { %><div class="adm-help">電話営業リスト(UTF-8)です。倉庫に「出力済み」の印は付けていません。途中経過は同じ名前に .jsonl を付けた記録ファイルに残ります。</div>
+    <% } else { %><div class="adm-warn">出した店には「出力済み」の印が付いています。ダウンロードしてから画面を離れてください。</div><% } %>
   <% } %></div>
   <% if (typeof singleView !== 'undefined' && singleView) { %>
   <h3>送信用ファイル(全社共通の本文・1つの宛先CSV)</h3>

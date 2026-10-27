@@ -578,3 +578,19 @@ npm run wh:import -- --root /var/data/gmp/all --pattern "gmp_*.csv"
 
 
 **社内判断の上書き**: `rules/問い合わせ営業.overrides.json` に、.listt を作り直しても消えない判断を書きます(現在: 屋号の「店」は除外しない/電話番号が無い店は除外)。`remove` で条件を外し、`add` で足し、`excludeEmpty` で「空欄なら除外」を指定します。
+
+
+### 電話営業リスト(点数 × ブログ・お知らせの更新)
+
+倉庫のURLあり店舗を診断し、点数が範囲内(既定50〜70点)のサイトだけ「ブログ/お知らせ/新着情報/NEWS」の最終更新日を調べて、直近N日(既定7日)以内に更新があった会社を電話営業用CSV(UTF-8・BOM付き)に出します。電話番号が空の店は除き、同じ電話番号は最初の1件だけ残します。クレーム登録店・除外ドメイン・チェーンは既存の診断と同じく外します。
+
+```
+node cli/phone-list.js --prefecture 兵庫県 [--main-category 製造,建設] [--exclude-large|--small-only] \
+  [--min-score 50] [--max-score 70] [--days 7] [--limit 3000] [--concurrency 5] \
+  --out exports/phone_list_20261027-130000.csv [--resume]
+```
+
+- 診断の記録は `<out>.jsonl` に追記されます。止まったら同じ `--out` に `--resume` を付けて再開(CSVは記録全体から作り直します)。Ctrl+Cで安全に止まります。
+- 更新日は RSS/Atom → WordPress REST API → お知らせ・ブログ系のリンク先 → トップページのNEWS欄 → sitemap.xml の順に探し、最も新しい日付を採ります(1サイト最大6回の取得)。未来の日付(イベント告知など)と、著作権表記の年だけは使いません。日付を出していないサイトは対象外です。
+- 管理画面の「取り出し」ページにも同じ機能があります(「電話営業リスト」)。1時間に約2,000件が目安です。
+- テスト: `npm run test:freshness` / `npm run test:phone`(どちらもDB・ネット不要)
