@@ -27,7 +27,8 @@
     "wh:sitehost": "node cli/warehouse-sitehost.js",
     "test:freshness": "node test/freshness.test.js",
     "test:phone": "node test/phone.test.js",
-    "phone-list": "node cli/phone-list.js"
+    "phone-list": "node cli/phone-list.js",
+    "fresh-debug": "node cli/fresh-debug.js"
   },
   "keywords": [],
   "author": "",

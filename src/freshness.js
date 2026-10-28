@@ -141,7 +141,58 @@ function titleAfter(text, end) {
  * 最新の投稿日を探す。取得は合計 maxRequests 回まで、全体 timeoutMs で打ち切り。
  * 各取得の失敗は握りつぶして次へ進む。
  */
-async function detectLatestPost(siteUrl, { fetchPage = fetchHomepage, now = new Date(), maxRequests = 6, timeoutMs = 30000 } = {}) {
+/** 前後 n 文字つきの抜粋(改行は空白にまとめる)。trace 用 */
+function around(text, index, end, n) {
+  return text.slice(Math.max(0, index - n), index).replace(/\s+/g, ' ')
+    + '[' + text.slice(index, end).replace(/\s+/g, ' ') + ']'
+    + text.slice(end, end + n).replace(/\s+/g, ' ');
+}
+
+// 「日付っぽいが今の正規表現(YMD_RE)では読めない」書き方。trace 用の調査にだけ使う
+const UNREAD_PATTERNS = [
+  { name: '令和表記', re: /(?<![A-Za-z])(?:令和|R)\s*\d{1,2}\s*[.\/\-年]\s*\d{1,2}\s*[.\/\-月]\s*\d{1,2}\s*日?/g },
+  { name: '英語月', re: /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:19|20)\d{2}\b/g },
+  { name: '英語月(日が先)', re: /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?,?\s+(?:19|20)\d{2}\b/g },
+  { name: '2桁年', re: /(?<![\d\/.\-])\d{2}\s*[.\/]\s*(?:0?[1-9]|1[0-2])\s*[.\/]\s*(?:0?[1-9]|[12]\d|3[01])(?![\d\/.])/g },
+  { name: '年なし(月日)', re: /(?<![\d年])(?:0?[1-9]|1[0-2])月\s*(?:0?[1-9]|[12]\d|3[01])日/g },
+  { name: '年なし(数字)', re: /(?<![\d\/.\-年])(?:0?[1-9]|1[0-2])\s*[.\/]\s*(?:0?[1-9]|[12]\d|3[01])(?![\d\/.])/g },
+];
+
+/** 本文(text)とHTMLから、読めなかった日付っぽい文字列の例を最大 max 件。戻り: [{ pattern, context }] */
+function findUnreadDates(text, html, max = 10) {
+  const s = halfWidth(text);
+  // 日付が画像だけ(altやファイル名に date/日付/news)。文字の例で枠が埋まらないよう先に最大3件確保する
+  const imgs = [];
+  for (const m of String(html || '').matchAll(/<img\b[^>]*(?:date|日付|news)[^>]*>/gi)) {
+    if (imgs.length >= 3) break;
+    imgs.push({ pattern: '画像のみ', context: m[0].replace(/\s+/g, ' ').slice(0, 80) });
+  }
+  const out = [];
+  const textMax = max - imgs.length;
+  const claimed = [];
+  for (const { name, re } of UNREAD_PATTERNS) {
+    re.lastIndex = 0;
+    let m, n = 0;
+    while ((m = re.exec(s))) {
+      const a = m.index, b = a + m[0].length;
+      if (claimed.some(([x, y]) => a < y && b > x)) continue;
+      claimed.push([a, b]);
+      if (n < 2 && out.length < textMax) { n++; out.push({ pattern: name, context: around(s, a, b, 20) }); }
+    }
+  }
+  return out.concat(imgs);
+}
+
+async function detectLatestPost(siteUrl, opts = {}) {
+  const r = await detectCore(siteUrl, opts);
+  if (Array.isArray(opts.trace)) {
+    opts.trace.push({ step: 'result', date: r.date ? toJstDate(r.date) : null, source: r.source, url: r.url, title: r.title, note: r.note });
+  }
+  return r;
+}
+
+async function detectCore(siteUrl, { fetchPage = fetchHomepage, now = new Date(), maxRequests = 6, timeoutMs = 30000, trace } = {}) {
+  const T = Array.isArray(trace) ? (o) => trace.push(o) : null; // 調査用。未指定なら何も記録しない
   const started = Date.now();
   let used = 0;
   const notes = [];
@@ -152,9 +203,17 @@ async function detectLatestPost(siteUrl, { fetchPage = fetchHomepage, now = new 
 
   /** 1回取得(回数・時間の上限つき)。失敗・2xx以外・別サイトへの転送は null */
   async function get(url) {
-    if (used >= maxRequests) { notes.push('取得回数の上限'); return null; }
+    if (used >= maxRequests) {
+      notes.push('取得回数の上限');
+      if (T) T({ step: 'fetch', url, status: null, finalUrl: '', bytes: 0, ok: false, reason: `取得回数の上限(${maxRequests}回)に達したため取得せず` });
+      return null;
+    }
     const left = timeLeft();
-    if (left <= 0) { notes.push('時間切れ'); return null; }
+    if (left <= 0) {
+      notes.push('時間切れ');
+      if (T) T({ step: 'fetch', url, status: null, finalUrl: '', bytes: 0, ok: false, reason: `全体の時間切れ(${timeoutMs}ms)のため取得せず` });
+      return null;
+    }
     used++;
     let timer;
     try {
@@ -162,27 +221,43 @@ async function detectLatestPost(siteUrl, { fetchPage = fetchHomepage, now = new 
         Promise.resolve().then(() => fetchPage(url)),
         new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), left); }),
       ]);
-      if (!page || typeof page.body !== 'string' || !(page.status >= 200 && page.status < 300)) return null;
-      const fu = page.finalUrl || url;
+      const fu = (page && page.finalUrl) || url;
+      const bytes = page && typeof page.body === 'string' ? Buffer.byteLength(page.body) : 0;
+      const rec = (ok, reason) => { if (T) T({ step: 'fetch', url, status: page ? page.status : null, finalUrl: fu, bytes, ok, reason }); };
+      if (!page || typeof page.body !== 'string') { rec(false, '応答なし(取得関数がnull・本文なし。サイズ上限などで捨てられた可能性)'); return null; }
+      if (!(page.status >= 200 && page.status < 300)) { rec(false, `2xx以外(${page.status})`); return null; }
       if (siteHost) {
-        try { if (!sameSiteHost(new URL(fu).hostname, siteHost)) return null; } catch { return null; }
+        try { if (!sameSiteHost(new URL(fu).hostname, siteHost)) { rec(false, `別サイトへ転送(${new URL(fu).hostname})`); return null; } } catch { rec(false, '転送先URLが不正'); return null; }
       }
+      rec(true, '');
       return { ...page, finalUrl: fu };
-    } catch { return null; } finally { clearTimeout(timer); }
+    } catch (e) {
+      if (T) T({ step: 'fetch', url, status: null, finalUrl: '', bytes: 0, ok: false, reason: e && e.message === 'timeout' ? `タイムアウト(残り${left}ms)` : `例外: ${e && e.message}` });
+      return null;
+    } finally { clearTimeout(timer); }
   }
 
-  const add = (date, source, url, title) => { if (date) cands.push({ date, source, url: url || '', title: title || '' }); };
+  const add = (date, source, url, title, ctx) => {
+    if (!date) return;
+    cands.push({ date, source, url: url || '', title: title || '' });
+    if (T) T({ step: 'candidate', source, url: url || '', date: toJstDate(date), context: ctx || '' });
+  };
   const abs = (href, base) => { try { const u = new URL(href, base); u.hash = ''; return u.toString(); } catch { return ''; } };
   const sameSite = (u) => { try { return /^https?:$/.test(new URL(u).protocol) && sameSiteHost(new URL(u).hostname, siteHost); } catch { return false; } };
 
   // 1. トップページ
   const top = await get(siteUrl);
+  if (!top) {
+    if (T) T({ step: 'abort', reason: 'トップページを取得できず' });
+  }
   if (!top) return { date: null, source: null, url: '', title: '', note: '取得できず(トップページ)' };
   const base = top.finalUrl;
   try { siteHost = new URL(base).hostname; } catch { return { date: null, source: null, url: '', title: '', note: '取得できず(URLが不正)' }; }
   const html = top.body;
   const origin = new URL(base).origin;
-  const isWp = /wp-content|wp-includes|rel\s*=\s*["']https:\/\/api\.w\.org\/?["']/i.test(html);
+  const wpHit = /wp-content|wp-includes|rel\s*=\s*["']https:\/\/api\.w\.org\/?["']/i.exec(html);
+  const isWp = !!wpHit;
+  if (T) T({ step: 'wp', isWp, reason: isWp ? `HTML内に「${wpHit[0]}」あり` : 'wp-content / wp-includes / api.w.org がHTMLに無い' });
 
   // 2. RSS / Atom
   let feedUrl = '';
@@ -195,7 +270,9 @@ async function detectLatestPost(siteUrl, { fetchPage = fetchHomepage, now = new 
     feedUrl = abs(href, base);
     if (feedUrl) break;
   }
+  const feedFromLink = !!feedUrl;
   if (!feedUrl && isWp) feedUrl = origin + '/feed/';
+  if (T) T({ step: 'feed', url: feedUrl, reason: feedUrl ? (feedFromLink ? '<link rel=alternate>で見つけた' : 'WordPressなので /feed/ を推定') : 'フィードのURLなし', sameSite: feedUrl ? sameSite(feedUrl) : null });
   if (feedUrl && sameSite(feedUrl)) {
     const fp = await get(feedUrl);
     if (fp) {
@@ -213,7 +290,8 @@ async function detectLatestPost(siteUrl, { fetchPage = fetchHomepage, now = new 
         }
         best = { date: d, url: link ? abs(link, fp.finalUrl) : fp.finalUrl, title: tagText(b, 'title') };
       }
-      if (best) add(best.date, 'rss', best.url, best.title);
+      if (best) add(best.date, 'rss', best.url, best.title, '最新記事の日付(フィード内)');
+      else if (T) T({ step: 'note', message: 'フィードは取得できたが、読める日付の記事が無い' });
     }
   }
 
@@ -227,48 +305,65 @@ async function detectLatestPost(siteUrl, { fetchPage = fetchHomepage, now = new 
         if (p) {
           const d = parseDateValue(p.date, now);
           const t = p.title && typeof p.title === 'object' ? p.title.rendered : p.title;
-          add(d, 'wordpress', typeof p.link === 'string' ? p.link : wp.finalUrl, decodeEntities(String(t || '').replace(/<[^>]*>/g, '')).trim());
+          add(d, 'wordpress', typeof p.link === 'string' ? p.link : wp.finalUrl, decodeEntities(String(t || '').replace(/<[^>]*>/g, '')).trim(), 'date=' + String(p.date));
         }
       } catch { /* JSONでなければ無視 */ }
     }
   }
 
   // 4. お知らせ・ブログ系のリンク先(最大2つ)
-  const links = [];
+  const links = [], extra = [], picked = [], skipped = [];
   for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi)) {
     const href = attr(m[1], 'href');
     if (!href || /^(?:#|mailto:|tel:|javascript:)/i.test(href)) continue;
     const label = decodeEntities(m[2].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
     if (!NEWS_LINK_RE.test(label) && !NEWS_LINK_RE.test(href)) continue;
     const u = abs(href, base);
-    if (!u || SKIP_EXT_RE.test(u) || !sameSite(u)) continue;
-    if (u === base || u === origin + '/' || links.includes(u)) continue;
+    const skip = (reason) => { if (T && skipped.length < 10) skipped.push({ label: label.slice(0, 40), url: u || href, reason }); };
+    if (!u) { skip('URLが不正'); continue; }
+    if (SKIP_EXT_RE.test(u)) { skip('ファイル(pdf/画像など)'); continue; }
+    if (!sameSite(u)) { skip('別サイト'); continue; }
+    if (u === base || u === origin + '/') { skip('トップページ自身'); continue; }
+    if (links.includes(u) || extra.includes(u)) { skip('重複'); continue; }
+    if (links.length >= 2) {
+      if (!T) break; // 通常は2つ見つけたら終わり。trace のときだけ最後まで見て「上限超過」を記録する
+      extra.push(u); skip('上限(2件)を超えたので見ない'); continue;
+    }
     links.push(u);
-    if (links.length >= 2) break;
+    if (T) picked.push({ label: label.slice(0, 40), url: u });
   }
+  if (T) T({ step: 'news_links', picked, skipped, found: picked.length });
   for (const u of links) {
     const p = await get(u);
     if (!p) continue;
     const text = htmlToText(p.body);
     const ds = extractDates(text, now);
+    if (T) T({ step: 'unread', url: p.finalUrl, datesFound: ds.length, examples: findUnreadDates(text, p.body) });
     if (!ds.length) continue;
     const top1 = ds.reduce((a, b) => (b.date > a.date ? b : a));
-    add(top1.date, 'news_page', p.finalUrl, titleAfter(text, top1.end));
+    add(top1.date, 'news_page', p.finalUrl, titleAfter(text, top1.end), `読めた日付${ds.length}件中の最新: ` + around(halfWidth(text), top1.index, top1.end, 30));
   }
 
   // 5. トップページ本文: 直前300文字以内にニュース系の語がある日付だけ
   {
     const text = htmlToText(html);
     let best = null;
-    for (const d of extractDates(text, now)) {
+    const topDates = extractDates(text, now);
+    const dropped = [];
+    for (const d of topDates) {
       const before = text.slice(Math.max(0, d.index - NEAR_CHARS), d.index);
-      if (!NEAR_RE.test(before)) continue;
+      if (!NEAR_RE.test(before)) { if (T && dropped.length < 5) dropped.push({ date: toJstDate(d.date), context: around(halfWidth(text), d.index, d.end, 30) }); continue; }
       if (!best || d.date > best.date) best = d;
     }
-    if (best) add(best.date, 'top_page', base, titleAfter(text, best.end));
+    if (T) {
+      T({ step: 'top_dates', datesFound: topDates.length, droppedNoKeyword: dropped, droppedCount: topDates.length - topDates.filter((d) => NEAR_RE.test(text.slice(Math.max(0, d.index - NEAR_CHARS), d.index))).length });
+      T({ step: 'unread', url: base, datesFound: topDates.length, examples: findUnreadDates(text, html) });
+    }
+    if (best) add(best.date, 'top_page', base, titleAfter(text, best.end), `近くにキーワードあり: ` + around(halfWidth(text), best.index, best.end, 30));
   }
 
   // 6. ここまでで日付が無ければ sitemap.xml を見る
+  if (T && !cands.length) T({ step: 'note', message: 'ここまでで日付が無いので sitemap.xml を確認する' });
   if (!cands.length) {
     const sm = await get(origin + '/sitemap.xml');
     if (sm) {
@@ -284,9 +379,10 @@ async function detectLatestPost(siteUrl, { fetchPage = fetchHomepage, now = new 
         const loc = tagText(m[0], 'loc');
         if (!loc || !SITEMAP_URL_RE.test(loc)) continue;
         const d = parseDateValue(tagText(m[0], 'lastmod'), now);
-        if (d && (!best || d > best.date)) best = { date: d, url: loc };
+        if (d && (!best || d > best.date)) best = { date: d, url: loc, raw: tagText(m[0], 'lastmod') };
       }
-      if (best) add(best.date, 'sitemap', best.url, '');
+      if (T) T({ step: 'sitemap', urlCount: (body.match(/<url\b/gi) || []).length, matched: !!best });
+      if (best) add(best.date, 'sitemap', best.url, '', 'lastmod=' + best.raw);
     }
   }
 

@@ -170,6 +170,76 @@ const day = (r) => (r.date ? toJstDate(r.date) : null);
     eq(r.date, null, 'タイムアウト時は date:null');
   }
 
+  // ---- trace(調査用): 段階の記録 ----
+  {
+    const top = '<html><body><p>2026.01.05 本日の営業カレンダー</p>wp-content <a href="/news/">お知らせ</a> <a href="/files/a.pdf">お知らせPDF</a> <a href="https://other.example.com/news">NEWS</a>'
+      + '<p>お知らせ 2026.10.20 新商品</p></body></html>';
+    const pages = { [SITE]: top, 'https://example.co.jp/news/': '<p>2026.10.22 春のセール</p>' };
+    const trace = [];
+    const { r } = await run(pages, { trace });
+    const steps = trace.map((t) => t.step);
+    ok(steps.includes('fetch') && steps.includes('wp') && steps.includes('news_links') && steps.includes('candidate') && steps[steps.length - 1] === 'result', 'trace: 段階が記録される ' + steps.join(','));
+    const f0 = trace.find((t) => t.step === 'fetch');
+    eq([f0.url, f0.status, f0.ok, f0.reason], [SITE, 200, true, ''], 'trace: 取得の記録');
+    ok(trace.some((t) => t.step === 'fetch' && !t.ok && /404/.test(t.reason)), 'trace: 2xx以外の理由');
+    eq(trace.find((t) => t.step === 'wp').isWp, true, 'trace: isWp');
+    const nl = trace.find((t) => t.step === 'news_links');
+    eq(nl.picked.map((x) => x.url), ['https://example.co.jp/news/'], 'trace: 採用したニュース系リンク');
+    eq(nl.skipped.map((x) => x.reason).sort(), ['ファイル(pdf/画像など)', '別サイト'], 'trace: 除外したリンクと理由');
+    const cand = trace.filter((t) => t.step === 'candidate');
+    ok(cand.some((c) => c.source === 'news_page' && c.date === '2026-10-22' && c.context.includes('[2026.10.22')), 'trace: 採用した日付と前後');
+    const td = trace.find((t) => t.step === 'top_dates');
+    eq([td.droppedCount, td.droppedNoKeyword[0].date], [1, '2026-01-05'], 'trace: キーワードが近くに無く捨てた日付');
+    eq(trace[trace.length - 1].date, day(r), 'trace: 最終結果');
+  }
+  // ---- trace: 読めない日付の例 ----
+  {
+    const body = '<html><body>お知らせ<p>R8.10.28 令和8年10月28日 R08.10.28</p><p>10/28 10月28日 10.28</p><p>26.10.28 26/10/28</p>'
+      + '<p>Oct 28, 2026 October 28, 2026 28 Oct 2026</p><img src="/img/date_1028.png" alt="日付"></body></html>';
+    const trace = [];
+    const { r } = await run({ [SITE]: body }, { trace });
+    eq(r.date, null, 'trace: 読めない日付は従来どおり日付なし');
+    const ex = trace.filter((t) => t.step === 'unread').flatMap((t) => t.examples);
+    const names = new Set(ex.map((e) => e.pattern));
+    for (const n of ['令和表記', '2桁年', '年なし(月日)', '年なし(数字)', '英語月', '英語月(日が先)', '画像のみ']) ok(names.has(n), 'trace: 検出 ' + n + ' got=' + [...names].join('/'));
+    ok(ex.length <= 10, 'trace: 例は最大10件');
+    ok(ex.some((e) => e.pattern === '令和表記' && e.context.includes('R8.10.28')), 'trace: パターン名と前後つき');
+  }
+  // ---- trace: 取得失敗・別サイト転送・トップ失敗 ----
+  {
+    const t1 = [];
+    await detectLatestPost(SITE, { fetchPage: fake({ [SITE]: new Error('boom') }), now: NOW, trace: t1 });
+    ok(t1.some((t) => t.step === 'fetch' && !t.ok && /boom/.test(t.reason)) && t1.some((t) => t.step === 'abort'), 'trace: トップ失敗');
+    const t2 = [];
+    const f = async (u) => (u === SITE ? { finalUrl: SITE, status: 200, body: '<a href="/news/">お知らせ</a>' } : { finalUrl: 'https://evil.example.net/', status: 200, body: 'x' });
+    await detectLatestPost(SITE, { fetchPage: f, now: NOW, trace: t2 });
+    ok(t2.some((t) => t.step === 'fetch' && !t.ok && /別サイト/.test(t.reason)), 'trace: 別サイト転送の理由');
+  }
+  // ---- trace の有無で結果が同じ ----
+  {
+    const top = '<link rel="alternate" type="application/rss+xml" href="/rss"><a href="/news/">お知らせ</a><a href="/blog/">ブログ</a><a href="/info/">info</a>お知らせ 2026.10.01 a';
+    const pages = { [SITE]: top, 'https://example.co.jp/rss': '<rss><item><title>t</title><link>https://example.co.jp/x</link><pubDate>Tue, 20 Oct 2026 10:00:00 +0900</pubDate></item></rss>', 'https://example.co.jp/news/': '2026.10.25 x' };
+    const a = await run(pages);
+    const trace = [];
+    const b = await run(pages, { trace });
+    eq(b.r, a.r, 'trace有無で結果が同じ');
+    eq(b.f.calls, a.f.calls, 'trace有無で取得も同じ');
+    ok(trace.length > 0, 'trace が埋まる');
+  }
+  // ---- fresh-debug の部品 ----
+  {
+    const fd = require('../cli/fresh-debug');
+    eq(fd.parseArgs(['--jsonl', 'a', '--unknown', '--limit', '3']).limit, 3, 'fresh-debug: 引数');
+    ok(fd.parseArgs(['--hits']).error, 'fresh-debug: --jsonl 無しはエラー');
+    eq(fd.pickUrls([{ url: 'u1', inRange: true, latest: '' }, { url: 'u2', inRange: true, latest: '2026-10-20', daysAgo: 7 }, { url: 'u3', inRange: false, latest: '' }], { unknown: true, limit: 9 }), ['u1'], 'fresh-debug: unknown 抽出');
+    eq(fd.pickUrls([{ url: 'u2', inRange: true, latest: '2026-10-20', daysAgo: 7 }, { url: 'u4', inRange: true, latest: '2026-01-01', daysAgo: 300 }], { hits: true, days: 90, limit: 9 }), ['u2'], 'fresh-debug: hits 抽出');
+    const out = [];
+    const code = await fd.main(['https://example.co.jp/'], { log: (m) => out.push(m), detect: (u, o) => detectLatestPost(u, { ...o, fetchPage: fake({ [u]: '<body>お知らせ R8.10.28</body>' }), now: NOW }) });
+    const txt = out.join('\n');
+    eq(code, 0, 'fresh-debug: 終了コード');
+    ok(/令和表記: 1件/.test(txt) && /ニュース系リンクが無い: 1件/.test(txt), 'fresh-debug: 集計 ' + txt.slice(-300));
+  }
+
   console.log(`freshness: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
