@@ -86,6 +86,8 @@
     <label>点数 <input class="adm-input adm-short" type="number" name="min_score" min="0" max="100" value="<%= pf.min_score !== undefined && pf.min_score !== '' ? pf.min_score : 50 %>"> 〜 <input class="adm-input adm-short" type="number" name="max_score" min="0" max="100" value="<%= pf.max_score !== undefined && pf.max_score !== '' ? pf.max_score : 70 %>"> 点</label>
     <label>直近 <input class="adm-input adm-short" type="number" name="days" min="1" max="365" value="<%= pf.days || 7 %>"> 日以内に更新があった会社</label>
     <label>上限件数 <input class="adm-input adm-short" type="number" name="limit" min="1" value="<%= pf.limit || 3000 %>"></label>
+    <label class="adm-check"><input type="checkbox" name="gbp" value="1" <%= (phoneForm ? !!pf.gbp : true) ? 'checked' : '' %>> Googleマップ(GBP)の更新も調べる</label>
+    <p class="adm-help">点数が範囲内の会社だけGoogleマップを1件ずつ読みます(1件10秒前後)。最新情報(投稿)かオーナー返信が直近の会社も「該当」になります。サーバーにPlaywrightが入っていないときはGBPだけ飛ばします。</p>
     <div class="adm-actions">
       <button class="adm-btn" type="submit" name="action" value="phonelist" id="phonebtn">電話営業リストを作る</button>
     </div>

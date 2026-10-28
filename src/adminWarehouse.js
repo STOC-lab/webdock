@@ -263,9 +263,13 @@ function buildPhoneListArgs(body, { exportDir, now }) {
   if (size === 'exclude_large') args.push('--exclude-large');
   else if (size === 'small_only') args.push('--small-only');
   const exportFile = `phone_list_${stamp(now)}.csv`;
+  // チェックボックス「Googleマップ(GBP)の更新も調べる」。チェックが付いたときだけ送られてくる
+  const gbp = ['1', 'on', 'true'].includes(String(Array.isArray(body.gbp) ? body.gbp[body.gbp.length - 1] : body.gbp || '').trim().toLowerCase());
   args.push('--min-score', String(minScore), '--max-score', String(maxScore), '--days', String(days), '--limit', String(limit),
-    '--concurrency', '5', '--out', path.join(exportDir, exportFile));
-  return { args, exportFile, preset: 'phonelist', minScore, maxScore, days, limit, estimateHours: Math.max(1, Math.round(limit / 2000)) };
+    '--concurrency', '5');
+  if (gbp) args.push('--gbp');
+  args.push('--out', path.join(exportDir, exportFile));
+  return { args, exportFile, preset: 'phonelist', minScore, maxScore, days, limit, gbp, estimateHours: Math.max(1, Math.round(limit / 2000)) };
 }
 
 /**

@@ -190,7 +190,7 @@ function warehouseWhere(a, { noSalesCol, storeFlags } = {}) {
 function buildWarehouseQuery(a, { noSalesCol, storeFlags } = {}) {
   const { where, params } = warehouseWhere(a, { noSalesCol, storeFlags });
   where.push(...claimConditions({ storeFlags }).notClaim);
-  let sql = `SELECT id AS store_id, stoc_store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha, phone, address_raw${noSalesCol ? ', form_no_sales' : ''}
+  let sql = `SELECT id AS store_id, stoc_store_id, name, website_url AS url, prefecture, category_main AS category, form_url, form_captcha, phone, address_raw${noSalesCol ? ', form_no_sales' : ''}, cid, place_id, gmap_url
 FROM stoc_master.shops WHERE ${where.join(' AND ')}
 ORDER BY review_count IS NULL, review_count DESC, id`;
   if (a.limit > 0) { sql += '\nLIMIT ?'; params.push(a.limit); }
@@ -225,7 +225,7 @@ async function loadWarehouseRows(a) {
       store_id: String(r.store_id), name: r.name || '', url: r.url || '', prefecture: r.prefecture || '', category: r.category || '',
       formUrl: r.form_url || '', captcha: r.form_captcha === null || r.form_captcha === undefined ? '' : (Number(r.form_captcha) ? 'あり' : 'なし'),
       noSales: Number(r.form_no_sales) === 1 ? 'あり' : '',
-      phone: r.phone || '', address: r.address_raw || '', stocStoreId: r.stoc_store_id === null || r.stoc_store_id === undefined ? '' : String(r.stoc_store_id),
+      phone: r.phone || '', address: r.address_raw || '', cid: r.cid ? String(r.cid) : '', placeId: r.place_id || '', gmapUrl: r.gmap_url || '', stocStoreId: r.stoc_store_id === null || r.stoc_store_id === undefined ? '' : String(r.stoc_store_id),
     }));
     // チェーン判定: 候補のホスト名ごとに、倉庫全体(全都道府県)での店舗数を数える
     const chain = await EX.loadChainHosts(pool, mapped.map((r) => siteHostOf(r.url)), { columnExists: wh.columnExists });

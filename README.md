@@ -593,4 +593,32 @@ node cli/phone-list.js --prefecture 兵庫県 [--main-category 製造,建設] [-
 - 診断の記録は `<out>.jsonl` に追記されます。止まったら同じ `--out` に `--resume` を付けて再開(CSVは記録全体から作り直します)。Ctrl+Cで安全に止まります。
 - 更新日は RSS/Atom → WordPress REST API → お知らせ・ブログ系のリンク先 → トップページのNEWS欄 → sitemap.xml の順に探し、最も新しい日付を採ります(1サイト最大6回の取得)。未来の日付(イベント告知など)と、著作権表記の年だけは使いません。日付を出していないサイトは対象外です。
 - 管理画面の「取り出し」ページにも同じ機能があります(「電話営業リスト」)。1時間に約2,000件が目安です。
-- テスト: `npm run test:freshness` / `npm run test:phone`(どちらもDB・ネット不要)
+- テスト: `npm run test:freshness` / `npm run test:phone` / `npm run test:gbp`(いずれもDB・ネット不要)
+
+#### GBP(Googleマップ)の更新も調べる(`--gbp`)
+
+`--gbp` を付けると、点数が範囲内で、倉庫に `cid` / `place_id` / `gmap_url` のある会社のGoogleマップを1件ずつ開き、**最新情報(投稿)・オーナー返信・口コミ**の「3 週間前」のような表記を概算の日付(週=7日・か月=30日・年=365日)にして記録します。
+
+- 該当の条件: WEBの最終更新日、GBPの最新情報(投稿)、オーナー返信のどれかが `--days` 日以内。口コミは判定に使わず、参考列に出すだけです。
+- CSVの末尾に `GoogleマップURL / GBP最終投稿 / GBP最終オーナー返信 / 最新口コミ / GBPの表記 / 該当理由` を足します(GBPなしの実行でも列は出ます)。並びは「WEB・投稿・返信のうち一番新しい日」の新しい順です。
+- 1件ずつ(店舗の間に4〜8秒のランダム待ち)・1件40秒まで。WEBの更新日判定はGBPを待たずに並列で進みます。
+- ボット検知の回避はしません。「確認画面」(`/sorry/`・「通常と異なるトラフィック」・reCAPTCHA など)が出たら、その実行ではGBPの確認を中止します(以降の店舗は記録の `gbp.note` が「Googleの確認画面が出たため中止」)。時間をおいてやり直してください。
+- Playwrightが無いときはGBPだけ飛ばし、「Playwrightが未導入のためGBPは調べていません」とログに出します(WEBの診断・更新日判定は普通に動きます)。
+- 管理画面の電話営業リストには「Googleマップ(GBP)の更新も調べる」(既定でチェック)があります。
+
+**VPSでの導入(最初の1回)**
+
+```
+cd /var/www/webdock
+npm i playwright            # optionalDependencies に入っています。npm ci / npm i でも入ります
+npx playwright install --with-deps chromium
+```
+
+**最初に画面の読み取りを確かめる(調査ツール)**
+
+```
+node cli/gbp-debug.js --cid 1234567890123456789 --out /tmp/gbp-debug
+node cli/gbp-debug.js --jsonl exports/phone_list_xxxx.csv.jsonl --limit 5
+```
+
+開いたURL・最終URL・確認画面か・見つけた見出し・抽出結果・判定に使った前後の文字列を表示し、`/tmp/gbp-debug/<cid>.png`(スクリーンショット)と `<cid>.txt`(画面の本文全部)を保存します。見出しや「n 週間前」の位置が違っていたら、`src/gbpActivity.js` 先頭のキーワード配列(`OWNER_REPLY_KEYWORDS` / `POST_HEADINGS` / `REVIEW_HEADINGS` など)に文言を足してください。jsonl に `cid` / `placeId` / `gmapUrl` を記録するので、`--jsonl` で実際の対象店舗をそのまま試せます(`--headed` でブラウザを見ながら確認することもできます)。

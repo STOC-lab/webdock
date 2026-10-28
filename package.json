@@ -28,7 +28,9 @@
     "test:freshness": "node test/freshness.test.js",
     "test:phone": "node test/phone.test.js",
     "phone-list": "node cli/phone-list.js",
-    "fresh-debug": "node cli/fresh-debug.js"
+    "fresh-debug": "node cli/fresh-debug.js",
+    "test:gbp": "node test/gbp.test.js",
+    "gbp-debug": "node cli/gbp-debug.js"
   },
   "keywords": [],
   "author": "",
@@ -41,5 +43,8 @@
     "multer": "^2.5.0",
     "mysql2": "^3.24.6",
     "nodemailer": "^10.1.7"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.49.0"
   }
 }
