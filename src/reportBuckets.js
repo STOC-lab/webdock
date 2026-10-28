@@ -79,7 +79,7 @@ function buildRequestText(items, kind, customer) {
   lines.push('');
   items.forEach((it, i) => {
     lines.push(`${i + 1}. ${it.title}`);
-    if (it.evidence) lines.push(`   確認できたこと: ${it.evidence}`);
+    if (it.evidence) lines.push(`   確認した箇所: ${it.evidence}`);
     lines.push(`   ご依頼: ${fixToRequest(it.fix) || 'ご確認をお願いいたします。'}`);
   });
   lines.push('');

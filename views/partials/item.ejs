@@ -12,7 +12,7 @@
   <% if (actionable && item.remedy && remedyLabel[item.remedy]) { %>
     <p class="item-remedy remedy-<%= item.remedy %>"><%= remedyLabel[item.remedy] %></p>
   <% } %>
-  <% if (item.why) { %><p class="item-why"><strong>なぜ重要か:</strong> <%= item.why %></p><% } %>
-  <% if (item.fix) { %><p class="item-fix"><strong>対処法:</strong> <%= item.fix %></p><% } %>
-  <% if (item.evidence) { %><p class="item-ev">根拠: <%= item.evidence %></p><% } %>
+  <% if (item.why) { %><p class="item-why"><strong>このままだと:</strong> <%= item.why %></p><% } %>
+  <% if (item.fix) { %><p class="item-fix"><strong>直し方:</strong> <%= item.fix %></p><% } %>
+  <% if (item.evidence) { %><p class="item-ev">確認した箇所: <%= item.evidence %></p><% } %>
 </div>

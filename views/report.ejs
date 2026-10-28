@@ -95,7 +95,7 @@
     <h3><span class="tag"><%= statusLabel(item.status) %></span><%= item.title %></h3>
     <dl>
       <dt>確認できたこと</dt><dd><%= item.summary %><% if (item.evidence) { %>(<%= item.evidence %>)<% } %></dd>
-      <% if (item.why) { %><dt>なぜ確認が必要か</dt><dd><%= item.why %></dd><% } %>
+      <% if (item.why) { %><dt>このままだと</dt><dd><%= item.why %></dd><% } %>
       <dt>対応の目安</dt><dd><%= BUCKETS[b].guide %></dd>
     </dl>
   </div>

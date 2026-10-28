@@ -23,7 +23,7 @@
 
   <div class="lead-card">
     <h2>残り<%= rest.length %>項目の詳しい「カルテ」を無料でお受け取りください</h2>
-    <p>各項目の<strong>危険度・なぜ重要か・具体的な直し方</strong>をまとめた診断カルテを、その場で表示します。</p>
+    <p>各項目の<strong>危険度・このままだと何が起きるか・具体的な直し方</strong>をまとめた診断カルテを、その場で表示します。</p>
     <% if (typeof leadError !== 'undefined' && leadError) { %><div class="alert"><%= leadError %></div><% } %>
     <form class="lead-form" method="post" action="/lead">
       <input type="hidden" name="scan_id" value="<%= scan.id %>">
