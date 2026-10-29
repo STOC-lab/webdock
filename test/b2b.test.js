@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { classifyIndustry, pickFindingB2b, buildB2bMessage, jstDateJa, loadTemplates } = require('../src/outreach');
-const { runBatch, parseInputBuffer, parseDelimited, buildWarehouseQuery, B2B_COLUMNS, COLUMNS } = require('../cli/batch-scan');
+const { runBatch, parseInputBuffer, parseDelimited, buildWarehouseQuery, B2B_COLUMNS, COLUMNS, PHP_COLUMNS } = require('../cli/batch-scan');
 const { detectNoSales, findContact, NOTE_NO_SALES } = require('../src/formFinder');
 const wh = require('../src/warehouse');
 const promote = require('../cli/warehouse-promote');
@@ -103,7 +103,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     ];
     await runBatch({ rows, scan, out, templates: T, templateMode: 'b2b', log: () => {}, subject: 3, maxChars: 0 });
     const t = parseDelimited(fs.readFileSync(out, 'utf8'), ',');
-    eq(t[0], [...COLUMNS, ...B2B_COLUMNS], 'b2bの列');
+    eq(t[0], [...COLUMNS, ...B2B_COLUMNS, ...PHP_COLUMNS], 'b2bの列(PHP列は末尾)');
     const r1 = t[1], r2 = t[2];
     const col = (n) => t[0].indexOf(n);
     eq(r1[col('送信推奨')], 'はい', '送る');
@@ -112,13 +112,13 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
     eq(Number(r1[col('本文文字数')]), [...r1[col('本文')]].length, '本文文字数');
     eq([r1[col('使用本文')], r1[col('問い合わせURL')], r1[col('画像認証')]], ['標準', 'https://bad.jp/contact', 'なし'], '使用本文/URL/画像認証');
     ok(r1[col('短縮本文')].includes('甲建設 ご担当者様'), '短縮本文あり');
-    eq([t[0][t[0].length - 3], t[0][t[0].length - 2], t[0][t[0].length - 1], r1[col('電話番号')], r1[col('住所')]], ['電話番号', '住所', 'stoc_store_id', '079-222-3333', '兵庫県姫路市北条1-1'], '電話番号・住所・stoc_store_idを末尾に引き継ぐ');
+    eq([t[0][t[0].length - 5], t[0][t[0].length - 4], t[0][t[0].length - 3], r1[col('電話番号')], r1[col('住所')]], ['電話番号', '住所', 'stoc_store_id', '079-222-3333', '兵庫県姫路市北条1-1'], '電話番号・住所・stoc_store_idを引き継ぐ(後ろにPHP列)');
     eq(r2[col('送信推奨')], '送らない:初回に使える指摘なし', '送らない+理由');
     eq(r2[col('本文')], '', '送らない時は本文なし');
     // 従来モードの列は増えない
     const out2 = path.join(dir, 'w.csv');
     await runBatch({ rows, scan, out: out2, templates: T, templateMode: 'west', log: () => {} });
-    eq(parseDelimited(fs.readFileSync(out2, 'utf8'), ',')[0].length, 25, 'west は25列');
+    eq(parseDelimited(fs.readFileSync(out2, 'utf8'), ',')[0].length, 27, 'west は27列(末尾にPHP,PHP版)');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 
   // Shift_JIS の promote CSV
@@ -279,7 +279,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
 
 
   // ---- グループ分け(送信ツールが全社同一本文のため) ----
-  eq(G.GROUP_ORDER, ['no_https', 'mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'], 'グループ優先順');
+  eq(G.GROUP_ORDER, ['php_eol', 'php_unpatched', 'no_https', 'mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'], 'グループ優先順');
   eq(G.groupKeyOfFinding('cert_expiring'), 'cert_soon', '証明書期限間近は cert_soon');
   eq(G.groupKeyOfFinding('cert_expired'), 'cert_expired', '期限切れ');
   eq(G.groupKeyOfFinding('no_https'), 'no_https', 'no_https');

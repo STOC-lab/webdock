@@ -3,6 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const PV = require('./phpVersions');
+
 const JUDGE = { ok: 'A', warn: 'C', bad: 'D', unknown: '—' };
 
 function pickFinding(results) {
@@ -96,6 +98,11 @@ function pickFindingB2b(results) {
   for (const r of results || []) by[r.key] = r;
   const st = (k) => (by[k] ? by[k].status : null);
   const badWarn = (k) => st(k) === 'bad' || st(k) === 'warn';
+  // PHPの版(X-Powered-By に出ているもののみ): 公式修正のない版(php_eol)/修正前の版(php_unpatched)。最優先
+  if (st('php') === 'bad') {
+    const v = PV.parsePhpVersion(by.php.evidence);
+    if (v) return PV.classifyPhp(v).kind === 'eol' ? 'php_eol' : 'php_unpatched';
+  }
   // サイト全体がhttpのまま(https_redirect が bad)は最優先。https_redirect の warn は「httpが転送されず表示される」実測ありの場合のみ
   if (st('https_redirect') === 'bad') return 'no_https';
   // mixed は「実際に読み込む部品」だけを数える。warn は画像・動画音声のみ(鍵マークが外れる程度)なので使わず、bad(フォーム送信先・スクリプト・CSS・埋め込みが http)のみ採用
@@ -122,10 +129,11 @@ function buildB2bMessage(templates, opts) {
   const o = opts || {};
   const industry = classifyIndustry(o.category);
   const type = pickFindingB2b(o.results);
-  const out = { industry, findingType: type || '', send: false, reason: '', subject: '', body: '', shortBody: '', length: '', use: '', 指摘: '', 困ること: '' };
+  const out = { industry, findingType: type || '', send: false, reason: '', subject: '', body: '', shortBody: '', length: '', use: '', 指摘: '', 困ること: '', phpVersion: '' };
   const f = type ? (templates.findingsB2b || {})[type] : null;
   if (!f) { out.reason = '初回に使える指摘なし'; return out; }
   out.指摘 = f['指摘']; out.困ること = f['困ること'];
+  if (type === 'php_eol' || type === 'php_unpatched') { const v = PV.parsePhpVersion((by_(o.results).php || {}).evidence); out.phpVersion = v ? v.text : ''; }
   const vars = {
     ...(templates.config || {}), 電話番号: (templates.config || {}).電話, 会社名: o.name, ドメイン: o.domain,
     確認日: jstDateJa(o.scannedAt), 閲覧者: viewerOf(industry), 指摘: f['指摘'], 困ること: f['困ること'],
@@ -148,6 +156,9 @@ function buildB2bMessage(templates, opts) {
   }
   return out;
 }
+
+/** 結果配列 → key をキーにした表 */
+function by_(results) { const m = {}; for (const r of results || []) m[r.key] = r; return m; }
 
 function loadTemplates(dir) {
   const d = dir || path.join(__dirname, '..', 'templates');

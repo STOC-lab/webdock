@@ -31,7 +31,7 @@ allowed.forEach(ip => ok(isBlockedIp(ip)===false, 'should allow '+ip));
   };
   const good = await runChecks(goodPage);
   console.log('GOOD grade=%s score=%s counts=%j', good.grade, good.score, good.counts);
-  ok(good.results.length===10, 'good: 10 items');
+  ok(good.results.length===11, 'good: 11 items');
   ok(good.grade==='A'||good.grade==='B', 'good: high grade (got '+good.grade+')');
 
   // ---- 悪いサイトのモック ----

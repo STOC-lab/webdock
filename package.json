@@ -29,6 +29,7 @@
     "test:phone": "node test/phone.test.js",
     "phone-list": "node cli/phone-list.js",
     "fresh-debug": "node cli/fresh-debug.js",
+    "test:php": "node test/php.test.js",
     "test:gbp": "node test/gbp.test.js",
     "gbp-debug": "node cli/gbp-debug.js"
   },

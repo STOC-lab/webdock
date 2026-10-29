@@ -25,6 +25,8 @@ const COLUMNS = ['store_id', '店名', '都道府県', '業種', 'URL', 'ドメ�
   '送信推奨', '本文', 'エラー', '診断日時'];
 // B2Bモードだけ末尾に足す列
 const B2B_COLUMNS = ['業種区分', '件名', '本文文字数', '短縮本文', '使用本文', '問い合わせURL', '画像認証', '営業お断り', '電話番号', '住所', 'stoc_store_id'];
+// 既存の列順を変えないため、PHP関連は最後に足す(PHPの判定と、表示されていた版)
+const PHP_COLUMNS = ['PHP', 'PHP版'];
 const ITEM_KEYS = ['cert', 'https_redirect', 'tls_version', 'headers', 'cookies', 'mixed', 'cms', 'js_libs', 'ext_scripts', 'mail'];
 
 const ALIASES = {
@@ -283,13 +285,20 @@ function readDoneIds(file) {
   return set;
 }
 
+/** 表示されていたPHPの版(X.Y.Z)。判定が出ていなければ空 */
+function phpVerOf(rec) {
+  const r = (rec.results || []).find((x) => x.key === 'php');
+  const v = r && r.status !== 'unknown' ? require('../src/phpVersions').parsePhpVersion(r.evidence) : null;
+  return v ? v.text : '';
+}
+
 /* ---------- バッチ本体 ---------- */
 
 let stopRequested = false;
 
 async function runBatch({ rows, scan, out, templates, concurrency = 5, templateMode = 'auto', resume = false, isStopped, log, subject, maxChars = 0 }) {
   const b2b = templateMode === 'b2b';
-  const columns = b2b ? [...COLUMNS, ...B2B_COLUMNS] : COLUMNS;
+  const columns = [...(b2b ? [...COLUMNS, ...B2B_COLUMNS] : COLUMNS), ...PHP_COLUMNS];
   const say = log || ((m) => process.stderr.write(m + '\n'));
   const jsonl = out + '.jsonl';
   const exists = fs.existsSync(out) && fs.statSync(out).size > 0;
@@ -366,6 +375,7 @@ async function runBatch({ rows, scan, out, templates, concurrency = 5, templateM
     fs.appendFileSync(out, csvLine([
       row.store_id, row.name, row.prefecture, row.category, row.url, rec.domain, rec.grade, rec.score, ...items,
       rec.findingType, rec['指摘'], rec['困ること'], sendCell, rec.body, rec.error, rec.scannedAt, ...extra,
+      byKey.php ? JUDGE[byKey.php] : '', phpVerOf(rec),
     ]));
     fs.appendFileSync(jsonl, JSON.stringify({
       store_id: row.store_id, name: row.name, prefecture: row.prefecture, category: row.category, url: row.url, domain: rec.domain,
@@ -550,6 +560,6 @@ async function main() {
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
-module.exports = { loadResultsByStore, selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
+module.exports = { loadResultsByStore, selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, PHP_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
 if (require.main === module) main().catch((e) => { console.error(e && (e.claimCheck || e.stocCheck || e.pageCheck) ? 'エラー: ' + e.message : e); process.exit(1); });

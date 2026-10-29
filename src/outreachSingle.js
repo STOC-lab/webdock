@@ -87,7 +87,13 @@ function buildItems(candidates, storeMap, templates, excluded, { withPage = fals
     const store = storeMap.get(c.stocId);
     if (!store) { excluded['営業管理に未登録'] = (excluded['営業管理に未登録'] || 0) + 1; continue; }
     if (store.status === '失注' || store.status === '契約') { excluded['営業管理で失注・契約'] = (excluded['営業管理で失注・契約'] || 0) + 1; continue; }
-    const baseSentence = (f[FINDING_KEY[c.key] || c.key] || {})['一文'];
+    let baseSentence = (f[FINDING_KEY[c.key] || c.key] || {})['一文'];
+    if (baseSentence && baseSentence.includes('{ver}')) {
+      // PHPの指摘は、表示されていた版(診断CSVの「PHP版」列)を一文に入れる。読めなければ送らない
+      const v = require('./phpVersions').parsePhpVersion('PHP/' + String(c.rec['PHP版'] || '').trim());
+      if (!v) { excluded['PHPの版が不明'] = (excluded['PHPの版が不明'] || 0) + 1; continue; }
+      baseSentence = baseSentence.split('{ver}').join(v.text);
+    }
     if (!baseSentence) throw new Error(`findings-b2b.json の ${FINDING_KEY[c.key] || c.key} に「一文」がありません`);
     const industry = c.rec['業種区分'] || classifyIndustry(c.rec['業種']);
     const domain = domainOfUrl(c.rec['URL']);

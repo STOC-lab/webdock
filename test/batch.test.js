@@ -71,7 +71,7 @@ const mk = (o) => Object.keys({ cert: 1, https_redirect: 1, tls_version: 1, head
     eq(raw.charCodeAt(0), 0xFEFF, 'BOM');
     const t = parseDelimited(raw, ',');
     eq(t.length, 4, 'header + 3 rows');
-    eq(t[0].length, 25, '25 columns');
+    eq(t[0].length, 27, '27 columns(末尾にPHP,PHP版)');
     const byId = Object.fromEntries(t.slice(1).map((r) => [r[0], r]));
     eq(byId['1'][21], 'はい', 'send yes');
     eq(byId['1'][22].includes('甲,"社" ご担当者様'), true, 'body has name');

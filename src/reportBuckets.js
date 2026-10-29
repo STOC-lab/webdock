@@ -17,6 +17,7 @@ const BUCKET_TABLE = {
   tls_version:    { bad: 'partial', warn: 'partial' },
   headers:        { bad: 'partial', warn: 'partial' },
   cookies:        { bad: 'partial', warn: 'partial' },
+  php:            { bad: 'urgent',  warn: 'urgent' },
   cms:            { bad: 'partial', warn: 'partial' },
   ext_scripts:    { bad: 'partial', warn: 'partial' },
   js_libs:        { bad: 'renewal', warn: 'renewal' },

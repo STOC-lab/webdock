@@ -1,12 +1,13 @@
 'use strict';
 
 /**
- * 診断エンジン(10項目)。すべて「外から見えるだけ」の情報で判定する。
+ * 診断エンジン(11項目)。すべて「外から見えるだけ」の情報で判定する。
  * status: 'ok' | 'warn' | 'bad' | 'unknown'
  */
 
 const dns = require('dns').promises;
 const { URL } = require('url');
+const PV = require('./phpVersions');
 
 
 function daysBetween(a, b) {
@@ -306,6 +307,43 @@ function checkCmsExposure(page) {
   };
 }
 
+/* ---- PHPの版(X-Powered-By に出ている場合のみ。外から見えるものだけで判定) ---- */
+
+function checkPhpVersion(page) {
+  const t = { key: 'php', title: 'PHP(サイトを動かす部品)の版' };
+  const h = page.headers || {};
+  const raw = h['x-powered-by'];
+  const raws = Array.isArray(raw) ? raw.join(', ') : raw;
+  const v = PV.parsePhpVersion(raws);
+  if (!v) return { ...t, status: 'unknown', summary: 'PHPの版は外部から確認できませんでした', why: '', fix: '', evidence: '' };
+  const evidence = `X-Powered-By: ${raws}`;
+  const c = PV.classifyPhp(v);
+  if (c.kind === 'eol') {
+    return {
+      ...t, status: 'bad',
+      summary: `表示されているPHPの版(${v.text})は公式サポートが終了した版です`,
+      why: '10月に公表された深刻な脆弱性(悪用が確認されています)について、この版には公式の修正が提供されていません。提供元が独自に修正を適用している場合もあります。',
+      fix: 'サーバーの提供元・制作会社に、PHPのサポート中の版(8.3以降など)への更新を依頼してください。',
+      evidence,
+    };
+  }
+  if (c.kind === 'unpatched') {
+    return {
+      ...t, status: 'bad',
+      summary: `表示されているPHPの版(${v.text})は、${PV.DISCLOSED_JA}の修正が入る前の版です`,
+      why: '10月に公表された深刻な脆弱性は実際に悪用が確認されています。提供元が修正を取り込んでいて、表示される版は古いままの場合もあります。',
+      fix: `サーバーの提供元・制作会社に、PHP ${c.fixed}以降への更新、または修正の適用状況の確認を依頼してください。`,
+      evidence,
+    };
+  }
+  return {
+    ...t, status: 'ok',
+    summary: `表示されているPHPの版(${v.text})は修正済みの版です`,
+    why: '', fix: '',
+    evidence: `${evidence}(版の表示そのものは「CMSのバージョン露出」の項目で扱います)`,
+  };
+}
+
 // 既知の脆弱性が修正された最初の版(これ未満を「古い」と判定)と、why に出す CVE と一言説明
 const LIB_SAFE = {
   'jQuery': [3, 5, 0],      // CVE-2020-11022/11023 (XSS)
@@ -516,18 +554,19 @@ async function runChecks(page) {
     checkCookies(page),
     checkMixedContent(page),
     checkCmsExposure(page),
+    checkPhpVersion(page),
     checkExternalScripts(page),
   ];
   const jsLibs = await checkOldJsLibs(page);
   const mail = await checkMailSpoofing(page);
-  sync.splice(7, 0, jsLibs); // 表示順を従来どおりに
+  sync.splice(8, 0, jsLibs); // 表示順を従来どおりに
   const results = [...sync, mail];
 
   // 解決方法の区分: site=ホームページのリニューアルで解消 / dns=ドメイン(メール)設定が別途必要
   const REMEDY = {
     cert: 'site', https_redirect: 'site', tls_version: 'site',
     headers: 'site', cookies: 'site', mixed: 'site',
-    cms: 'site', js_libs: 'site', ext_scripts: 'site',
+    cms: 'site', php: 'site', js_libs: 'site', ext_scripts: 'site',
     mail: 'dns',
   };
   results.forEach((r) => { r.remedy = REMEDY[r.key] || 'site'; });
@@ -537,4 +576,4 @@ async function runChecks(page) {
   return { results, counts, score, grade };
 }
 
-module.exports = { runChecks };
+module.exports = { runChecks, checkPhpVersion, scoreOf };

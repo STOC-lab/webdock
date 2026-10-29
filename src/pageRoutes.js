@@ -22,7 +22,7 @@ const VIEWS = path.join(__dirname, '..', 'views', 'page');
 const LIM = { name: 100, email: 255, phone: 20, message: 500 };
 const EMAIL_RE = /^[^\s@<>"',;:()\[\]\\]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
 // 指摘(finding_key)に対応する診断項目。ページの「その他の確認項目」から主な指摘を除くのに使う
-const FINDING_TO_CHECK = { no_https: 'https_redirect', mixed: 'mixed', https_redirect: 'https_redirect', cert_expired: 'cert', cert_soon: 'cert', js_libs: 'js_libs', cms: 'cms', headers: 'headers', tls_version: 'tls_version' };
+const FINDING_TO_CHECK = { php_eol: 'php', php_unpatched: 'php', no_https: 'https_redirect', mixed: 'mixed', https_redirect: 'https_redirect', cert_expired: 'cert', cert_soon: 'cert', js_libs: 'js_libs', cms: 'cms', headers: 'headers', tls_version: 'tls_version' };
 const STATUS_ORDER = { bad: 0, warn: 1 };
 
 /** 軽いレート制限(IP単位・メモリ上)。windowMs の間に max 回まで */
