@@ -26,6 +26,7 @@
     "test:stocsent": "node test/stocsent.test.js",
     "wh:sitehost": "node cli/warehouse-sitehost.js",
     "test:freshness": "node test/freshness.test.js",
+    "test:plain": "node test/plain.test.js",
     "test:phone": "node test/phone.test.js",
     "phone-list": "node cli/phone-list.js",
     "fresh-debug": "node cli/fresh-debug.js",

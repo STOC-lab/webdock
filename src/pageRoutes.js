@@ -92,7 +92,7 @@ function registerPages(app, deps = {}) {
   const sender = deps.sender || senderInfo();
   const notify = deps.notify || (async () => {});
   const getIp = deps.getIp || ((req) => String(req.ip || (req.socket && req.socket.remoteAddress) || '').replace(/^::ffff:/i, ''));
-  const base = { SERVICE_NAME: deps.serviceName || env.SERVICE_NAME || 'WEBドック', OPERATOR_NAME: deps.operatorName || env.OPERATOR_NAME || '株式会社エストック', sender };
+  const base = { plainFor: require('./plainLanguage').plainFor, SERVICE_NAME: deps.serviceName || env.SERVICE_NAME || 'WEBドック', OPERATOR_NAME: deps.operatorName || env.OPERATOR_NAME || '株式会社エストック', sender };
   const lim = deps.limits || {};
   const getLimit = limiter(lim.getWindowMs || 10 * 60 * 1000, lim.getMax || 90);
   const postLimit = limiter(lim.postWindowMs || 60 * 60 * 1000, lim.postMax || 20);

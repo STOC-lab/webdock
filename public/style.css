@@ -236,3 +236,12 @@ code{background:#eef2f8;padding:2px 6px;border-radius:5px;font-size:13px}
 .adm-table th{background:#f3f6fb;white-space:nowrap}
 .adm-scroll{overflow-x:auto}
 .adm-mini.on{background:#2a3f63;color:#fff;border-color:#2a3f63}
+
+/* ---- やさしい説明(たとえ話・このままにすると) ---- */
+.item-analogy,.item-scenario{display:block;margin:8px 0;padding:10px 12px;border-radius:8px;font-size:15px;line-height:1.8}
+.item-analogy{background:#f3f6fb;font-style:italic}
+.item-scenario{background:#fff8ec}
+.item-analogy strong,.item-scenario strong{display:block;font-size:13px;font-weight:800;font-style:normal;margin-bottom:2px;color:#15243b}
+.item-analogy span,.item-scenario span{display:block}
+.pg-list .item-analogy,.pg-list .item-scenario{font-size:14px}
+@media print{.item-analogy,.item-scenario{break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact}}

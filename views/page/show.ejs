@@ -13,6 +13,11 @@
   <h2 class="pg-h2">今回、最初にお伝えしたい点</h2>
   <p class="pg-sentence"><%= sentence %></p>
   <% if (main) { %><p class="pg-sub"><strong><%= main.title %></strong><br><%= main.summary %></p><% } %>
+  <% var mainPlain = (main && typeof plainFor === 'function') ? plainFor(main) : null; %>
+  <% if (mainPlain) { %>
+  <p class="item-analogy"><strong>たとえるなら</strong><span><%= mainPlain.analogy %></span></p>
+  <% if (variant === 'full') { %><p class="item-scenario"><strong>このままにしておくと</strong><span><%= mainPlain.scenario %></span></p><% } %>
+  <% } %>
   <p class="pg-note">被害を示すものではありません。制作会社様・保守ご担当者様へのご確認をおすすめします。</p>
 </section>
 <% } %>
@@ -23,7 +28,11 @@
   <% if (others.length) { %>
   <ul class="pg-list">
     <% others.forEach(function (it) { %>
-    <li><span class="pg-tag">確認をおすすめ</span> <strong><%= it.title %></strong><% if (variant === 'full') { %><br><span class="pg-sub"><%= it.summary %></span><% } %></li>
+    <li><span class="pg-tag">確認をおすすめ</span> <strong><%= it.title %></strong><% if (variant === 'full') { %><br><span class="pg-sub"><%= it.summary %></span>
+      <% var op = (typeof plainFor === 'function') ? plainFor(it) : null; if (op) { %>
+      <span class="item-analogy"><strong>たとえるなら</strong><span><%= op.analogy %></span></span>
+      <span class="item-scenario"><strong>このままにしておくと</strong><span><%= op.scenario %></span></span>
+      <% } %><% } %></li>
     <% }) %>
   </ul>
   <% } else { %>

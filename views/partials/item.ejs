@@ -1,4 +1,5 @@
-<% const labels = { ok:'異常なし', warn:'要注意', bad:'要精密検査', unknown:'判定不可' };
+<% const plain = (typeof plainFor === 'function') ? plainFor(item) : null;
+   const labels = { ok:'異常なし', warn:'要注意', bad:'要精密検査', unknown:'判定不可' };
    const judge = { ok:'A', warn:'C', bad:'D', unknown:'—' };
    const actionable = (item.status === 'bad' || item.status === 'warn');
    const remedyLabel = { site: '🔵 サイトのリニューアルで解消できます', dns: '🟠 メール(ドメイン)の設定が別途必要です' }; %>
@@ -12,7 +13,10 @@
   <% if (actionable && item.remedy && remedyLabel[item.remedy]) { %>
     <p class="item-remedy remedy-<%= item.remedy %>"><%= remedyLabel[item.remedy] %></p>
   <% } %>
-  <% if (item.why) { %><p class="item-why"><strong>このままだと:</strong> <%= item.why %></p><% } %>
+  <% if (plain) { %>
+    <p class="item-analogy"><strong>たとえるなら</strong><span><%= plain.analogy %></span></p>
+    <p class="item-scenario"><strong>このままにしておくと</strong><span><%= plain.scenario %></span></p>
+  <% } else if (item.why) { %><p class="item-why"><strong>このままだと:</strong> <%= item.why %></p><% } %>
   <% if (item.fix) { %><p class="item-fix"><strong>直し方:</strong> <%= item.fix %></p><% } %>
   <% if (item.evidence) { %><p class="item-ev">確認した箇所: <%= item.evidence %></p><% } %>
 </div>

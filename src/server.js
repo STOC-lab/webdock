@@ -31,6 +31,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.set('trust proxy', 'loopback'); // 同じ機械のnginxだけを信用(外から直接つないだ相手のX-Forwarded-Forは無視)
 app.locals.SERVICE_NAME = SERVICE_NAME;
+app.locals.plainFor = require('./plainLanguage').plainFor;
 app.locals.OPERATOR_NAME = OPERATOR_NAME;
 app.locals.TURNSTILE_SITEKEY = process.env.TURNSTILE_SITEKEY || '';
 

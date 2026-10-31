@@ -34,6 +34,7 @@
   .item dl { margin:0; display:grid; grid-template-columns:8.5em 1fr; gap:2px 8px; }
   .item dt { font-weight:700; color:var(--sub); font-size:12.5px; }
   .item dd { margin:0; word-break:break-all; }
+  .item dd.analogy { background:#f3f6fb; font-style:italic; padding:2px 6px; border-radius:3px; }
   .oklist { columns:2; margin:4px 0; padding-left:1.2em; overflow-wrap:anywhere; }
   .reqbox { border:1px solid #333; padding:10px 14px; white-space:pre-wrap; word-break:break-all; font-family:inherit; margin:6px 0; overflow-wrap:anywhere; background:#fafafa; break-inside:avoid; page-break-inside:avoid; }
   .print-hint { font-size:12px; color:#a5302b; }
@@ -84,6 +85,7 @@
     <% }) %>
   </div>
   <% if (total === 0) { %><p>今回の点検では、ご確認いただきたい項目は見つかりませんでした。</p><% } else { %>
+  <p class="note">専門用語を使わず、身近なものにたとえて説明しています。</p>
   <p class="note">ご対応は上から順(確認の優先順位が高い順)にご検討ください。「要対応」は優先して、「要確認」は状況をご確認のうえ判断いただく項目です。</p>
   <% } %>
 
@@ -95,7 +97,8 @@
     <h3><span class="tag"><%= statusLabel(item.status) %></span><%= item.title %></h3>
     <dl>
       <dt>確認できたこと</dt><dd><%= item.summary %><% if (item.evidence) { %>(<%= item.evidence %>)<% } %></dd>
-      <% if (item.why) { %><dt>このままだと</dt><dd><%= item.why %></dd><% } %>
+      <% var pl = (typeof plainFor === 'function') ? plainFor(item) : null; %>
+      <% if (pl) { %><dt>たとえるなら</dt><dd class="analogy"><%= pl.analogy %></dd><dt>このままにしておくと</dt><dd><%= pl.scenario %></dd><% } else if (item.why) { %><dt>このままだと</dt><dd><%= item.why %></dd><% } %>
       <dt>対応の目安</dt><dd><%= BUCKETS[b].guide %></dd>
     </dl>
   </div>
