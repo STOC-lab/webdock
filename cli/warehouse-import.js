@@ -134,7 +134,39 @@ ON DUPLICATE KEY UPDATE last_seen_at = NOW(),
   ${['website_url', 'phone', 'category', 'category_main', 'postal', 'address_raw', 'address', 'prefecture', 'place_id', 'gmap_url', 'gbp_registered'].map(fillIfEmpty).join(',\n  ')}`;
 }
 
-async function upsertBatch(pool, recs, stats, hasBs, hasSiteHost = false) {
+const sameNum = (a, b) => (a === null || a === undefined ? null : Number(a)) === (b === null || b === undefined ? null : Number(b));
+const sameRating = (a, b) => (a === null || a === undefined ? null : Number(a).toFixed(1)) === (b === null || b === undefined ? null : Number(b).toFixed(1));
+
+/**
+ * 口コミ数・写真数・評価の履歴に足す行を決める(純粋関数)。
+ * existing: 取り込み前の倉庫の行 [{id,cid,fallback_key,rating,review_count,photo_count,has_hist}]
+ * 戻り: { rows:[[shop_id,review_count,photo_count,rating]] (既存店で値が変わった/履歴がまだない), newRecs:[rec] (新規店。あとでIDを引いて基準の1行を足す) }
+ * 新しい値は upsert と同じく「取り込みの値があればそれ、なければ今の値」(COALESCE)。
+ */
+function planHistory(recs, existing) {
+  const byCid = new Map(), byFb = new Map();
+  for (const e of existing) { if (e.cid) byCid.set(String(e.cid), e); if (e.fallback_key) byFb.set(String(e.fallback_key), e); }
+  const changed = new Map(); // shop_id → row(同じ店が1バッチに2回あれば後の値)
+  const newRecs = [];
+  for (const r of recs) {
+    const e = (r.cid && byCid.get(String(r.cid))) || (!r.cid && r.fallback_key && byFb.get(String(r.fallback_key))) || null;
+    if (!e) { newRecs.push(r); continue; }
+    const nv = { review_count: r.review_count ?? e.review_count, photo_count: r.photo_count ?? e.photo_count, rating: r.rating ?? e.rating };
+    if (nv.review_count == null && nv.photo_count == null && nv.rating == null) continue;
+    const diff = !sameNum(nv.review_count, e.review_count) || !sameNum(nv.photo_count, e.photo_count) || !sameRating(nv.rating, e.rating);
+    if (diff || !Number(e.has_hist)) changed.set(String(e.id), [e.id, nv.review_count ?? null, nv.photo_count ?? null, nv.rating ?? null]);
+  }
+  return { rows: [...changed.values()], newRecs };
+}
+
+async function insertHistory(pool, rows) {
+  for (let i = 0; i < rows.length; i += 1000) {
+    const part = rows.slice(i, i + 1000);
+    await pool.query(`INSERT INTO stoc_master.shop_metrics_history (shop_id, captured_at, review_count, photo_count, rating) VALUES ${part.map(() => '(?,NOW(),?,?,?)').join(',')}`, part.flat());
+  }
+}
+
+async function upsertBatch(pool, recs, stats, hasBs, hasSiteHost = false, hasHistory = false) {
   const params = [];
   for (const r of recs) {
     for (const c of COLS) params.push(LIMITS[c] ? clip(r[c], LIMITS[c]) : r[c]);
@@ -144,12 +176,44 @@ async function upsertBatch(pool, recs, stats, hasBs, hasSiteHost = false) {
   const cids = [...new Set(recs.filter((r) => r.cid).map((r) => r.cid))];
   const fbs = [...new Set(recs.filter((r) => !r.cid).map((r) => r.fallback_key))];
   let existing = 0;
-  if (cids.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE cid IN (?)', [cids]); existing += Number(x.n); }
-  if (fbs.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE fallback_key IN (?)', [fbs]); existing += Number(x.n); }
+  let existingRows = [];
+  if (hasHistory) {
+    // 履歴を作るため、件数だけでなく既存行の今の値も読む(バッチごとに2回の検索のまま)
+    const cols = 'id, cid, fallback_key, rating, review_count, photo_count, EXISTS(SELECT 1 FROM stoc_master.shop_metrics_history h WHERE h.shop_id = stoc_master.shops.id) AS has_hist';
+    if (cids.length) { const [x] = await pool.query(`SELECT ${cols} FROM stoc_master.shops WHERE cid IN (?)`, [cids]); existingRows.push(...x); }
+    if (fbs.length) { const [x] = await pool.query(`SELECT ${cols} FROM stoc_master.shops WHERE fallback_key IN (?)`, [fbs]); existingRows.push(...x); }
+    existing = existingRows.length;
+  } else {
+    if (cids.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE cid IN (?)', [cids]); existing += Number(x.n); }
+    if (fbs.length) { const [[x]] = await pool.query('SELECT COUNT(*) AS n FROM stoc_master.shops WHERE fallback_key IN (?)', [fbs]); existing += Number(x.n); }
+  }
   await pool.query(upsertSql(recs.length, hasBs, hasSiteHost), params);
   const inserted = cids.length + fbs.length - existing;
   stats.inserted += inserted;
   stats.updated += recs.length - inserted;
+  if (hasHistory) {
+    const plan = planHistory(recs, existingRows);
+    const rows = plan.rows;
+    const fresh = plan.newRecs.filter((r) => r.review_count != null || r.photo_count != null || r.rating != null);
+    if (fresh.length) {
+      // 新規店のIDを引いて基準の1行を足す
+      const ncids = [...new Set(fresh.filter((r) => r.cid).map((r) => r.cid))];
+      const nfbs = [...new Set(fresh.filter((r) => !r.cid).map((r) => r.fallback_key))];
+      const idRows = [];
+      if (ncids.length) { const [x] = await pool.query('SELECT id, cid, fallback_key FROM stoc_master.shops WHERE cid IN (?)', [ncids]); idRows.push(...x); }
+      if (nfbs.length) { const [x] = await pool.query('SELECT id, cid, fallback_key FROM stoc_master.shops WHERE fallback_key IN (?)', [nfbs]); idRows.push(...x); }
+      const cm = new Map(idRows.filter((x) => x.cid).map((x) => [String(x.cid), x.id]));
+      const fm = new Map(idRows.filter((x) => x.fallback_key).map((x) => [String(x.fallback_key), x.id]));
+      const seen = new Map();
+      for (const r of fresh) {
+        const id = r.cid ? cm.get(String(r.cid)) : fm.get(String(r.fallback_key));
+        if (id !== undefined) seen.set(String(id), [id, r.review_count ?? null, r.photo_count ?? null, r.rating ?? null]);
+      }
+      rows.push(...seen.values());
+    }
+    if (rows.length) await insertHistory(pool, rows);
+    stats.history = (stats.history || 0) + rows.length;
+  }
 }
 
 function makePool() {
@@ -267,6 +331,8 @@ async function main() {
   let runId = null;
   const hasSiteHost = pool ? await wh.columnExists(pool, 'shops', 'site_host') : false;
   if (pool && !hasSiteHost) console.error('警告: shops.site_host 列がないため、サイトのホスト名は記録しません(sql/warehouse_migrate_005.sql を適用すると記録されます)。');
+  const hasHistory = pool ? await wh.tableExists(pool, 'shop_metrics_history') : false;
+  if (pool && !hasHistory) console.error('警告: shop_metrics_history 表がないため、口コミ数・写真数の履歴は記録しません(sql/warehouse_migrate_008.sql を適用すると記録されます)。');
   const started = new Date();
   if (pool) {
     const [r] = await pool.query('INSERT INTO stoc_master.import_runs (started_at, root_path) VALUES (NOW(), ?)', [root.slice(0, 500)]);
@@ -279,7 +345,7 @@ async function main() {
       try {
         await processFile(file, root, o.batch, async (recs, hasBs) => {
           for (const r of recs) if (r.cid) withCid.n++;
-          if (pool) await upsertBatch(pool, recs, st, hasBs, hasSiteHost);
+          if (pool) await upsertBatch(pool, recs, st, hasBs, hasSiteHost, hasHistory);
         }, st);
       } catch (e) {
         errors.push(`${path.relative(root, file)}: ${e.message}`);
@@ -308,4 +374,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { parseArgs, walk, globToRegExp, processFile, upsertSql, linkStep, carryFormsStep, makePool };
+module.exports = { upsertBatch, planHistory, parseArgs, walk, globToRegExp, processFile, upsertSql, linkStep, carryFormsStep, makePool };

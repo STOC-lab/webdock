@@ -23,6 +23,7 @@ const multer = require('multer');
 const AdmZip = require('adm-zip');
 const { PREFECTURES } = require('./regions');
 const { createJobRunner } = require('./adminJobs');
+const replaceCand = require('./replaceCandidates');
 
 const BASE = '/admin/warehouse';
 const COOKIE = 'wh_admin';
@@ -304,6 +305,30 @@ function buildStocSentScanArgs(body, { exportDir, now }) {
   return { args, exportFile, singleDir, withPage, preset: 'stocsent', estimateHours: Math.max(1, Math.round(limit / 2000)) };
 }
 
+/**
+ * 「WEB入れ替え候補」の点数の取得: cli/score-scan.js に渡す引数にする。
+ * 倉庫の記録(wd_score等)を更新するだけで、CSVは作らない。画面からは --loop なしの1回実行。
+ */
+function buildScoreScanArgs(body) {
+  const prefs = toList(body.pref).filter((p, i, a) => a.indexOf(p) === i);
+  if (!prefs.length) return { error: '都道府県を1つ以上選んでください。' };
+  if (prefs.some((p) => !PREFECTURES.includes(p))) return { error: '都道府県の指定が正しくありません。' };
+  const args = ['cli/score-scan.js', '--prefecture', prefs.join(','), '--concurrency', '6'];
+  let rescan = 30;
+  if (body.rescan_days !== undefined && String(body.rescan_days).trim() !== '') {
+    rescan = Number(String(body.rescan_days).trim());
+    if (!Number.isInteger(rescan) || rescan < 1 || rescan > 365) return { error: '再調査までの日数は1以上365以下の整数で入力してください。' };
+  }
+  args.push('--rescan-days', String(rescan));
+  let limit = 0;
+  if (body.scan_limit !== undefined && String(body.scan_limit).trim() !== '') {
+    limit = Number(String(body.scan_limit).trim());
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000000) return { error: '上限件数は1以上の整数で入力してください。' };
+    args.push('--limit', String(limit));
+  }
+  return { args, prefs, rescan, limit };
+}
+
 // ---- 倉庫の件数(読み取り専用) ----
 function createDefaultQueryStats() {
   let pool = null;
@@ -358,6 +383,15 @@ function registerAdminWarehouse(app, deps = {}) {
     return require('./pages').createPageStore(pagePool).listRecent(q);
   });
   const now = deps.now || (() => new Date());
+  let replacePool = null;
+  const replaceStore = deps.replaceStore || (() => {
+    let store = null;
+    const get = () => {
+      if (!store) { if (!replacePool) replacePool = require('../cli/warehouse-import').makePool(); store = replaceCand.createStore(replacePool); }
+      return store;
+    };
+    return { search: (...a) => get().search(...a), each: (...a) => get().each(...a), mark: (...a) => get().mark(...a), caps: () => get().caps() };
+  })();
 
   // --- 署名つきセッション(有効期限を署名の中に入れる) ---
   const sign = (s) => crypto.createHmac('sha256', key).update(s).digest('hex');
@@ -682,6 +716,65 @@ function registerAdminWarehouse(app, deps = {}) {
     res.redirect(303, `${BASE}/jobs/${r.id}`);
   }));
 
+  // ===== WEB入れ替え候補(点数 × ブログ/Googleマップの更新) =====
+  const replacePage = async (req, res, extra = {}, status = 200) => {
+    const parsed = replaceCand.parseQuery(extra.query !== undefined ? extra.query : req.query);
+    const opts = parsed.opts || replaceCand.parseQuery({}).opts;
+    let result = null, error = parsed.error || extra.error || null;
+    if (!parsed.error && opts.submitted && !extra.noSearch) {
+      try { result = await replaceStore.search(opts, opts.page); } catch (e) {
+        console.error('[admin] replace search error:', e && e.message);
+        error = '検索できませんでした。sql/warehouse_migrate_008.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。';
+      }
+    }
+    const noCols = !!(result && result.caps && !result.caps.hasScore);
+    await page(req, res, 'replace', {
+      nav: 'replace', prefectures: PREFECTURES, opts, result, noCols, pageSize: replaceCand.PAGE_SIZE,
+      qs: (o, e) => replaceCand.toQueryString(o, e), ser: (o) => replaceCand.serialize(o),
+      scanForm: extra.scanForm || {}, runningId: extra.runningId, ...(error ? { error } : {}),
+    }, status);
+  };
+  router.get('/replace', wrap((req, res) => replacePage(req, res)));
+  router.post('/replace/scan', wrap(async (req, res) => {
+    const b = buildScoreScanArgs(req.body);
+    if (b.error) return replacePage(req, res, { error: b.error, scanForm: req.body, query: {}, noSearch: true }, 400);
+    const r = jobs.start({ title: `点数とブログ更新を調べる(${b.prefs.join('・')})`, args: b.args, meta: {} });
+    if (!r.ok) return replacePage(req, res, { error: r.message, runningId: r.runningId, scanForm: req.body, query: {}, noSearch: true }, 409);
+    res.redirect(303, `${BASE}/jobs/${r.id}`);
+  }));
+  // 一覧CSV(UTF-8・BOM付き)。検索条件はURLに載せたものをそのまま使う
+  router.get('/replace/list.csv', wrap(async (req, res) => {
+    const parsed = replaceCand.parseQuery(req.query);
+    if (parsed.error) return res.status(400).type('text/plain').send(parsed.error);
+    res.set({ 'Content-Type': 'text/csv; charset=UTF-8', 'Content-Disposition': `attachment; filename="replace_candidates_${stamp(now())}.csv"` });
+    res.write(replaceCand.listCsvHeader());
+    try { await replaceStore.each(parsed.opts, async (rows) => { res.write(rows.map(replaceCand.listCsvRow).join('')); }); } catch (e) {
+      console.error('[admin] replace csv error:', e && e.message);
+    }
+    res.end();
+  }));
+  // 営業管理取込用CSV(Shift_JIS・11列)。営業管理に未登録の店だけ。「出力済みにする」を選んだときだけ promoted_at を付ける(POST)
+  router.post('/replace/promote.csv', wrap(async (req, res) => {
+    const parsed = replaceCand.parseQuery(req.body);
+    if (parsed.error) return res.status(400).type('text/plain').send(parsed.error);
+    const { HEADERS, rowToCsv } = require('../cli/warehouse-promote');
+    const wh = require('./warehouse');
+    const mark = ['1', 'on', 'true'].includes(String(Array.isArray(req.body.mark) ? req.body.mark[req.body.mark.length - 1] : req.body.mark || '').toLowerCase());
+    const ids = [];
+    const chunks = [wh.encodeShiftJis(HEADERS.map((h) => h).join(',') + '\r\n')];
+    try {
+      await replaceStore.each(parsed.opts, async (rows) => {
+        chunks.push(wh.encodeShiftJis(rows.map((r) => { ids.push(r.id); return rowToCsv(r); }).join('')));
+      }, { onlyNotInStoc: true });
+      if (mark && ids.length) await replaceStore.mark(ids);
+    } catch (e) {
+      console.error('[admin] replace promote csv error:', e && e.message);
+      return res.status(500).type('text/plain').send('CSVを作れませんでした。');
+    }
+    res.set({ 'Content-Type': 'text/csv; charset=Shift_JIS', 'Content-Disposition': `attachment; filename="replace_promote_${stamp(now())}.csv"` });
+    res.send(Buffer.concat(chunks));
+  }));
+
   // ===== 御社専用ページの一覧(閲覧・申込) =====
   router.get('/pages', wrap(async (req, res) => {
     const filter = ['all', 'viewed', 'human', 'lead', 'optout'].includes(req.query.filter) ? req.query.filter : 'all';
@@ -773,4 +866,4 @@ function registerAdminWarehouse(app, deps = {}) {
   return { enabled: true, uploadDir, exportDir, jobs };
 }
 
-module.exports = { registerAdminWarehouse, clientIp, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+module.exports = { registerAdminWarehouse, clientIp, buildScoreScanArgs, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };

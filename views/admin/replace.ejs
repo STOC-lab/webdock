@@ -1,0 +1,95 @@
+<%- include('_head') %>
+<%
+  var o = opts;
+  var sf = scanForm || {};
+  var scanSel = sf.pref === undefined ? ['兵庫県'] : (Array.isArray(sf.pref) ? sf.pref : [sf.pref]);
+  function fmtDate(d) { if (!d) return ''; var x = new Date(d); if (isNaN(x)) return ''; return x.getFullYear() + '-' + ('0' + (x.getMonth() + 1)).slice(-2) + '-' + ('0' + x.getDate()).slice(-2); }
+%>
+<section class="adm-card">
+  <h1>WEB入れ替え候補</h1>
+  <p class="adm-help">ホームページの点数が中くらい(既定40〜75点)で、ブログ・お知らせやGoogleマップをよく更新している小さなお店を探します。サイトを作り替える提案の見込み先です。</p>
+  <% if (noCols) { %><div class="adm-warn">倉庫にこの機能用の列がありません。サーバーで <code>sql/warehouse_migrate_008.sql</code> を適用してください。</div><% } %>
+
+  <h3>1. 点数とブログ更新を調べる(先に1回実行)</h3>
+  <form method="post" action="<%= BASE %>/replace/scan">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <label>都道府県
+      <select class="adm-input adm-short" name="pref">
+        <% prefectures.forEach(function (p) { %><option value="<%= p %>" <%= scanSel.indexOf(p) >= 0 ? 'selected' : '' %>><%= p %></option><% }) %>
+      </select>
+    </label>
+    <label>再調査までの日数 <input class="adm-input adm-short" type="number" name="rescan_days" min="1" max="365" value="<%= sf.rescan_days || 30 %>"></label>
+    <label>上限件数(空なら全部) <input class="adm-input adm-short" type="number" name="scan_limit" min="1" value="<%= sf.scan_limit || '' %>"></label>
+    <p class="adm-warn">兵庫県全体で数時間かかります。夜に回すのがおすすめです。</p>
+    <button class="adm-btn" type="submit">調べ始める</button>
+  </form>
+
+  <h3>2. 候補を探す</h3>
+  <form method="get" action="<%= BASE %>/replace">
+    <input type="hidden" name="q" value="1">
+    <label>都道府県
+      <select class="adm-input adm-short" name="pref">
+        <% prefectures.forEach(function (p) { %><option value="<%= p %>" <%= o.pref.indexOf(p) >= 0 ? 'selected' : '' %>><%= p %></option><% }) %>
+      </select>
+    </label>
+    <p>点数 <input class="adm-input adm-short" type="number" name="min_score" min="0" max="100" value="<%= o.minScore %>"> 〜 <input class="adm-input adm-short" type="number" name="max_score" min="0" max="100" value="<%= o.maxScore %>"> 点</p>
+    <label class="adm-check"><input type="checkbox" name="use_blog" value="1" <%= o.useBlog ? 'checked' : '' %>> ブログ・お知らせを見る</label>
+    <div class="adm-sub">直近90日の投稿が <input class="adm-input adm-short" type="number" name="blog_posts" min="1" value="<%= o.blogPosts %>"> 件以上、または 最新の投稿が <input class="adm-input adm-short" type="number" name="blog_days" min="1" value="<%= o.blogDays %>"> 日以内</div>
+    <label class="adm-check"><input type="checkbox" name="use_gmap" value="1" <%= o.useGmap ? 'checked' : '' %>> Googleマップを見る</label>
+    <div class="adm-sub">写真が <input class="adm-input adm-short" type="number" name="photo" min="0" value="<%= o.photo %>"> 枚以上、または 口コミが <input class="adm-input adm-short" type="number" name="review" min="0" value="<%= o.review %>"> 件以上、または 30日で口コミが <input class="adm-input adm-short" type="number" name="inc" min="1" value="<%= o.inc %>"> 件以上増えた(履歴が28日以上たまっているとき)</div>
+    <label class="adm-radio"><input type="radio" name="mode" value="or" <%= o.mode === 'or' ? 'checked' : '' %>> どちらか一方が当てはまれば(OR)</label>
+    <label class="adm-radio"><input type="radio" name="mode" value="and" <%= o.mode === 'and' ? 'checked' : '' %>> 両方当てはまる(AND)</label>
+    <label class="adm-check"><input type="checkbox" name="exclude_chains" value="1" <%= o.excludeChains ? 'checked' : '' %>> チェーン・大規模を除く</label>
+    <label class="adm-check"><input type="checkbox" name="not_in_stoc" value="1" <%= o.notInStoc ? 'checked' : '' %>> 営業管理にまだ登録されていない店だけ</label>
+    <button class="adm-btn" type="submit">探す</button>
+  </form>
+</section>
+
+<% if (result) { %>
+<section class="adm-card">
+  <h2>該当 <%= result.total.toLocaleString('ja-JP') %> 件</h2>
+  <% if (!result.caps.hasHistory) { %><p class="adm-help">口コミ数の履歴の表がないため、口コミの増え方は使っていません(migrate_008 を適用し、<code>node cli/metrics-baseline.js</code> を実行すると使えます)。</p><% } %>
+  <% if (result.total > 0) { %>
+  <p>
+    <a class="adm-btn adm-btn2" href="<%= BASE %>/replace/list.csv?<%= qs(o) %>">一覧CSVをダウンロード(UTF-8)</a>
+  </p>
+  <form method="post" action="<%= BASE %>/replace/promote.csv">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <% var s = ser(o); Object.keys(s).forEach(function (k) { [].concat(s[k]).forEach(function (v) { %><input type="hidden" name="<%= k %>" value="<%= v %>">
+    <% }) }) %>
+    <button class="adm-btn adm-btn2" type="submit">営業管理取込用CSVをダウンロード(Shift_JIS・未登録の店だけ)</button>
+    <label class="adm-check"><input type="checkbox" name="mark" value="1"> 出力済みとして記録する(倉庫の「取り出し」で再び出ないようにする)</label>
+  </form>
+  <div class="adm-scroll">
+  <table class="adm-table">
+    <thead><tr><th>店名</th><th>業種</th><th>市区町村/住所</th><th>点数(判定)</th><th>ブログ最新日 / 90日件数 / 取得元</th><th>写真数</th><th>口コミ数</th><th>口コミ増加(30日)</th><th>URL</th><th>営業管理</th></tr></thead>
+    <tbody>
+    <% result.rows.forEach(function (r) { %>
+      <tr>
+        <td><%= r.name %></td>
+        <td><%= r.category_main || '' %></td>
+        <td><%= r.address || r.address_raw || '' %></td>
+        <td><%= r.wd_score %>(<%= r.wd_grade || '' %>)</td>
+        <td><%= fmtDate(r.blog_latest_at) %> / <%= r.blog_posts_90d === null || r.blog_posts_90d === undefined ? '-' : r.blog_posts_90d %> / <%= r.blog_source || '-' %></td>
+        <td><%= r.photo_count === null || r.photo_count === undefined ? '' : r.photo_count %></td>
+        <td><%= r.review_count === null || r.review_count === undefined ? '' : r.review_count %></td>
+        <td><%= r.review_inc === null || r.review_inc === undefined ? '-' : r.review_inc %></td>
+        <td><% if (r.website_url && /^https?:\/\//i.test(r.website_url)) { %><a href="<%= r.website_url %>" target="_blank" rel="noopener noreferrer nofollow">開く</a><% } %></td>
+        <td><%= r.stoc_store_id ? '登録あり' : '未登録' %></td>
+      </tr>
+    <% }) %>
+    </tbody>
+  </table>
+  </div>
+  <% var pages = Math.ceil(result.total / pageSize); %>
+  <% if (pages > 1) { %>
+  <p>
+    <% if (o.page > 1) { %><a class="adm-mini" href="<%= BASE %>/replace?<%= qs(o, { page: o.page - 1 }) %>">前へ</a><% } %>
+    <%= o.page %> / <%= pages %> ページ
+    <% if (o.page < pages) { %><a class="adm-mini" href="<%= BASE %>/replace?<%= qs(o, { page: o.page + 1 }) %>">次へ</a><% } %>
+  </p>
+  <% } %>
+  <% } %>
+</section>
+<% } %>
+<%- include('_foot') %>

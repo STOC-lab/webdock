@@ -235,7 +235,14 @@ async function columnExists(pool, table, column) {
   } catch { return false; }
 }
 
+async function tableExists(pool, table) {
+  try {
+    const [r] = await pool.query('SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?', ['stoc_master', table]);
+    return Number(r[0].n) > 0;
+  } catch { return false; }
+}
+
 module.exports = {
-  columnExists, PREFECTURES, decodeBuffer, detectDelimiter, parseDelimited, mapHeader, extractCid, normalizeCid,
+  tableExists, columnExists, PREFECTURES, decodeBuffer, detectDelimiter, parseDelimited, mapHeader, extractCid, normalizeCid,
   normalizeAddress, prefectureOf, normalizePhone, toRecord, categoryMain, cleanLatLng, fallbackKey, encodeShiftJis,
 };

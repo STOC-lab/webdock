@@ -32,7 +32,11 @@
     "fresh-debug": "node cli/fresh-debug.js",
     "test:php": "node test/php.test.js",
     "test:gbp": "node test/gbp.test.js",
-    "gbp-debug": "node cli/gbp-debug.js"
+    "gbp-debug": "node cli/gbp-debug.js",
+    "test:blog": "node test/blog.test.js",
+    "test:replace": "node test/replace.test.js",
+    "score-scan": "node cli/score-scan.js",
+    "metrics-baseline": "node cli/metrics-baseline.js"
   },
   "keywords": [],
   "author": "",

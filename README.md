@@ -582,6 +582,37 @@ npm run wh:import -- --root /var/data/gmp/all --pattern "gmp_*.csv"
 **社内判断の上書き**: `rules/問い合わせ営業.overrides.json` に、.listt を作り直しても消えない判断を書きます(現在: 屋号の「店」は除外しない/電話番号が無い店は除外)。`remove` で条件を外し、`add` で足し、`excludeEmpty` で「空欄なら除外」を指定します。
 
 
+### WEB入れ替え候補(点数 × ブログ/Googleマップの更新 / 管理画面「WEB入れ替え候補」)
+
+ホームページの点数(WEBドック)が中くらい(既定40〜75点)で、ブログ・お知らせ、またはGoogleマップ(GBP)をよく更新している小さなお店を、県単位で探します(サイト作り替えの提案先)。受け身の確認だけです(公開ページへのGET。1サイトあたりトップ+追加最大3回+robots.txt。トップ以外は robots.txt を守る)。
+
+**VPSでの手順(初回)**
+
+```
+cd /var/www/webdock && git pull
+mysql < sql/warehouse_migrate_008.sql      # 点数・ブログの列と、口コミ/写真数の履歴表 shop_metrics_history(何度実行しても安全)
+node cli/metrics-baseline.js               # 今ある口コミ数・写真数・評価を履歴の最初の1行として記録(1回だけ。再実行しても履歴のない店にだけ足す)
+pm2 start cli/score-scan.js --name score-hyogo -- --prefecture 兵庫県 --loop
+pm2 logs score-hyogo                       # [進んだ件数/対象] 成功 / 40〜75点 / ブログ活発 / エラー
+```
+
+- 以後の `node cli/warehouse-import.js`(取り込み)は、口コミ数・写真数・評価が変わった店(と新規店)に履歴を1行ずつ足します。**口コミの増え方(30日で+3件以上)は、履歴が28日以上たまってから**判定に使えます(それまでは写真数・口コミ数・ブログだけ)。表がなければ警告を出して履歴は飛ばします。
+- `score-scan` の対象: URLあり・閉業でない・大規模(size_class='large')でない・チェーン(同じホスト名を3店舗以上が使う)でない・除外ドメインでない店で、`wd_scanned_at` が空か `--rescan-days`(既定30)日より前。エラーの店も `wd_scanned_at` だけ入れる(点数は空)ので、その間は再試行しません。1サイト60秒まで、`--concurrency`(既定6)で並列。`--limit N` で件数を絞れます。試すだけなら `--dry-run --out /tmp/x.csv`(DBへは書かず、CSVに結果を出す)。
+- ブログ更新の取得元(`blog_source`): `rss` / `atom` / `sitemap` / `wp-json`。取れなかった店でもトップページに ameblo / note / はてなブログ / livedoor などへのリンクがあれば `external:<名前>` と記録します(外部は取得しないので件数は数えません)。サイトマップは記事らしいパス(/blog /news /topics /info /column /post /archives /西暦4桁/)だけ数えます。
+- 管理画面の「WEB入れ替え候補」: 「調べ始める」で上の `score-scan` を1回実行(兵庫県全体で数時間かかるので夜に。ジョブは同時に1つだけ)、「探す」で条件に合う店を表示(100件ずつ)、一覧CSV(UTF-8・BOM付き)と営業管理取込用CSV(Shift_JIS・11列・営業管理に未登録の店だけ。「出力済みとして記録する」は既定OFF)をダウンロードできます。既定の条件: 点数40〜75、ブログ(直近90日で3件以上 または 最新が60日以内)**または**GMAP(写真100枚以上 または 口コミ30件以上 または 30日で口コミ+3)、チェーン・大規模を除く。
+- テスト: `npm run test:blog` / `npm run test:replace`(DB・ネット不要)
+
+**営業管理(STOC)への写し**
+
+倉庫で `stoc_store_id` が付いた店は、点数とブログ更新を営業管理(`STOC_DB_NAME`、既定 `stoc_sales`)の `stores` にも書きます。営業管理側の `database/migrations/add_webdock_metrics_to_stores.sql` を先に適用してください(列: wd_score / wd_grade / wd_scanned_at / blog_latest_at / blog_posts_90d / blog_source)。列がなければ警告を1回出して写しだけ飛ばします。権限がないときは日本語のエラーで止まるので、root で次を実行します(ユーザー名・ホストは `WH_DB_USER` に合わせる)。
+
+```
+GRANT UPDATE (wd_score, wd_grade, wd_scanned_at, blog_latest_at, blog_posts_90d, blog_source) ON stoc_sales.stores TO 'stoc_wh'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+あとから営業管理に紐付いた店(「営業管理とつなぐ」のあと)の分は、記録済みの値を500件ずつ写せます: `node cli/score-scan.js --sync-stoc-only [--prefecture 兵庫県]`
+
 ### 電話営業リスト(点数 × ブログ・お知らせの更新)
 
 倉庫のURLあり店舗を診断し、点数が範囲内(既定50〜70点)のサイトだけ「ブログ/お知らせ/新着情報/NEWS」の最終更新日を調べて、直近N日(既定7日)以内に更新があった会社を電話営業用CSV(UTF-8・BOM付き)に出します。電話番号が空の店は除き、同じ電話番号は最初の1件だけ残します。クレーム登録店・除外ドメイン・チェーンは既存の診断と同じく外します。
