@@ -35,6 +35,7 @@
     "gbp-debug": "node cli/gbp-debug.js",
     "test:blog": "node test/blog.test.js",
     "test:replace": "node test/replace.test.js",
+    "test:scoresync": "node test/scoresync.test.js",
     "score-scan": "node cli/score-scan.js",
     "metrics-baseline": "node cli/metrics-baseline.js"
   },

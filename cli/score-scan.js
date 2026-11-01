@@ -184,6 +184,25 @@ async function syncStocOnly(pool, { prefecture = [], db, log = console.error, sh
   return st;
 }
 
+/**
+ * 倉庫に点数があり、営業管理側がまだ古い(または空の)店だけを、1本の UPDATE ... JOIN で写す。
+ * 常駐(--loop)中に「営業管理とつなぐ」で紐付いた店を自動で拾うために使う。戻り: 更新した件数(affectedRows)
+ * db は stocDbName() で検証済みの値を渡すこと(SQL に直接埋め込むため)。
+ */
+async function syncStocPending(pool, { prefecture = [], db, log = console.error }) {
+  if (!/^[A-Za-z0-9_]+$/.test(String(db))) throw new Error('営業管理のDB名が不正です: ' + db);
+  const params = [];
+  let sql = `UPDATE ${db}.stores st JOIN stoc_master.shops s ON s.stoc_store_id = st.id`
+    + ' SET st.wd_score = s.wd_score, st.wd_grade = s.wd_grade, st.wd_scanned_at = s.wd_scanned_at,'
+    + ' st.blog_latest_at = s.blog_latest_at, st.blog_posts_90d = s.blog_posts_90d, st.blog_source = s.blog_source'
+    + ' WHERE s.wd_scanned_at IS NOT NULL AND (st.wd_scanned_at IS NULL OR st.wd_scanned_at <> s.wd_scanned_at)';
+  if (prefecture.length) { sql += ' AND s.prefecture IN (?)'; params.push(prefecture); }
+  const [res] = await pool.query(sql, params);
+  const n = (res && res.affectedRows) || 0;
+  if (n > 0) log(`[営業管理へ自動写し] ${n}件`);
+  return n;
+}
+
 /* ---------- 処理本体 ---------- */
 
 /**
@@ -274,9 +293,11 @@ async function main() {
 
     // 営業管理への写し(列がなければ1回だけ警告してスキップ。権限がなければここで止める)
     let syncStoc = null;
+    let stocReady = false;
     if (!o.dryRun) {
       const ready = await checkStocReady(pool, db);
       if (ready.ok) {
+        stocReady = true;
         syncStoc = async (row, res) => { const u = stocUpdate(db, row.stoc_store_id, writeValues(res)); await pool.query(u.sql, u.params); };
       } else if (ready.reason === 'nogrant') {
         console.error(ready.message); process.exitCode = 1; return;
@@ -319,13 +340,23 @@ async function main() {
       for (const k of ['done', 'ok', 'error']) total[k] += round[k];
       return round;
     };
+    // 常駐中の自動写し(失敗してもプロセスは落とさない)
+    const autoSync = async () => {
+      if (!stocReady) return;
+      try { await syncStocPending(pool, { prefecture: o.prefecture, db }); }
+      catch (e) { console.error('警告: 営業管理への自動写しに失敗: ' + e.message); }
+    };
     if (o.loop && !o.dryRun) {
       while (!stopping) {
         const r = await runOnce();
         if (!r.done) {
+          await autoSync();
           console.error(`対象なし。30分待機します (${new Date().toLocaleString('ja-JP')})`);
           for (let t = 0; t < LOOP_SLEEP_MS && !stopping; t += 1000) await new Promise((res) => setTimeout(res, 1000));
-        } else console.error(`周回完了: ${r.done}件 (成功${r.ok} / エラー${r.error})`);
+        } else {
+          console.error(`周回完了: ${r.done}件 (成功${r.ok} / エラー${r.error})`);
+          await autoSync();
+        }
       }
     } else {
       if (o.loop && o.dryRun) console.error('--dry-run のため --loop は無視します');
@@ -350,5 +381,5 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs, buildTargetQuery, scanSite, buildShopUpdate, processTargets, fetchTargets, csvRow, CSV_COLUMNS, STOC_COLS,
-  stocDbName, grantHint, checkStocReady, stocUpdate, syncStocOnly, writeValues, SITE_TIMEOUT_MS,
+  stocDbName, grantHint, checkStocReady, stocUpdate, syncStocOnly, syncStocPending, writeValues, SITE_TIMEOUT_MS,
 };
