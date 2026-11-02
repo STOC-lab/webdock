@@ -29,6 +29,7 @@
   .summary small { color:var(--sub); }
   .lead { color:var(--sub); margin:2px 0 8px; font-size:13px; }
   .item { border:1px solid var(--line); border-radius:4px; padding:8px 12px; margin:8px 0; break-inside:avoid; page-break-inside:avoid; }
+  .page > h3, .nobreak > h3 { margin:10px 0 2px; font-size:14.5px; }
   .item h3 { margin:0 0 4px; font-size:14.5px; }
   .tag { display:inline-block; border:1px solid #333; padding:0 8px; margin-right:8px; font-size:12px; font-weight:700; }
   .item dl { margin:0; display:grid; grid-template-columns:8.5em 1fr; gap:2px 8px; }
@@ -66,6 +67,7 @@
     </select></label>
     <label>担当者名 <input name="person" value="<%= person %>" maxlength="40" placeholder="例: 氏名（任意）"></label>
     <label>メール <input name="mail" type="email" value="<%= mail %>" maxlength="100" placeholder="例: メールアドレス（任意）"></label>
+    <label><input type="hidden" name="req_set" value="1"><input type="checkbox" name="req" value="1"<%= req ? ' checked' : '' %>> 確認依頼文を載せる</label>
     <button type="submit">反映</button>
   </form>
   <a href="/sales">営業モードへ戻る</a>
@@ -105,7 +107,7 @@
       <dt>確認できたこと</dt><dd><%= item.summary %><% if (item.evidence) { %>(<%= item.evidence %>)<% } %></dd>
       <% var pl = (typeof plainFor === 'function') ? plainFor(item) : null; %>
       <% if (pl) { %><dt>たとえるなら</dt><dd class="analogy"><%= pl.analogy %></dd><dt>このままにしておくと</dt><dd><%= pl.scenario %></dd><% } else if (item.why) { %><dt>このままだと</dt><dd><%= item.why %></dd><% } %>
-      <dt>対応の目安</dt><dd><%= BUCKETS[b].guide %></dd>
+      <dt>対応の目安</dt><dd><%= guideFor(b, !req) %></dd>
     </dl>
   </div>
   <% }) %>
@@ -114,6 +116,15 @@
   <% if (g.okItems.length) { %>
   <h2 class="nobreak">問題が見つからなかった項目</h2>
   <ul class="oklist"><% g.okItems.forEach(function(item){ %><li><%= item.title %></li><% }) %></ul>
+  <% } %>
+
+  <% if (proposal) { %>
+  <h2 class="nobreak">対応のご提案</h2>
+  <div class="nobreak"><p><%= proposal.intro %></p></div>
+  <% if (proposal.a) { %><div class="nobreak"><h3><%= proposal.a.heading %></h3><p><%= proposal.a.text %></p></div><% } %>
+  <div class="nobreak"><h3><%= proposal.b.heading %></h3><p><%= proposal.b.text %></p></div>
+  <% if (proposal.dns) { %><p><%= proposal.dns %></p><% } %>
+  <p><%= proposal.closing[0] %><strong><%= proposal.closing[1] %></strong><%= proposal.closing[2] %></p>
   <% } %>
 
   <% if (siteRequest) { %>

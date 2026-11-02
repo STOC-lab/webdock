@@ -15,7 +15,7 @@ const { notifyLead, notifyPageLead } = require('./notify');
 const { PREFECTURES, routeByPrefecture, COMPANY_INFO } = require('./regions');
 const { registerAdminWarehouse } = require('./adminWarehouse');
 const { registerPages } = require('./pageRoutes');
-const { groupItems, buildRequestText, BUCKETS, BUCKET_ORDER, statusLabel } = require('./reportBuckets');
+const { groupItems, buildRequestText, resolveReq, guideFor, buildProposal, BUCKETS, BUCKET_ORDER, statusLabel } = require('./reportBuckets');
 const { jstDateJa } = require('./outreach');
 const { loadSenders, resolveSender } = require('./reportSender');
 
@@ -230,13 +230,15 @@ function reportViewModel(scan, company, input, query) {
   const siteItems = [...g.urgent, ...g.partial, ...g.renewal];
   const senders = loadSenders(); // 毎回読む(設定を後から編集しても再起動不要)
   const r = resolveSender(senders, query);
+  const req = resolveReq(query, r.from); // 確認依頼文を載せるか(OFF=直接営業モード)
   return {
     scan, company, input, g, BUCKETS, BUCKET_ORDER, statusLabel,
     sender: r.sender, from: r.from, person: r.person, mail: r.mail,
+    req, guideFor, proposal: req ? null : buildProposal(g),
     senderOptions: Object.keys(senders).map((k) => ({ key: k, label: senders[k].label })),
     dateJa: jstDateJa(scan.scannedAt),
-    siteRequest: buildRequestText(siteItems, 'site', company ? company + ' 御中' : ''),
-    dnsRequest: buildRequestText(g.dns, 'dns', company ? company + ' 御中' : ''),
+    siteRequest: req ? buildRequestText(siteItems, 'site', company ? company + ' 御中' : '') : '',
+    dnsRequest: req ? buildRequestText(g.dns, 'dns', company ? company + ' 御中' : '') : '',
   };
 }
 

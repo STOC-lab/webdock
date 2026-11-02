@@ -84,7 +84,7 @@ const g2 = R.groupItems(scan.results);
 const evil = '<script>alert("x")</script>株式会社';
 const vm = {
   scan, company: evil, input: 'https://example.co.jp/?a="b"', g: g2, BUCKETS: R.BUCKETS, BUCKET_ORDER: R.BUCKET_ORDER, statusLabel: R.statusLabel,
-  sender: null, from: '', person: '', mail: '', senderOptions: [{ key: 'stoc', label: '株式会社エストック' }, { key: 'toc', label: '株式会社ティ・オー・シー' }], dateJa: '2026年10月25日',
+  sender: null, from: '', person: '', mail: '', req: true, guideFor: R.guideFor, proposal: null, senderOptions: [{ key: 'stoc', label: '株式会社エストック' }, { key: 'toc', label: '株式会社ティ・オー・シー' }], dateJa: '2026年10月25日',
   siteRequest: R.buildRequestText(g2.urgent, 'site', evil + ' 御中'), dnsRequest: R.buildRequestText(g2.dns, 'dns'),
 };
 ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err, html) => {
@@ -108,11 +108,15 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   eq(S.loadSenders('/nonexistent/x.json'), {}, '設定読み込み失敗は空扱い');
   const bad = path.join(require('os').tmpdir(), 'report-senders-bad-' + process.pid + '.json');
   fs.writeFileSync(bad, '{壊れたJSON'); eq(S.loadSenders(bad), {}, '壊れた設定は空扱い'); fs.unlinkSync(bad);
-  const render = (q) => new Promise((resolve, reject) => {
+  const render = (q, opts = {}) => new Promise((resolve, reject) => {
     const r = S.resolveSender(senders, q);
+    const req = R.resolveReq(q, r.from);
     ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), {
       ...vm, company: q.company || '', input: q.url || 'https://example.co.jp/',
       sender: r.sender, from: r.from, person: r.person, mail: r.mail,
+      req, guideFor: R.guideFor, proposal: req ? null : R.buildProposal(opts.g || vm.g),
+      siteRequest: req ? vm.siteRequest : '', dnsRequest: req ? vm.dnsRequest : '',
+      ...(opts.g ? { g: opts.g } : {}),
       senderOptions: Object.keys(senders).map((k) => ({ key: k, label: senders[k].label })),
     }, (e, h) => (e ? reject(e) : resolve(h)));
   });
@@ -139,6 +143,50 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   ok(h5.includes('name="person" value="山田 太郎"') && h5.includes('name="mail" type="email" value="a@b.jp"'), 'フォームが person / mail を保持');
   ok(h5.includes('name="url" value="https://example.co.jp/?a=1"') && h5.includes('name="company" value="株式会社甲"'), 'フォームが url / company を保持');
   ok(/<option value="" selected>なし<\/option>/.test(await render({})) || !/<option value="[a-z]+" selected>/.test(await render({})), '初期値は「なし」');
+
+  // ---- 確認依頼文の ON/OFF(直接営業モード) ----
+  eq(R.resolveReq({}, ''), true, 'req初期値: 作成元なしはON');
+  eq(R.resolveReq({}, 'stoc'), false, 'req初期値: 有効な作成元はOFF');
+  eq(R.resolveReq({ req_set: '1' }, ''), false, 'req_set=1でreqなしはOFF');
+  eq(R.resolveReq({ req_set: '1', req: '1' }, 'toc'), true, 'req_set=1&req=1はON');
+  const hA = await render({});
+  ok(hA.includes('制作会社様への確認依頼文') && hA.includes('メール・ドメイン管理ご担当者様への確認依頼文'), '初期(fromなし)は依頼文あり');
+  ok(!hA.includes('対応のご提案'), '初期(fromなし)は提案なし');
+  ok(hA.includes('ドメイン・メールの管理会社(ご担当者様)へご相談ください。'), 'ON時はdnsの目安が従来どおり');
+  ok(/<input type="hidden" name="req_set" value="1"><input type="checkbox" name="req" value="1" checked>/.test(hA), 'ON時はチェック済み+hidden');
+  const hB = await render({ from: 'stoc' });
+  ok(!hB.includes('制作会社様への確認依頼文') && !hB.includes('確認依頼文</h2>'), 'from=stocは依頼文なし');
+  ok(hB.includes('<h2 class="nobreak">対応のご提案</h2>'), 'from=stocは提案あり');
+  ok(/name="req" value="1">/.test(hB) && !/name="req" value="1" checked/.test(hB), 'OFF時はチェックなし');
+  ok(hB.includes('name="req_set" value="1"'), 'OFF時もhidden');
+  const hC = await render({ req_set: '1', from: 'stoc' });
+  ok(!hC.includes('制作会社様への確認依頼文') && hC.includes('対応のご提案'), 'req_set=1&reqなしはOFF');
+  const hD = await render({ req_set: '1', req: '1', from: 'toc' });
+  ok(hD.includes('制作会社様への確認依頼文') && !hD.includes('対応のご提案'), 'req_set=1&req=1&from=tocはON');
+  ok(/name="req" value="1" checked/.test(hD), 'フォームがチェック状態を保持');
+  // 文面(件数は g2: urgent1 / dns1 / renewal0 / partial0)
+  ok(hB.includes('ホームページの改修では直りません。当社でもご相談を承ります。'), 'OFF時dnsの目安差し替え');
+  ok(hB.includes('早めに状況をご確認いただくことをおすすめします。'), 'OFF時urgentの目安はそのまま');
+  ok(!hB.includes('ドメイン・メールの管理会社(ご担当者様)へご相談ください'), 'OFF時dns旧文言なし');
+  ok(hB.includes('今回の点検で見つかった項目には、次の2つの進め方があります。') && hB.includes('<h3>A. 部分修正</h3>') && hB.includes('(計1件)'), 'A あり');
+  ok(hB.includes('<h3>B. ホームページの入れ替え</h3>') && hB.includes('<p>すべての項目を一度に解消します。古い'), 'renewal0はB冒頭が「すべての項目を」');
+  ok(!hB.includes('(0件)も含めて'), 'renewal0の括弧書きなし');
+  ok(hB.includes('<p>メール・ドメイン設定の項目(1件)も、ご希望があればあわせて対応いたします。</p>'), 'dns行あり');
+  ok(hB.includes('<strong>お見積もりは無料</strong>'), 'お見積もり強調');
+  const mk = (keys) => R.groupItems(keys.map((k) => ({ key: k[0], status: k[1], title: k[0], summary: 's', fix: '', remedy: k[0] === 'mail' ? 'dns' : 'site' })));
+  const P1 = R.buildProposal(mk([['cert', 'bad'], ['cookies', 'warn'], ['js_libs', 'warn']]));
+  ok(P1.b.text.startsWith('「リニューアル時にまとめて対応すると効率的な項目」(1件)も含めて、すべての項目を一度に解消します。'), 'renewalありのB文');
+  ok(P1.a.text.includes('(計2件)') && P1.dns === null, 'A件数・dns0件の行は出さない');
+  const P2 = R.buildProposal(mk([['js_libs', 'warn']]));
+  eq(P2.a, null, 'urgent+partial=0はAなし');
+  eq(P2.b.heading, 'ホームページの入れ替え', 'A無しはBの見出しから「B.」を外す');
+  eq(P2.intro, '今回の点検で見つかった項目は、次の進め方で対応できます。', 'A無しの冒頭文');
+  eq(R.buildProposal(mk([['cms', 'ok']])), null, '総数0は提案なし');
+  const hE = await render({ from: 'stoc' }, { g: R.groupItems([{ key: 'cms', title: 'CMS', status: 'ok', summary: 'ok' }]) });
+  ok(!hE.includes('対応のご提案'), '総数0は描画にも提案なし');
+  const hF = await render({ from: 'stoc' }, { g: R.groupItems([{ key: 'js_libs', title: 'JS', status: 'warn', summary: 's', evidence: '' }]) });
+  ok(hF.includes('<h3>ホームページの入れ替え</h3>') && !hF.includes('A. 部分修正'), '描画: A無し');
+  ok(hF.includes('次の進め方で対応できます。'), '描画: A無しの冒頭文');
 
   // ---- ルートは合言葉が必要(本物のサーバーを一時起動。DBは使わない) ----
   const port = 39000 + Math.floor(Math.random() * 900);

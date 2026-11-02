@@ -9,6 +9,65 @@ const BUCKETS = {
 };
 const BUCKET_ORDER = ['urgent', 'partial', 'renewal', 'dns'];
 
+// 直接営業モード(確認依頼文を載せない)のときの「対応の目安」。ここに無い区分は BUCKETS[b].guide のまま
+const DIRECT_GUIDE = {
+  partial: '設定の追加・変更で対応できる範囲です。当社で対応できます。',
+  dns: 'ホームページの改修では直りません。当社でもご相談を承ります。',
+};
+
+/** 「対応の目安」の文面。direct が真で差し替えがある区分だけ DIRECT_GUIDE を使う */
+function guideFor(bucket, direct) {
+  if (direct && Object.prototype.hasOwnProperty.call(DIRECT_GUIDE, bucket)) return DIRECT_GUIDE[bucket];
+  return BUCKETS[bucket] ? BUCKETS[bucket].guide : '';
+}
+
+/**
+ * 「確認依頼文を載せる」の ON/OFF を決める。
+ * req_set=1(フォーム送信)なら req の有無をそのまま採用。
+ * req_set が無いときは、req があれば ON、無ければ(初回表示)作成元が空なら ON・有効な作成元なら OFF。
+ * from は resolveSender で検証済みのキー(無効なら '')
+ */
+function resolveReq(query, from) {
+  const q = query || {};
+  const has = q.req !== undefined && q.req !== '';
+  if (q.req_set === '1') return has;
+  if (has) return true;
+  return !from;
+}
+
+/** 区分ごとの件数 { urgent, partial, renewal, dns, total } */
+function countBuckets(g) {
+  const n = (b) => (g && g[b] ? g[b].length : 0);
+  const c = { urgent: n('urgent'), partial: n('partial'), renewal: n('renewal'), dns: n('dns') };
+  c.total = c.urgent + c.partial + c.renewal + c.dns;
+  return c;
+}
+
+/**
+ * 直接営業モードの「対応のご提案」の文面データ。点検項目が0件なら null。
+ * 戻り値: { intro, a: {heading, text}|null, b: {heading, text}, dns: 文|null, closing: [前, 強調, 後] }
+ */
+function buildProposal(g) {
+  const c = countBuckets(g);
+  if (c.total === 0) return null;
+  const ap = c.urgent + c.partial;
+  const hasA = ap > 0;
+  const renewalPart = c.renewal > 0 ? `「リニューアル時にまとめて対応すると効率的な項目」(${c.renewal}件)も含めて、` : '';
+  return {
+    intro: hasA ? '今回の点検で見つかった項目には、次の2つの進め方があります。' : '今回の点検で見つかった項目は、次の進め方で対応できます。',
+    a: hasA ? {
+      heading: 'A. 部分修正',
+      text: `「すぐにご確認いただきたい項目」と「部分的な修正で対応できる項目」(計${ap}件)を中心に、今のホームページを活かしたまま、設定の追加・変更で対応します。費用と期間を抑えたい場合に向いています。`,
+    } : null,
+    b: {
+      heading: hasA ? 'B. ホームページの入れ替え' : 'ホームページの入れ替え',
+      text: `${renewalPart}すべての項目を一度に解消します。古いプログラムを使い続ける心配がなくなり、スマートフォンでの見え方や、更新のしやすさもあわせて見直せます。`,
+    },
+    dns: c.dns > 0 ? `メール・ドメイン設定の項目(${c.dns}件)も、ご希望があればあわせて対応いたします。` : null,
+    closing: ['どちらが適しているかは、ホームページの使い方やご予算によって変わります。', 'お見積もりは無料', 'ですので、お気軽にご相談ください。'],
+  };
+}
+
 // 区分の対応表(ここだけ直せば区分が変わる)。 key -> { bad: 区分, warn: 区分 }
 const BUCKET_TABLE = {
   cert:           { bad: 'urgent',  warn: 'partial' },
@@ -89,4 +148,4 @@ function buildRequestText(items, kind, customer) {
   return lines.join('\n');
 }
 
-module.exports = { BUCKETS, BUCKET_ORDER, BUCKET_TABLE, bucketOf, statusLabel, groupItems, fixToRequest, buildRequestText };
+module.exports = { BUCKETS, BUCKET_ORDER, DIRECT_GUIDE, guideFor, resolveReq, countBuckets, buildProposal, BUCKET_TABLE, bucketOf, statusLabel, groupItems, fixToRequest, buildRequestText };
