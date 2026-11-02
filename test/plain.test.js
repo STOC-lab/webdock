@@ -47,10 +47,10 @@ const NOTE = '専門用語を使わず、身近なものにたとえて説明し
 
   const g = R.groupItems(items);
   const rep = await render('report.ejs', { scan: { results: items }, company: 'X', input: 'https://example.co.jp/', g, BUCKETS: R.BUCKETS, BUCKET_ORDER: R.BUCKET_ORDER, statusLabel: R.statusLabel,
-    sender: { company: 'a', name: 'b', tel: 'c', mail: 'd' }, surname: 'b', dateJa: '2026年10月31日', siteRequest: '', dnsRequest: '' });
+    sender: null, senderOptions: [], from: '', person: '', mail: '', req: true, guideFor: R.guideFor, proposal: null, dateJa: '2026年10月31日', siteRequest: '', dnsRequest: '' });
   ok(rep.includes(MARK) && rep.includes(NOTE) && rep.includes(PLAIN.cert.scenario), 'report: たとえ+注記');
   const rep2 = await render('report.ejs', { scan: { results: [items[1]] }, company: 'X', input: 'u', g: R.groupItems([items[1]]), BUCKETS: R.BUCKETS, BUCKET_ORDER: R.BUCKET_ORDER, statusLabel: R.statusLabel,
-    sender: { company: 'a', name: 'b', tel: 'c', mail: 'd' }, surname: 'b', dateJa: 'd', siteRequest: '', dnsRequest: '' });
+    sender: null, senderOptions: [], from: '', person: '', mail: '', req: true, guideFor: R.guideFor, proposal: null, dateJa: 'd', siteRequest: '', dnsRequest: '' });
   ok(!rep2.includes(MARK), 'report(okのみ): たとえなし');
 
   // 個人ページ
