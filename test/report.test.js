@@ -117,8 +117,8 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
     }, (e, h) => (e ? reject(e) : resolve(h)));
   });
   const h1 = await render({ from: 'toc', person: '山田 太郎', mail: 'a@b.jp' });
-  ok(h1.includes('<th>作成</th><td>株式会社ティ・オー・シー 山田 太郎(TEL 0120-830-046)</td>'), '作成行(会社・担当者・電話)');
-  ok(h1.includes('ご不明点は 株式会社ティ・オー・シー 山田(TEL 0120-830-046／メール a@b.jp)まで。'), 'フッター(姓・電話・メール)');
+  ok(h1.includes('<th>作成</th><td>株式会社ティ・オー・シー 山田 太郎(TEL 0120-4-005-486)</td>'), '作成行(会社・担当者・電話)');
+  ok(h1.includes('ご不明点は 株式会社ティ・オー・シー 山田(TEL 0120-4-005-486／メール a@b.jp)まで。'), 'フッター(姓・電話・メール)');
   ok(!h1.includes('本レポートをお届けした担当者'), '汎用フッターは出ない');
   const h2 = await render({ from: 'stoc' });
   ok(h2.includes('<td>株式会社エストック(TEL 0120-830-046)</td>'), '担当者なしは担当者を省く');
