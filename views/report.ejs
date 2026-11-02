@@ -122,7 +122,7 @@
   <h2 class="nobreak">対応のご提案</h2>
   <div class="nobreak"><p><%= proposal.intro %></p></div>
   <% if (proposal.a) { %><div class="nobreak"><h3><%= proposal.a.heading %></h3><p><%= proposal.a.text %></p></div><% } %>
-  <div class="nobreak"><h3><%= proposal.b.heading %></h3><p><%= proposal.b.text %></p></div>
+  <% if (proposal.b) { %><div class="nobreak"><h3><%= proposal.b.heading %></h3><p><%= proposal.b.text %></p></div><% } %>
   <% if (proposal.dns) { %><p><%= proposal.dns %></p><% } %>
   <p><%= proposal.closing[0] %><strong><%= proposal.closing[1] %></strong><%= proposal.closing[2] %></p>
   <% } %>

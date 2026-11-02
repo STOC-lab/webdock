@@ -182,6 +182,9 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   eq(P2.b.heading, 'ホームページの入れ替え', 'A無しはBの見出しから「B.」を外す');
   eq(P2.intro, '今回の点検で見つかった項目は、次の進め方で対応できます。', 'A無しの冒頭文');
   eq(R.buildProposal(mk([['cms', 'ok']])), null, '総数0は提案なし');
+  const P3 = R.buildProposal(mk([['mail', 'bad']]));
+  ok(P3.a === null && P3.b === null && P3.dns.includes('当社でも対応') && !P3.closing[0].includes('どちら'), 'メール・ドメインだけのときは入れ替えを勧めない');
+  ok(!P2.closing[0].includes('どちら'), 'Aなしは「どちらが」と書かない');
   const hE = await render({ from: 'stoc' }, { g: R.groupItems([{ key: 'cms', title: 'CMS', status: 'ok', summary: 'ok' }]) });
   ok(!hE.includes('対応のご提案'), '総数0は描画にも提案なし');
   const hF = await render({ from: 'stoc' }, { g: R.groupItems([{ key: 'js_libs', title: 'JS', status: 'warn', summary: 's', evidence: '' }]) });
