@@ -46,6 +46,10 @@ const PLAIN = {
     analogy: 'お店の裏口に、金庫の場所と鍵の型番を書いた紙が貼ってあるような状態です。',
     scenario: 'サーバーの内部情報(PHPの版・設定・フォルダの構成など)が、誰にでも見られる状態です。攻撃する側は、これを見て弱点のある古い部分を狙い撃ちできます。そのため、ほかの項目より先に直すべき項目です。',
   },
+  js_libs_hidden: {
+    analogy: '台所の消火器のラベルが剥がれていて、使用期限が分からない状態です。',
+    scenario: '使っている部品(ライブラリ)の版が外から見えないため、古くて弱点の公表された版かどうかを確かめられません。版が見えないことは安全であることを意味しないので、管理している制作会社に版を確認してもらうのが確実です。',
+  },
   js_libs: {
     analogy: 'リコール(回収)が出ている部品が、交換されないまま使われているような状態です。',
     scenario: '古い版の部品の中には、悪用の方法まで公開されている弱点を持つものがあります。条件がそろうと、ページを見た人のブラウザで、意図しないプログラムを動かされる余地が残ります。',
@@ -68,6 +72,7 @@ function plainFor(item) {
     if (item.phpinfo) key = 'php_info'; // phpinfo公開
     else if (item.noScore) key = 'php_hidden'; // 版を隠している(要確認)
   }
+  if (item.key === 'js_libs' && item.noScore) key = 'js_libs_hidden'; // 版が特定できない(要確認)
   return Object.prototype.hasOwnProperty.call(PLAIN, key) ? PLAIN[key] : null;
 }
 

@@ -9,7 +9,7 @@ const JUDGE = { ok: 'A', warn: 'C', bad: 'D', unknown: '—' };
 
 function pickFinding(results) {
   const st = {};
-  for (const r of results || []) st[r.key] = r.status;
+  for (const r of results || []) st[r.key] = r.noScore && r.key === 'js_libs' ? null : r.status; // 版不明(noScore)は所見に使わない
   if (st.https_redirect === 'bad' || st.cert === 'bad') return 'https';
   if (st.mail === 'bad' || st.mail === 'warn') return 'dmarc';
   if (st.cms === 'warn' || st.js_libs === 'warn') return 'old_parts';
@@ -96,7 +96,7 @@ function certDaysLeft(r) {
 function pickFindingB2b(results) {
   const by = {};
   for (const r of results || []) by[r.key] = r;
-  const st = (k) => (by[k] ? by[k].status : null);
+  const st = (k) => (by[k] && !(k === 'js_libs' && by[k].noScore) ? by[k].status : null); // js_libs の版不明(noScore)は所見に使わない
   const badWarn = (k) => st(k) === 'bad' || st(k) === 'warn';
   // PHPの版: phpinfo公開(php_info)が最優先。次に公式修正のない版(php_eol)/修正前の版(php_unpatched)。版を隠しているだけ(warn/noScore)は使わない
   if (st('php') === 'bad' && by.php.phpinfo) return 'php_info';

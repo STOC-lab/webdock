@@ -368,8 +368,10 @@ async function runBatch({ rows, scan, out, templates, concurrency = 5, templateM
     }
     rec.scannedAt = jstNow();
     const byKey = {};
-    for (const x of rec.results || []) byKey[x.key] = x.status;
-    const items = ITEM_KEYS.map((k) => (byKey[k] ? JUDGE[byKey[k]] : ''));
+    const noScoreKeys = new Set();
+    for (const x of rec.results || []) { byKey[x.key] = x.status; if (x.noScore) noScoreKeys.add(x.key); }
+    // 点数に入れない項目(版不明・見つからない等)は判定欄を「—」にする
+    const items = ITEM_KEYS.map((k) => (byKey[k] ? (noScoreKeys.has(k) ? '—' : JUDGE[byKey[k]]) : ''));
     let sendCell = rec.send ? 'はい' : 'いいえ';
     let extra = [];
     if (b2b) {

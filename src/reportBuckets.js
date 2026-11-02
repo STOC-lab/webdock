@@ -90,7 +90,7 @@ const BUCKET_TABLE = {
   php:            { bad: 'urgent',  warn: 'urgent', hidden: 'partial' }, // hidden=版を隠しているだけ(noScore)の要確認。phpinfo公開(bad)は urgent
   cms:            { bad: 'partial', warn: 'partial' },
   ext_scripts:    { bad: 'partial', warn: 'partial' },
-  js_libs:        { bad: 'renewal', warn: 'renewal' },
+  js_libs:        { bad: 'renewal', warn: 'renewal', hidden: 'partial' }, // hidden=ライブラリは分かるが版が不明(noScore)の要確認
   mail:           { bad: 'dns',     warn: 'dns' },
 };
 

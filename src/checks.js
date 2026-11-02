@@ -391,12 +391,20 @@ const LIB_SAFE = {
   'jQuery': [3, 5, 0],      // CVE-2020-11022/11023 (XSS)
   'jQuery UI': [1, 13, 0],  // CVE-2021-41182 ほか (XSS)
   'Bootstrap': [3, 4, 1],   // CVE-2019-8331 (XSS) ※4系は4.3.1以上
+  'AngularJS': [2, 0, 0],   // 1.x はすべてサポート終了(2.0.0未満=1.x)
+  'Vue.js': [3, 0, 0],      // 2.x 以前はサポート終了(2023年末)
+  'moment.js': [2, 29, 4],  // CVE-2022-31129 / CVE-2022-24785
 };
 const LIB_CVE = {
   'jQuery': { cve: 'CVE-2020-11022/11023', what: '入力欄などを経由して不正なスクリプトが動く' },
   'jQuery UI': { cve: 'CVE-2021-41182 ほか', what: '日付選択などの部品を経由して不正なスクリプトが動く' },
   'Bootstrap': { cve: 'CVE-2019-8331', what: 'ツールチップなどの部品を経由して不正なスクリプトが動く' },
+  'AngularJS': { eol: true },
+  'Vue.js': { eol: true },
+  'moment.js': { cve: 'CVE-2022-31129 / CVE-2022-24785', what: '日付の処理を悪用され、サーバーやブラウザが固まる・ファイルを読まれる' },
 };
+// 判定に使うライブラリ(表示順)
+const LIB_NAMES = Object.keys(LIB_SAFE);
 function safeVerLabel(name, ver) {
   if (name === 'Bootstrap' && /^4\./.test(ver)) return '4.3.1';
   return LIB_SAFE[name].join('.');
@@ -411,6 +419,12 @@ function isOld(name, ver) {
   if (name === 'Bootstrap' && /^[5-9]\./.test(ver)) return false;
   return verLess(ver, LIB_SAFE[name]);
 }
+/** 古いと判定した理由(why の1文) */
+function oldWhy(name, ver) {
+  const c = LIB_CVE[name];
+  if (c.eol) return `${name} ${/^\d+/.exec(ver)[0]}系はサポートが終了しており、今後見つかる弱点も修正されません。`;
+  return `${name} ${safeVerLabel(name, ver)} 未満には公表済みの弱点(${c.cve}: ${c.what})があります。`;
+}
 // script src からライブラリ名を判定
 function libNameOf(src) {
   const s = src.toLowerCase();
@@ -418,6 +432,9 @@ function libNameOf(src) {
   if (/jquery-?ui|jqueryui/.test(s)) return 'jQuery UI';
   if (/bootstrap[^/]*\.js|\/bootstrap\/|bootstrap@/.test(s)) return 'Bootstrap';
   if (/(^|\/)jquery([-.@][\d.]+)?(\.min|\.slim|\.slim\.min)?\.js|\/jquery\/\d|jquery@\d/.test(s)) return 'jQuery';
+  if (/(^|\/)angular(js)?([-.@][\d.]+)?(\.min)?\.js|\/angularjs\/|angularjs@\d/.test(s)) return 'AngularJS';
+  if (/(^|\/)vue([-.@][\d.]+)?(\.runtime)?(\.global)?(\.prod)?(\.min)?\.js|\/vue\/\d|(^|\/)vue@\d/.test(s)) return 'Vue.js';
+  if (/(^|\/)moment([-.@][\d.]+)?(\.min)?\.js|(^|\/)moment-with-locales|\/moment(\.js)?\/\d|moment@\d/.test(s)) return 'moment.js';
   return null;
 }
 // URL(パス・?ver=)から版数を取り出す
@@ -428,54 +445,129 @@ function verFromUrl(src) {
   const q = src.match(/[?&]ver=(\d+\.\d+(?:\.\d+)?)/);
   return q ? q[1] : null;
 }
-// ファイル先頭のコメントから版数を読む
+// ファイル先頭(またはまとめファイル内)のバナーから版数を読む
+const HEAD_RE = {
+  'jQuery': /jQuery(?: JavaScript Library)? v?(\d+\.\d+\.\d+)/,
+  'jQuery UI': /jQuery UI - v?(\d+\.\d+\.\d+)/,
+  'Bootstrap': /Bootstrap v?(\d+\.\d+\.\d+)/,
+  'AngularJS': /AngularJS v(\d+\.\d+\.\d+)/,
+  'Vue.js': /Vue\.js v(\d+\.\d+\.\d+)/,
+  'moment.js': /\/\/! moment\.js[\s\S]{0,300}?\/\/! version\s*:\s*v?(\d+\.\d+\.\d+)/,
+};
 function verFromHead(name, text) {
-  const re = {
-    'jQuery': /jQuery(?: JavaScript Library)? v?(\d+\.\d+\.\d+)/,
-    'jQuery UI': /jQuery UI - v?(\d+\.\d+\.\d+)/,
-    'Bootstrap': /Bootstrap v?(\d+\.\d+\.\d+)/,
-  }[name];
+  const re = HEAD_RE[name];
   const m = re && text.match(re);
   return m ? m[1] : null;
 }
+/** まとめファイルの本文から、全ライブラリのバナーを当てて { 名前: 版 } を返す */
+function libsFromBundle(text) {
+  const out = {};
+  for (const name of LIB_NAMES) {
+    const v = verFromHead(name, text || '');
+    if (v) out[name] = v;
+  }
+  return out;
+}
 
+const HEAD_BYTES = 4096;            // 既知ライブラリ名のファイルの先頭読み
+const BUNDLE_BYTES = 512 * 1024;    // まとめファイルの先頭読み
+const MAX_EXTRA_GETS = 3;           // 追加GETの合計上限(先頭読み+まとめ読み)
+const BUNDLE_HINT = /bundle|app|main|scripts|autoptimize|cache|combined|all/i;
 
-async function checkOldJsLibs(page) {
+/** 同一サイトのまとめファイルらしい .js か(既知ライブラリ名でないもの) */
+function bundleCandidate(raw, base) {
+  let u;
+  try { u = new URL(raw, base); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol) || !/\.js$/i.test(u.pathname)) return null;
+  let b;
+  try { b = new URL(base); } catch { return null; }
+  if (require('./safeFetch').sameSiteHost(u.hostname, b.hostname) === false) return null;
+  if (/migrate/i.test(u.pathname)) return null;
+  return u.toString();
+}
+
+/**
+ * 古いJavaScriptライブラリ。追加GETは合計3回まで(既知ライブラリの先頭読み → 同一サイトのまとめファイル読み)。
+ * deps.fetchHead(url, maxBytes) でテスト時に通信を差し替えられる。
+ */
+async function checkOldJsLibs(page, deps) {
   const t = { key: 'js_libs', title: '古いJavaScriptライブラリ' };
+  const fetchHead = (deps && deps.fetchHead) || require('./safeFetch').fetchHead;
   const body = page.body || '';
   const srcs = [...body.matchAll(/<script[^>]+src\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]);
-  const findings = [];
-  const seen = new Set();
-  let headReads = 0;
+  const found = new Map();   // 名前 -> { name, ver, old, how, url }
+  const named = new Set();   // 名前だけ分かったライブラリ
+  const tried = new Set();   // 読んだURL(二重に読まない)
+  let gets = 0;
+  const readHead = async (url, bytes) => {
+    if (tried.has(url) || gets >= MAX_EXTRA_GETS) return null;
+    tried.add(url); gets++;
+    try { return String(await fetchHead(url, bytes) || ''); } catch { return ''; }
+  };
+  const add = (name, ver, how, url) => {
+    if (found.has(name)) return;
+    found.set(name, { name, ver, old: isOld(name, ver), how, url });
+  };
+
+  // ① 既知のライブラリ名: まずURLから版、取れなければファイル先頭を読む
   for (const raw of srcs) {
     const name = libNameOf(raw);
-    if (!name || seen.has(name)) continue;
+    if (!name || found.has(name)) continue;
     let abs;
     try { abs = new URL(raw, page.finalUrl).toString(); } catch { continue; }
-    let ver = verFromUrl(abs);
-    let how = 'URL';
-    if (!ver && headReads < 3) {
-      headReads++;
-      const { fetchHead } = require('./safeFetch');
-      const head = await fetchHead(abs);
-      ver = verFromHead(name, head);
-      how = 'ファイル先頭';
-    }
-    if (!ver) continue;
-    seen.add(name);
-    findings.push({ name, ver, old: isOld(name, ver), how, url: abs });
+    named.add(name);
+    const uv = verFromUrl(abs);
+    if (uv) { add(name, uv, 'URL', abs); continue; }
+    const head = await readHead(abs, HEAD_BYTES);
+    const hv = head ? verFromHead(name, head) : null;
+    if (hv) add(name, hv, 'ファイル先頭', abs);
   }
+
+  // ② 同一サイトのまとめファイル(autoptimize・bundle.js など)の先頭512KBから、全ライブラリのバナーを探す
+  const cands = [];
+  for (const raw of srcs) {
+    if (libNameOf(raw)) continue;
+    const abs = bundleCandidate(raw, page.finalUrl);
+    if (abs && !cands.includes(abs)) cands.push(abs);
+  }
+  cands.sort((x, y) => (BUNDLE_HINT.test(new URL(x).pathname) ? 0 : 1) - (BUNDLE_HINT.test(new URL(y).pathname) ? 0 : 1));
+  for (const abs of cands) {
+    if (gets >= MAX_EXTRA_GETS) break;
+    const text = await readHead(abs, BUNDLE_BYTES);
+    if (!text) continue;
+    const hit = libsFromBundle(text);
+    for (const [name, ver] of Object.entries(hit)) { named.add(name); add(name, ver, 'まとめファイル内', abs); }
+  }
+
+  const findings = [...found.values()];
+  const unknownVer = [...named].filter((n) => !found.has(n));
+  const unkEv = unknownVer.length ? `版を特定できなかったもの: ${unknownVer.join('・')}` : '';
+
   if (!findings.length) {
-    return { ...t, status: 'unknown', summary: '確認できませんでした(jQuery・Bootstrap等の主要ライブラリが見つからない、または版数を特定できなかったため)', evidence: 'ページから読み込まれる主要ライブラリが見つからない、または版数を特定できませんでした' };
+    if (unknownVer.length) {
+      return {
+        ...t, status: 'warn', noScore: true, // 版が分からないだけなので点数には入れない
+        summary: `${unknownVer.join('・')} を使っていますが、版を外から特定できませんでした`,
+        why: '古い版には公表済みの弱点があります。版が見えないことは、安全であることを意味しません。',
+        fix: '制作会社に、使っているライブラリ(jQuery など)の版を確認し、古ければ更新するよう依頼してください。',
+        evidence: unkEv,
+      };
+    }
+    return {
+      ...t, status: 'ok', noScore: true, // 見つからないだけ(安全の証明ではない)ので点数には入れない
+      summary: 'jQuery・Bootstrap など、弱点が知られた主要ライブラリの読み込みは見つかりませんでした',
+      why: '', fix: '', evidence: '主要ライブラリの読み込みなし',
+    };
   }
   const olds = findings.filter((f) => f.old);
-  const ev = findings.map((f) => `${f.name} ${f.ver}${f.old ? '(古い・既知の脆弱性あり)' : ''}`).join(' / ');
+  const ev = findings.map((f) => `${f.name} ${f.ver}${f.old ? '(古い・既知の脆弱性あり)' : ''}`).join(' / ') + (unkEv ? ` / ${unkEv}` : '');
   if (!olds.length) return { ...t, status: 'ok', summary: `${findings.map((f) => `${f.name} ${f.ver}`).join('・')} は、既知の弱点が修正された版です`, why: '', fix: '', evidence: ev };
+  const hasEol = olds.some((f) => LIB_CVE[f.name].eol);
   return {
     ...t, status: 'warn',
     summary: `${olds.map((f) => `${f.name} ${f.ver}`).join('・')} を使っています(${olds[0].url})`,
-    why: olds.slice(0, 2).map((f) => `${f.name} ${safeVerLabel(f.name, f.ver)} 未満には公表済みの弱点(${LIB_CVE[f.name].cve}: ${LIB_CVE[f.name].what})があります。`).join(''),
-    fix: `制作会社に「${olds.map((f) => f.name).join('・')} を最新版へ更新してほしい」と依頼してください。`,
+    why: olds.slice(0, 2).map((f) => oldWhy(f.name, f.ver)).join(''),
+    fix: `制作会社に「${olds.map((f) => f.name).join('・')} を最新版へ更新${hasEol ? '(サポートが終了しているものは後継への移行)' : ''}してほしい」と依頼してください。`,
     evidence: ev,
   };
 }
@@ -599,7 +691,7 @@ async function runChecks(page, deps) {
     await checkPhpVersionDeep(page, deps),
     checkExternalScripts(page),
   ];
-  const jsLibs = await checkOldJsLibs(page);
+  const jsLibs = await checkOldJsLibs(page, deps);
   const mail = await checkMailSpoofing(page);
   sync.splice(8, 0, jsLibs); // 表示順を従来どおりに
   const results = [...sync, mail];
@@ -618,4 +710,4 @@ async function runChecks(page, deps) {
   return { results, counts, score, grade };
 }
 
-module.exports = { runChecks, checkPhpVersion, checkPhpVersionDeep, buildPhpResult, scoreOf };
+module.exports = { runChecks, checkOldJsLibs, libNameOf, verFromUrl, verFromHead, libsFromBundle, isOld, checkPhpVersion, checkPhpVersionDeep, buildPhpResult, scoreOf };
