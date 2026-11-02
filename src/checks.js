@@ -459,11 +459,23 @@ function verFromHead(name, text) {
   const m = re && text.match(re);
   return m ? m[1] : null;
 }
+// まとめファイル用の厳しめの判定(ライブラリ本体の著作権表示の形だけ)。
+// プラグインの説明文「requires Bootstrap 3.0.0」などを、古い版の使用と誤って判定しないため。
+const BUNDLE_RE = {
+  'jQuery': /\/\*!?\s*jQuery(?: JavaScript Library)? v(\d+\.\d+\.\d+)/,
+  'jQuery UI': /\/\*!?\s*jQuery UI - v(\d+\.\d+\.\d+)/,
+  'Bootstrap': /\*\s*Bootstrap v(\d+\.\d+\.\d+) \(https?:\/\/getbootstrap\.com/,
+  'AngularJS': HEAD_RE['AngularJS'],
+  'Vue.js': HEAD_RE['Vue.js'],
+  'moment.js': HEAD_RE['moment.js'],
+};
 /** まとめファイルの本文から、全ライブラリのバナーを当てて { 名前: 版 } を返す */
 function libsFromBundle(text) {
   const out = {};
   for (const name of LIB_NAMES) {
-    const v = verFromHead(name, text || '');
+    const re = BUNDLE_RE[name];
+    const m = re && String(text || '').match(re);
+    const v = m ? m[1] : null;
     if (v) out[name] = v;
   }
   return out;

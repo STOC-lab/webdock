@@ -197,6 +197,14 @@ const U = (p) => 'https://www.example.co.jp' + p;
     eq([col('1'), col('2'), col('3')], ['—', '—', 'C'], 'CSV: noScore の js_libs は「—」、従来の warn は C');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 
-  console.log(`jslibs: ${pass} passed, ${fail} failed`);
+  // まとめファイル: 説明文の「requires Bootstrap 3.0.0」は検出しない(誤判定防止)
+{
+  const { libsFromBundle: lfb } = require('../src/checks');
+  const r0 = lfb('/* requires Bootstrap 3.0.0 and jQuery 1.7.2 */');
+  if (Object.keys(r0).length === 0) { pass++; } else { fail++; console.log('  x まとめファイルの説明文を誤検出しない', JSON.stringify(r0)); }
+  const r1 = lfb('/*! jQuery v1.12.4 | (c) jQuery Foundation */ x; /*!\n * Bootstrap v3.3.7 (http://getbootstrap.com)\n */');
+  if (r1['jQuery'] === '1.12.4' && r1['Bootstrap'] === '3.3.7') { pass++; } else { fail++; console.log('  x まとめファイルの著作権表示は検出する', JSON.stringify(r1)); }
+}
+console.log(`jslibs: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
