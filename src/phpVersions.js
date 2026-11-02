@@ -18,9 +18,9 @@ const FIXED_PATCH = { '8.2': 35, '8.3': 36, '8.4': 27, '8.5': 12 };
 // この版以下は公式の修正が提供されない(サポート終了)。[major, minor]
 const EOL_MAX = [8, 1];
 
-/** X-Powered-By の値から最初の PHP/X.Y.Z を読む。読めなければ null */
+/** X-Powered-By / Server の値から最初の PHP/X.Y.Z を読む(phpinfo の evidence の「PHP Version X.Y.Z」も読む)。読めなければ null */
 function parsePhpVersion(headerValue) {
-  const m = String(headerValue === undefined || headerValue === null ? '' : headerValue).match(/PHP\/(\d+)\.(\d+)\.(\d+)/i);
+  const m = String(headerValue === undefined || headerValue === null ? '' : headerValue).match(/PHP(?:\/|\s+Version\s+)(\d+)\.(\d+)\.(\d+)/i);
   if (!m) return null;
   return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), text: `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}` };
 }

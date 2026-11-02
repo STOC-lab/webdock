@@ -98,7 +98,8 @@ function pickFindingB2b(results) {
   for (const r of results || []) by[r.key] = r;
   const st = (k) => (by[k] ? by[k].status : null);
   const badWarn = (k) => st(k) === 'bad' || st(k) === 'warn';
-  // PHPの版(X-Powered-By に出ているもののみ): 公式修正のない版(php_eol)/修正前の版(php_unpatched)。最優先
+  // PHPの版: phpinfo公開(php_info)が最優先。次に公式修正のない版(php_eol)/修正前の版(php_unpatched)。版を隠しているだけ(warn/noScore)は使わない
+  if (st('php') === 'bad' && by.php.phpinfo) return 'php_info';
   if (st('php') === 'bad') {
     const v = PV.parsePhpVersion(by.php.evidence);
     if (v) return PV.classifyPhp(v).kind === 'eol' ? 'php_eol' : 'php_unpatched';

@@ -279,7 +279,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
 
 
   // ---- グループ分け(送信ツールが全社同一本文のため) ----
-  eq(G.GROUP_ORDER, ['php_eol', 'php_unpatched', 'no_https', 'mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'], 'グループ優先順');
+  eq(G.GROUP_ORDER, ['php_info', 'php_eol', 'php_unpatched', 'no_https', 'mixed', 'https_redirect', 'cert_expired', 'cert_soon', 'js_libs', 'cms', 'headers', 'tls_version'], 'グループ優先順');
   eq(G.groupKeyOfFinding('cert_expiring'), 'cert_soon', '証明書期限間近は cert_soon');
   eq(G.groupKeyOfFinding('cert_expired'), 'cert_expired', '期限切れ');
   eq(G.groupKeyOfFinding('no_https'), 'no_https', 'no_https');

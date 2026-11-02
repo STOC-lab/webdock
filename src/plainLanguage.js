@@ -38,6 +38,14 @@ const PLAIN = {
     analogy: 'メーカーの修理や部品の提供が終わった古い車に、そのまま乗り続けているような状態です。',
     scenario: '新しい弱点が見つかっても、公式の修理(修正)が提供されません。2026年10月に公表されたPHPの深刻な弱点では、実際に悪用された例も確認されています。最悪の場合、ホームページを書き換えられたり、問い合わせ内容を抜き取られたりするおそれがあります。',
   },
+  php_hidden: {
+    analogy: '玄関の表札は外してあるものの、中にどんな型の鍵が付いているかは、外からは分からない家のようなものです。',
+    scenario: '版を隠しているのは正しい設定ですが、その鍵が古い型かどうかは、管理している側が確かめないと分かりません。2026年10月に公表されたPHPの深刻な弱点は版によって影響が決まるため、版が見えないことは安全であることを意味しません。制作会社やサーバー会社に、適用状況を確認してもらうのが確実です。',
+  },
+  php_info: {
+    analogy: 'お店の裏口に、金庫の場所と鍵の型番を書いた紙が貼ってあるような状態です。',
+    scenario: 'サーバーの内部情報(PHPの版・設定・フォルダの構成など)が、誰にでも見られる状態です。攻撃する側は、これを見て弱点のある古い部分を狙い撃ちできます。そのため、ほかの項目より先に直すべき項目です。',
+  },
   js_libs: {
     analogy: 'リコール(回収)が出ている部品が、交換されないまま使われているような状態です。',
     scenario: '古い版の部品の中には、悪用の方法まで公開されている弱点を持つものがあります。条件がそろうと、ページを見た人のブラウザで、意図しないプログラムを動かされる余地が残ります。',
@@ -55,7 +63,11 @@ const PLAIN = {
 /** warn/bad の項目だけ { analogy, scenario } を返す。ok・unknown・未登録keyは null */
 function plainFor(item) {
   if (!item || (item.status !== 'bad' && item.status !== 'warn')) return null;
-  const key = item.key === 'https_redirect' && item.status === 'bad' ? 'no_https' : item.key;
+  let key = item.key === 'https_redirect' && item.status === 'bad' ? 'no_https' : item.key;
+  if (item.key === 'php') {
+    if (item.phpinfo) key = 'php_info'; // phpinfo公開
+    else if (item.noScore) key = 'php_hidden'; // 版を隠している(要確認)
+  }
   return Object.prototype.hasOwnProperty.call(PLAIN, key) ? PLAIN[key] : null;
 }
 

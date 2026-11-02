@@ -91,6 +91,7 @@ function summarizeFindings(results) {
   return (Array.isArray(results) ? results : []).filter((r) => r && r.key).map((r) => ({
     key: clip(r.key, 30), title: clip(r.title, 60), status: ['ok', 'warn', 'bad', 'unknown'].includes(r.status) ? r.status : 'unknown',
     summary: clip(r.summary, 200), remedy: clip(r.remedy, 10),
+    ...(r.noScore ? { noScore: true } : {}), ...(r.phpinfo ? { phpinfo: true } : {}),
   }));
 }
 

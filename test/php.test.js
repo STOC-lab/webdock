@@ -52,7 +52,7 @@ const php = (v) => checkPhpVersion({ headers: v === null ? {} : { 'x-powered-by'
   eq(php('PHP/8.3.36').summary, '表示されているPHPの版(8.3.36)は修正済みの版です', 'ok summary');
   ok(php('PHP/8.3.36').evidence.includes('CMSのバージョン露出'), 'ok evidence: 露出は別項目');
   eq(php(null).status, 'unknown', '未表示 -> unknown');
-  eq(php(null).summary, 'PHPの版は外部から確認できませんでした', 'unknown summary');
+  eq(php(null).summary, 'PHPで動いている形跡は見つかりませんでした', 'unknown summary');
   eq(php('Express').status, 'unknown', 'PHP以外 -> unknown');
   eq(php(['PHP/8.1.27']).status, 'bad', '配列ヘッダー');
   eq(php(null).key, 'php', 'key');
@@ -98,7 +98,7 @@ const php = (v) => checkPhpVersion({ headers: v === null ? {} : { 'x-powered-by'
   eq(G.batchCode('php_eol', new Date('2026-10-29T00:00:00Z')), 'WD-PHP-EOL-20261029', 'バッチコード php_eol');
   eq(G.batchCode('php_unpatched', new Date('2026-10-29T00:00:00Z')), 'WD-PHP-UNPATCHED-20261029', 'バッチコード php_unpatched');
   eq(G.groupKeyOfFinding('php_eol'), 'php_eol', 'groupKey');
-  eq(G.GROUP_ORDER.slice(0, 3), ['php_eol', 'php_unpatched', 'no_https'], 'GROUP_ORDER: phpが先頭');
+  eq(G.GROUP_ORDER.slice(0, 4), ['php_info', 'php_eol', 'php_unpatched', 'no_https'], 'GROUP_ORDER: phpが先頭');
   ok(G.GROUP_LABEL.php_eol && G.GROUP_LABEL.php_unpatched, 'GROUP_LABEL');
   const rowsG = [{ store_id: '1', 店名: 'A', URL: 'https://a.jp/', 問い合わせURL: 'https://a.jp/c', 画像認証: '', 指摘種別: 'php_eol', 送信推奨: 'はい' }];
   eq(G.groupRows(rowsG).groups.map((x) => x.key), ['php_eol'], 'groupRows: php_eol');
@@ -161,6 +161,122 @@ const php = (v) => checkPhpVersion({ headers: v === null ? {} : { 'x-powered-by'
     eq([ib[h.length - 2], ib[h.length - 1]], ['—', ''], 'CSV: php unknown の行');
     eq(ia[h.indexOf('指摘種別')], 'php_eol', 'CSV: 指摘種別');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+
+  // ---- 取得元の強化(Server / wp-login.php / index.php / phpinfo)。通信は fetchPassive を差し替える ----
+  const mkFetch = (routes) => {
+    const calls = [];
+    const fn = async (url, budget) => { calls.push(new URL(url).pathname); const r = routes[new URL(url).pathname]; return r === undefined ? null : r; };
+    fn.calls = calls;
+    return fn;
+  };
+  const top = (o) => ({ ...base, headers: {}, body: '<html></html>', ...o });
+  const deep = (page, routes) => { const f = mkFetch(routes || {}); return checkPhpVersionDeep(page, { fetchPassive: f }).then((r) => ({ r, calls: f.calls })); };
+  const { checkPhpVersionDeep } = require('../src/checks');
+  const PI_HTML = '<html><head><title>phpinfo()</title></head><body><h1 class="p">PHP Version 7.4.33</h1></body></html>';
+
+  // b. Server ヘッダ(追加通信なし)
+  let d = await deep(top({ headers: { server: 'Apache/2.4.57 PHP/8.0.30' } }));
+  eq([d.r.status, d.calls.length], ['bad', 0], 'Server ヘッダの版: 追加GETなし');
+  eq(d.r.evidence, 'Server: Apache/2.4.57 PHP/8.0.30', 'Server ヘッダ evidence');
+  // a が b より優先、トップで取れたら追加GETゼロ
+  d = await deep(top({ headers: { 'x-powered-by': 'PHP/8.3.36', server: 'Apache PHP/5.6.1' } }), { '/phpinfo.php': { status: 200, headers: {}, body: PI_HTML } });
+  eq([d.r.status, d.calls.length, d.r.evidence.startsWith('X-Powered-By: PHP/8.3.36')], ['ok', 0, true], 'トップで取れたら追加GETゼロ・phpinfoも見ない');
+  // c. wp-login.php(WordPress らしい本文)
+  d = await deep(top({ body: '<link href="/wp-content/themes/a.css">' }), { '/wp-login.php': { status: 200, headers: { 'x-powered-by': 'PHP/7.4.33' }, body: '' } });
+  eq([d.r.status, d.calls], ['bad', ['/wp-login.php']], 'wp-login.php 経由・1回で打ち切り');
+  eq(d.r.evidence, 'X-Powered-By: PHP/7.4.33(/wp-login.php の応答)', 'wp-login.php evidence');
+  // c. index.php(WordPress でない)
+  d = await deep(top(), { '/index.php': { status: 200, headers: { server: 'nginx PHP/8.4.27' }, body: '' } });
+  eq([d.r.status, d.calls], ['ok', ['/index.php']], 'index.php 経由');
+  ok(d.r.evidence.startsWith('Server: nginx PHP/8.4.27(/index.php の応答)'), 'index.php evidence');
+  // d. phpinfo 検出
+  d = await deep(top(), { '/index.php': { status: 404, headers: {}, body: '' }, '/phpinfo.php': { status: 200, headers: {}, body: PI_HTML } });
+  eq([d.r.status, d.r.phpinfo, d.calls], ['bad', true, ['/index.php', '/phpinfo.php']], 'phpinfo 検出・打ち切り(/info.php は見ない)');
+  eq(d.r.evidence, '/phpinfo.php が公開されており PHP Version 7.4.33', 'phpinfo evidence');
+  eq(d.r.summary, 'サーバーの設定確認ページ(phpinfo)が誰でも見られる状態です(PHP 7.4.33)', 'phpinfo summary');
+  ok(d.r.why.startsWith('サーバーの内部情報(版・設定・フォルダ構成など)がすべて公開されており、攻撃の下調べに使われます。') && d.r.why.includes('公式の修正が提供されていません'), 'phpinfo why: eol の説明が続く');
+  eq(d.r.fix, '制作会社・サーバー会社に、/phpinfo.php(または /info.php)の削除と、PHPの版の確認・更新を依頼してください。', 'phpinfo fix');
+  // /info.php 経由 + 最新版でも bad
+  d = await deep(top(), { '/info.php': { status: 200, headers: {}, body: PI_HTML.replace('7.4.33', '8.5.12') } });
+  eq([d.r.status, d.r.phpinfo, d.calls], ['bad', true, ['/index.php', '/phpinfo.php', '/info.php']], '/info.php で検出(追加GETは最大3回)');
+  ok(!d.r.why.includes('公式の修正'), '修正済み版なら版の説明は付かない');
+  // 両方必須・404は検出しない
+  d = await deep(top(), { '/phpinfo.php': { status: 200, headers: {}, body: '<title>phpinfo()</title>' }, '/info.php': { status: 200, headers: {}, body: '<h1>PHP Version 7.4.33</h1>' } });
+  eq([d.r.phpinfo, d.r.status, d.calls.length], [undefined, 'unknown', 3], 'phpinfo() だけ/PHP Version だけでは検出しない');
+  d = await deep(top(), { '/phpinfo.php': { status: 404, headers: {}, body: PI_HTML }, '/info.php': { status: 403, headers: {}, body: PI_HTML } });
+  eq([d.r.phpinfo, d.r.status], [undefined, 'unknown'], '200以外では検出しない');
+  // 追加GETは3回を超えない(予算を使い切る fetcher)
+  let n = 0;
+  const greedy = async (u, budget) => { n++; return null; };
+  await checkPhpVersionDeep(top(), { fetchPassive: greedy });
+  ok(n <= 3, '追加GETの回数 ' + n);
+  // 通信が例外でも落ちない
+  d = await checkPhpVersionDeep(top(), { fetchPassive: async () => { throw new Error('x'); } });
+  eq(d.status, 'unknown', '通信失敗は unknown');
+  // 版非公開 + 手がかり
+  d = await deep(top({ body: '<link href="/wp-content/a.css">' }));
+  eq([d.r.status, d.r.noScore, d.r.evidence], ['warn', true, 'WordPress'], '手がかり(WordPress) -> warn noScore');
+  eq(d.r.summary, 'このサイトはPHPで動いていますが、版は外から見えないよう隠されています(これ自体は正しい設定です)', 'hidden summary');
+  eq(d.r.fix, '制作会社またはサーバー会社に、PHPの版と修正の適用状況を確認してください。', 'hidden fix');
+  d = await deep(top({ headers: { 'set-cookie': ['PHPSESSID=abc; path=/'] } }));
+  eq([d.r.status, d.r.evidence], ['warn', 'PHPSESSID'], 'PHPSESSID');
+  d = await deep(top({ headers: { 'x-powered-by': 'PHP' } }));
+  eq(d.r.status, 'warn', 'X-Powered-By: PHP(版なし)');
+  d = await deep(top({ body: '<a href="/contact.php">a</a>' }));
+  eq([d.r.status, d.r.evidence], ['warn', '.phpのページへのリンク'], '.php リンク');
+  d = await deep(top({ body: '<a href="https://other.example.com/x.php">a</a><a href="/x.html">b</a>' }));
+  eq(d.r.status, 'unknown', '他サイトの.phpリンクは手がかりにしない');
+  d = await deep(top(), { '/index.php': { status: 200, headers: { 'set-cookie': 'PHPSESSID=zz' }, body: '' } });
+  eq([d.r.status, d.r.noScore, d.r.evidence], ['warn', true, 'PHPSESSID'], 'c の応答の PHPSESSID');
+  d = await deep(top());
+  eq([d.r.status, d.r.noScore], ['unknown', undefined], '手がかりなし -> unknown');
+
+  // ---- scoreOf: noScore は除外・既存の点数は不変 ----
+  const A = [{ key: 'a', status: 'ok' }, { key: 'b', status: 'warn' }, { key: 'c', status: 'bad' }];
+  const before = scoreOf(A);
+  eq(scoreOf([...A, { key: 'php', status: 'warn', noScore: true }]), before, 'noScore は点数に影響しない');
+  eq([scoreOf([{ key: 'a', status: 'ok' }, { key: 'php', status: 'warn' }]).score, scoreOf([{ key: 'a', status: 'ok' }, { key: 'php', status: 'warn', noScore: true }]).score], [75, 100], 'noScore なしの warn は従来どおり5点・noScore は除外');
+  eq(before.score, 50, '既存ケース: ok+warn+bad = 50点');
+  eq(scoreOf([{ key: 'php', status: 'warn', noScore: true }]).score, null, 'noScore だけなら点数なし');
+  eq(scoreOf([...A, { key: 'php', status: 'bad', phpinfo: true }]).score, Math.round((15 / 40) * 100), 'phpinfo の bad は採点対象');
+
+  // ---- バケット ----
+  eq(R.bucketOf({ key: 'php', status: 'warn', noScore: true }), 'partial', '版非公開 -> partial');
+  eq(R.bucketOf({ key: 'php', status: 'warn' }), 'urgent', '従来の php warn は urgent のまま');
+  eq(R.bucketOf({ key: 'php', status: 'bad', phpinfo: true }), 'urgent', 'phpinfo -> urgent');
+  eq(R.statusLabel('warn'), '要確認', '表示語');
+
+  // ---- やさしい説明 ----
+  const PL = require('../src/plainLanguage');
+  const pli = PL.plainFor({ key: 'php', status: 'bad', phpinfo: true });
+  ok(pli && pli.analogy.includes('金庫の場所と鍵の型番') && pli.scenario, 'plain: phpinfo');
+  const plh = PL.plainFor({ key: 'php', status: 'warn', noScore: true });
+  ok(plh && plh.analogy && plh.scenario && plh !== PL.plainFor({ key: 'php', status: 'bad' }), 'plain: 版非公開');
+
+  // ---- outreach の所見 ----
+  const piRes = mk({ php: 'bad', https_redirect: 'bad' }); piRes.find((x) => x.key === 'php').phpinfo = true;
+  eq(pickFindingB2b(piRes), 'php_info', 'phpinfo -> php_info(最優先)');
+  eq(pickFindingB2b(mk({ php: 'warn' }, {})), null, '版非公開(warn)は所見に使わない');
+  const hid = mk({ php: 'warn', mixed: 'bad' }); hid.find((x) => x.key === 'php').noScore = true;
+  eq(pickFindingB2b(hid), 'mixed', '版非公開は飛ばして次の所見');
+  ok(T.findingsB2b.php_info && T.findingsB2b.php_info['指摘'] && T.findingsB2b.php_info['困ること'] && T.findingsB2b.php_info['一文'], 'findings-b2b: php_info');
+  eq(G.groupKeyOfFinding('php_info'), 'php_info', 'groupKey php_info');
+  eq(G.batchCode('php_info', new Date('2026-10-29T00:00:00Z')), 'WD-PHP-INFO-20261029', 'バッチコード php_info');
+  ok(!/\{[^}]*\}/.test(G.renderGroupBodies(T, 'php_info', new Date('2026-10-29T00:00:00Z')).body), 'php_info グループ本文: 展開済み');
+  eq(require('../src/pageRoutes').FINDING_TO_CHECK.php_info, 'php', 'FINDING_TO_CHECK php_info');
+  // evidence から版が読める(CSVの PHP版 列用)
+  eq(PV.parsePhpVersion('/phpinfo.php が公開されており PHP Version 7.4.33').text, '7.4.33', 'phpinfo evidence から版');
+  // 専用ページ用の要約にフラグが残る
+  const sf2 = P.summarizeFindings([{ key: 'php', status: 'warn', noScore: true, title: 't', summary: 's', remedy: 'site' }]);
+  eq(sf2[0].noScore, true, 'summarizeFindings: noScore');
+
+  // ---- runChecks 経由(通信は差し替え) ----
+  const rc = await runChecks({ ...base, headers: {}, body: '<link href="/wp-content/a.css">' }, { fetchPassive: mkFetch({}) });
+  const rcPhp = rc.results.find((x) => x.key === 'php');
+  eq([rcPhp.status, rcPhp.noScore], ['warn', true], 'runChecks: 版非公開');
+  const rcNone = await runChecks({ ...base, headers: {} }, { fetchPassive: mkFetch({}) });
+  eq(rc.score, rcNone.score, 'runChecks: 版非公開は点数に影響しない');
+
 
   console.log(`php: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

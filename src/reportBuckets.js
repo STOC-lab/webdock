@@ -87,7 +87,7 @@ const BUCKET_TABLE = {
   tls_version:    { bad: 'partial', warn: 'partial' },
   headers:        { bad: 'partial', warn: 'partial' },
   cookies:        { bad: 'partial', warn: 'partial' },
-  php:            { bad: 'urgent',  warn: 'urgent' },
+  php:            { bad: 'urgent',  warn: 'urgent', hidden: 'partial' }, // hidden=版を隠しているだけ(noScore)の要確認。phpinfo公開(bad)は urgent
   cms:            { bad: 'partial', warn: 'partial' },
   ext_scripts:    { bad: 'partial', warn: 'partial' },
   js_libs:        { bad: 'renewal', warn: 'renewal' },
@@ -98,7 +98,7 @@ const BUCKET_TABLE = {
 function bucketOf(item) {
   if (!item || (item.status !== 'bad' && item.status !== 'warn')) return null;
   const row = BUCKET_TABLE[item.key];
-  if (row) return row[item.status];
+  if (row) return item.noScore && item.status === 'warn' && row.hidden ? row.hidden : row[item.status];
   return item.remedy === 'dns' ? 'dns' : 'partial'; // 未登録のkeyは remedy で判断
 }
 

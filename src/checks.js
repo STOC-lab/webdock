@@ -8,6 +8,7 @@
 const dns = require('dns').promises;
 const { URL } = require('url');
 const PV = require('./phpVersions');
+const PP = require('./phpProbe');
 
 
 function daysBetween(a, b) {
@@ -307,41 +308,82 @@ function checkCmsExposure(page) {
   };
 }
 
-/* ---- PHPの版(X-Powered-By に出ている場合のみ。外から見えるものだけで判定) ---- */
+/* ---- PHPの版(外から見えるものだけで判定。取得元は phpProbe.js を参照) ---- */
 
-function checkPhpVersion(page) {
+const PHP_EOL_WHY = '10月に公表された深刻な脆弱性(悪用が確認されています)について、この版には公式の修正が提供されていません。提供元が独自に修正を適用している場合もあります。';
+const PHP_UNPATCHED_WHY = '10月に公表された深刻な脆弱性は実際に悪用が確認されています。提供元が修正を取り込んでいて、表示される版は古いままの場合もあります。';
+
+/** 取得結果(phpProbe の戻り)から診断項目を組み立てる(純粋関数) */
+function buildPhpResult(info) {
   const t = { key: 'php', title: 'PHP(サイトを動かす部品)の版' };
-  const h = page.headers || {};
-  const raw = h['x-powered-by'];
-  const raws = Array.isArray(raw) ? raw.join(', ') : raw;
-  const v = PV.parsePhpVersion(raws);
-  if (!v) return { ...t, status: 'unknown', summary: 'PHPの版は外部から確認できませんでした', why: '', fix: '', evidence: '' };
-  const evidence = `X-Powered-By: ${raws}`;
-  const c = PV.classifyPhp(v);
-  if (c.kind === 'eol') {
+  const i = info || {};
+  // phpinfo が公開されている: 版の分類に関わらず要対応
+  if (i.phpinfo) {
+    const v = PV.parsePhpVersion('PHP/' + i.phpinfo.version);
+    const c = v ? PV.classifyPhp(v) : { kind: 'ok' };
+    const why = ['サーバーの内部情報(版・設定・フォルダ構成など)がすべて公開されており、攻撃の下調べに使われます。',
+      c.kind === 'eol' ? PHP_EOL_WHY : c.kind === 'unpatched' ? PHP_UNPATCHED_WHY : ''].filter(Boolean).join('');
     return {
-      ...t, status: 'bad',
-      summary: `表示されているPHPの版(${v.text})は公式サポートが終了した版です`,
-      why: '10月に公表された深刻な脆弱性(悪用が確認されています)について、この版には公式の修正が提供されていません。提供元が独自に修正を適用している場合もあります。',
-      fix: 'サーバーの提供元・制作会社に、PHPのサポート中の版(8.3以降など)への更新を依頼してください。',
-      evidence,
+      ...t, status: 'bad', phpinfo: true,
+      summary: `サーバーの設定確認ページ(phpinfo)が誰でも見られる状態です(PHP ${i.phpinfo.version})`,
+      why,
+      fix: '制作会社・サーバー会社に、/phpinfo.php(または /info.php)の削除と、PHPの版の確認・更新を依頼してください。',
+      evidence: `${i.phpinfo.path} が公開されており PHP Version ${i.phpinfo.version}`,
     };
   }
-  if (c.kind === 'unpatched') {
+  if (i.found) {
+    const v = i.found.version;
+    const evidence = i.found.label + (i.found.via || '');
+    const c = PV.classifyPhp(v);
+    if (c.kind === 'eol') {
+      return {
+        ...t, status: 'bad',
+        summary: `表示されているPHPの版(${v.text})は公式サポートが終了した版です`,
+        why: PHP_EOL_WHY,
+        fix: 'サーバーの提供元・制作会社に、PHPのサポート中の版(8.3以降など)への更新を依頼してください。',
+        evidence,
+      };
+    }
+    if (c.kind === 'unpatched') {
+      return {
+        ...t, status: 'bad',
+        summary: `表示されているPHPの版(${v.text})は、${PV.DISCLOSED_JA}の修正が入る前の版です`,
+        why: PHP_UNPATCHED_WHY,
+        fix: `サーバーの提供元・制作会社に、PHP ${c.fixed}以降への更新、または修正の適用状況の確認を依頼してください。`,
+        evidence,
+      };
+    }
     return {
-      ...t, status: 'bad',
-      summary: `表示されているPHPの版(${v.text})は、${PV.DISCLOSED_JA}の修正が入る前の版です`,
-      why: '10月に公表された深刻な脆弱性は実際に悪用が確認されています。提供元が修正を取り込んでいて、表示される版は古いままの場合もあります。',
-      fix: `サーバーの提供元・制作会社に、PHP ${c.fixed}以降への更新、または修正の適用状況の確認を依頼してください。`,
-      evidence,
+      ...t, status: 'ok',
+      summary: `表示されているPHPの版(${v.text})は修正済みの版です`,
+      why: '', fix: '',
+      evidence: `${evidence}(版の表示そのものは「CMSのバージョン露出」の項目で扱います)`,
     };
   }
-  return {
-    ...t, status: 'ok',
-    summary: `表示されているPHPの版(${v.text})は修正済みの版です`,
-    why: '', fix: '',
-    evidence: `${evidence}(版の表示そのものは「CMSのバージョン露出」の項目で扱います)`,
-  };
+  // 版が取れなかった
+  const hints = i.hints || [];
+  if (hints.length) {
+    return {
+      ...t, status: 'warn', noScore: true, // 点数には入れない(隠すこと自体は正しい設定のため)
+      summary: 'このサイトはPHPで動いていますが、版は外から見えないよう隠されています(これ自体は正しい設定です)',
+      why: '10月に公表された深刻な脆弱性は、版によって影響があるかが決まります。版が見えないことは、安全であることを意味しません。',
+      fix: '制作会社またはサーバー会社に、PHPの版と修正の適用状況を確認してください。',
+      evidence: hints.join(' / '),
+    };
+  }
+  return { ...t, status: 'unknown', summary: 'PHPで動いている形跡は見つかりませんでした', why: '', fix: '', evidence: '' };
+}
+
+/** トップページの情報だけで判定(通信なし)。ヘッダの X-Powered-By → Server の順に版を探す */
+function checkPhpVersion(page) {
+  return buildPhpResult(PP.fromPage(page));
+}
+
+/** 取得元を順に試す版(追加GETは最大3回)。deps.fetchPassive でテスト時に通信を差し替えられる */
+async function checkPhpVersionDeep(page, deps) {
+  let info;
+  try { info = await PP.probe(page, deps); } catch { info = PP.fromPage(page); }
+  return buildPhpResult(info);
 }
 
 // 既知の脆弱性が修正された最初の版(これ未満を「古い」と判定)と、why に出す CVE と一言説明
@@ -532,8 +574,8 @@ async function checkMailSpoofing(page) {
 /* ---- 集計 ---- */
 
 function scoreOf(results) {
-  // ok=10, warn=5, bad=0, unknown=除外
-  const scored = results.filter((r) => r.status !== 'unknown');
+  // ok=10, warn=5, bad=0, unknown=除外, noScore(版を隠しているPHPなど)=除外
+  const scored = results.filter((r) => r.status !== 'unknown' && !r.noScore);
   if (!scored.length) return { score: null, grade: '—' };
   const sum = scored.reduce((a, r) => a + (r.status === 'ok' ? 10 : r.status === 'warn' ? 5 : 0), 0);
   const score = Math.round((sum / (scored.length * 10)) * 100);
@@ -545,7 +587,7 @@ function scoreOf(results) {
   return { score, grade };
 }
 
-async function runChecks(page) {
+async function runChecks(page, deps) {
   const sync = [
     checkCertExpiry(page),
     checkHttpsRedirect(page),
@@ -554,7 +596,7 @@ async function runChecks(page) {
     checkCookies(page),
     checkMixedContent(page),
     checkCmsExposure(page),
-    checkPhpVersion(page),
+    await checkPhpVersionDeep(page, deps),
     checkExternalScripts(page),
   ];
   const jsLibs = await checkOldJsLibs(page);
@@ -576,4 +618,4 @@ async function runChecks(page) {
   return { results, counts, score, grade };
 }
 
-module.exports = { runChecks, checkPhpVersion, scoreOf };
+module.exports = { runChecks, checkPhpVersion, checkPhpVersionDeep, buildPhpResult, scoreOf };

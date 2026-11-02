@@ -120,7 +120,8 @@ function validateUrl(raw) {
  * 1ホップ分の取得。解決済みIPへ接続を固定する。
  * 戻り値: { status, headers, body, finalUrl, tls }
  */
-function fetchOneHop(u, pinnedIp, deadline) {
+function fetchOneHop(u, pinnedIp, deadline, maxBytes) {
+  const limit = maxBytes || MAX_BODY_BYTES; // 本文の上限(省略時は2MB)
   return new Promise((resolve, reject) => {
     const isHttps = u.protocol === 'https:';
     const lib = isHttps ? https : http;
@@ -163,15 +164,10 @@ function fetchOneHop(u, pinnedIp, deadline) {
       }
       const chunks = [];
       let total = 0;
-      res.on('data', (c) => {
-        total += c.length;
-        if (total > MAX_BODY_BYTES) {
-          res.destroy();
-          return;
-        }
-        chunks.push(c);
-      });
-      res.on('end', () => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
         resolve({
           status: res.statusCode,
           headers: res.headers,
@@ -179,7 +175,17 @@ function fetchOneHop(u, pinnedIp, deadline) {
           location: res.headers.location || null,
           tls,
         });
+      };
+      res.on('data', (c) => {
+        total += c.length;
+        if (total > limit) {
+          res.destroy(); // 上限を超えた分は読まない(それまでの分で結果を返す)
+          return;
+        }
+        chunks.push(c);
       });
+      res.on('end', finish);
+      res.on('close', finish);
       res.on('error', (e) => reject(Object.assign(e, { userSafe: false })));
     });
 
@@ -252,6 +258,48 @@ async function probeHttpRedirect(host, deps) {
   } catch (e) {
     return { result: 'unreachable', error: (e && e.message) || String(e) };
   }
+}
+
+/**
+ * PHP判定などの「追加の確認」用の受動的GET(公開URLへの通常のGETのみ)。
+ * 既存と同じURL検査・名前解決検査・IP固定を通す。リダイレクトは同一サイト内(www違い含む)のみ追う。
+ * 1回の通信ごとに 5秒タイムアウト・本文は先頭256KBまで。budget({left})を1通信ごとに減らし、尽きたら null を返す。
+ * 失敗・範囲外への転送は null(例外は投げない)。呼び出し側が最初の1回分は budget を減らしてから呼ぶ。
+ * 戻り値: { status, headers, body, finalUrl } | null
+ * deps(テスト用): { fetchOneHop, resolve }
+ */
+const PASSIVE_TIMEOUT_MS = 5000;
+const PASSIVE_MAX_BYTES = 256 * 1024;
+async function fetchPassive(raw, budget, deps) {
+  const d = deps || {};
+  const hop = d.fetchOneHop || fetchOneHop;
+  const resolve = d.resolve || resolveSafely;
+  let timer;
+  try {
+    let u = validateUrl(raw);
+    const baseHost = u.hostname;
+    for (let i = 0; i <= 2; i++) {
+      const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('タイムアウト')), PASSIVE_TIMEOUT_MS); });
+      let res;
+      try {
+        res = await Promise.race([(async () => {
+          const ip = await resolve(u.hostname);
+          return hop(u, ip, Date.now() + PASSIVE_TIMEOUT_MS, PASSIVE_MAX_BYTES);
+        })(), timeout]);
+      } finally { clearTimeout(timer); }
+      if (res.status >= 300 && res.status < 400 && res.location) {
+        const next = new URL(res.location, u);
+        next.hash = '';
+        if (!sameSiteHost(baseHost, next.hostname)) return null; // 別サイトへは行かない
+        if (!budget || budget.left <= 0) return null;
+        budget.left -= 1; // 転送先への通信も1回として数える
+        u = validateUrl(next.toString());
+        continue;
+      }
+      return { status: res.status, headers: res.headers, body: res.body, finalUrl: u.toString() };
+    }
+    return null;
+  } catch { return null; }
 }
 
 /**
@@ -344,4 +392,4 @@ async function fetchHead(raw, maxBytes = 4096, timeoutMs = 5000) {
   });
 }
 
-module.exports = { fetchHomepage, probeHttpRedirect, withHttpProbe, sameSiteHost, fetchHead, resolveSafely, isBlockedIp, validateUrl, USER_AGENT };
+module.exports = { fetchHomepage, fetchPassive, probeHttpRedirect, withHttpProbe, sameSiteHost, fetchHead, resolveSafely, isBlockedIp, validateUrl, USER_AGENT };

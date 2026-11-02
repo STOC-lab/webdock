@@ -285,6 +285,12 @@ function readDoneIds(file) {
   return set;
 }
 
+/** PHPの版を隠しているだけの要確認(noScore)か。点数に入れないので判定欄は「—」にする */
+function phpNoScore(rec) {
+  const r = (rec.results || []).find((x) => x.key === 'php');
+  return !!(r && r.noScore);
+}
+
 /** 表示されていたPHPの版(X.Y.Z)。判定が出ていなければ空 */
 function phpVerOf(rec) {
   const r = (rec.results || []).find((x) => x.key === 'php');
@@ -375,7 +381,7 @@ async function runBatch({ rows, scan, out, templates, concurrency = 5, templateM
     fs.appendFileSync(out, csvLine([
       row.store_id, row.name, row.prefecture, row.category, row.url, rec.domain, rec.grade, rec.score, ...items,
       rec.findingType, rec['指摘'], rec['困ること'], sendCell, rec.body, rec.error, rec.scannedAt, ...extra,
-      byKey.php ? JUDGE[byKey.php] : '', phpVerOf(rec),
+      byKey.php ? (phpNoScore(rec) ? '—' : JUDGE[byKey.php]) : '', phpVerOf(rec),
     ]));
     fs.appendFileSync(jsonl, JSON.stringify({
       store_id: row.store_id, name: row.name, prefecture: row.prefecture, category: row.category, url: row.url, domain: rec.domain,
