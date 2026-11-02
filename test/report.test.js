@@ -98,7 +98,8 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   ok(/@page\s*\{\s*size:\s*210mm 297mm/.test(html), '@pageがA4寸法(210mm 297mm)');
   ok(html.includes('すぐにご確認いただきたい項目') && html.includes('メール・ドメイン設定'), '区分見出し');
   ok(html.includes('問題が見つからなかった項目'), 'ok一覧');
-  ok(html.includes('0120-830-046') && html.includes('morisawa@stoc.co.jp') && html.includes('株式会社エストック 森澤'), 'フッター');
+  ok(!html.includes('エストック') && !html.includes('森澤') && !html.includes('morisawa@') && !html.includes('0120-830-046'), '差出人(社名・担当者・連絡先)を出さない(TOCと共用)');
+  ok(html.includes('本レポートをお届けした担当者'), 'フッターは汎用の問い合わせ文');
 
   // ---- ルートは合言葉が必要(本物のサーバーを一時起動。DBは使わない) ----
   const port = 39000 + Math.floor(Math.random() * 900);

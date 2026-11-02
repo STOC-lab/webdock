@@ -72,7 +72,6 @@
   <table class="meta">
     <tr><th>対象サイト</th><td><%= scan.domain %></td></tr>
     <tr><th>点検日</th><td><%= dateJa %></td></tr>
-    <tr><th>作成</th><td><%= sender.company %><% if (sender.name) { %> <%= sender.name %><% } %><% if (sender.tel) { %>(TEL <%= sender.tel %>)<% } %></td></tr>
   </table>
 
   <h2>点検の範囲</h2>
@@ -125,7 +124,7 @@
   <% } %>
 
   <div class="footer">
-    <p>ご不明点は <%= sender.company %> <%= surname %>(TEL<%= sender.tel %>／<%= sender.mail %>)まで。どの項目から対応すべきか、部分修正とリニューアルのどちらが適しているかのご相談も承ります(15分程度・お電話またはZoom)。</p>
+    <p>ご不明点は、本レポートをお届けした担当者までお問い合わせください。どの項目から対応すべきか、部分修正とリニューアルのどちらが適しているかのご相談も承ります(15分程度・お電話またはZoom)。</p>
   </div>
 </div>
 <script>
