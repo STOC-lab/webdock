@@ -16,7 +16,8 @@ const { PREFECTURES, routeByPrefecture, COMPANY_INFO } = require('./regions');
 const { registerAdminWarehouse } = require('./adminWarehouse');
 const { registerPages } = require('./pageRoutes');
 const { groupItems, buildRequestText, BUCKETS, BUCKET_ORDER, statusLabel } = require('./reportBuckets');
-const { loadTemplates, jstDateJa } = require('./outreach');
+const { jstDateJa } = require('./outreach');
+const { loadSenders, resolveSender } = require('./reportSender');
 
 const PORT = Number(process.env.PORT || 3020);
 const SERVICE_NAME = process.env.SERVICE_NAME || 'WEBドック';
@@ -201,15 +202,6 @@ const REPORT_TTL = 30 * 60 * 1000;
 function reportKey(input) {
   try { const u = new URL(input); return u.protocol + '//' + u.host.toLowerCase() + u.pathname; } catch { return input; }
 }
-function reportSender() {
-  try {
-    const c = loadTemplates().config || {};
-    return { company: c['差出人会社'] || '', name: c['担当者名'] || '', tel: c['電話'] || '', mail: c['返信先メールアドレス'] || '' };
-  } catch { return { company: '', name: '', tel: '', mail: '' }; }
-}
-// 担当者名は「森澤 梓」→ 苗字だけ(フッター用)
-function surnameOf(name) { return String(name || '').trim().split(/\s+/)[0]; }
-
 app.get('/sales/report', async (req, res) => {
   if (!salesAuthed(req)) return res.status(401).render('sales_login', { error: 'もう一度ログインしてください。' });
   let input = String(req.query.url || '').trim();
@@ -226,19 +218,22 @@ app.get('/sales/report', async (req, res) => {
       if (reportCache.size > 200) { for (const [k, v] of reportCache) if (Date.now() - v.at > REPORT_TTL) reportCache.delete(k); }
     }
     const company = String(req.query.company || '').trim().slice(0, 100);
-    res.render('report', reportViewModel(hit.scan, company, input));
+    res.render('report', reportViewModel(hit.scan, company, input, req.query));
   } catch (e) {
     const msg = e && e.userSafe ? e.message : '診断中にエラーが発生しました。URLをご確認ください。';
     res.status(400).render('sales', { error: msg });
   }
 });
 
-function reportViewModel(scan, company, input) {
+function reportViewModel(scan, company, input, query) {
   const g = groupItems(scan.results);
   const siteItems = [...g.urgent, ...g.partial, ...g.renewal];
-  const sender = reportSender();
+  const senders = loadSenders(); // 毎回読む(設定を後から編集しても再起動不要)
+  const r = resolveSender(senders, query);
   return {
-    scan, company, input, g, BUCKETS, BUCKET_ORDER, statusLabel, sender, surname: surnameOf(sender.name),
+    scan, company, input, g, BUCKETS, BUCKET_ORDER, statusLabel,
+    sender: r.sender, from: r.from, person: r.person, mail: r.mail,
+    senderOptions: Object.keys(senders).map((k) => ({ key: k, label: senders[k].label })),
     dateJa: jstDateJa(scan.scannedAt),
     siteRequest: buildRequestText(siteItems, 'site', company ? company + ' 御中' : ''),
     dnsRequest: buildRequestText(g.dns, 'dns', company ? company + ' 御中' : ''),

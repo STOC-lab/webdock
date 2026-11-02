@@ -5,6 +5,7 @@ const path = require('path');
 const ejs = require('ejs');
 const { spawn } = require('child_process');
 const R = require('../src/reportBuckets');
+const S = require('../src/reportSender');
 
 let pass = 0, fail = 0;
 function eq(a, b, msg) {
@@ -80,11 +81,10 @@ const scan = {
   ],
 };
 const g2 = R.groupItems(scan.results);
-const sender = { company: '株式会社エストック', name: '森澤 梓', tel: '0120-830-046', mail: 'morisawa@stoc.co.jp' };
 const evil = '<script>alert("x")</script>株式会社';
 const vm = {
   scan, company: evil, input: 'https://example.co.jp/?a="b"', g: g2, BUCKETS: R.BUCKETS, BUCKET_ORDER: R.BUCKET_ORDER, statusLabel: R.statusLabel,
-  sender, surname: '森澤', dateJa: '2026年10月25日',
+  sender: null, from: '', person: '', mail: '', senderOptions: [{ key: 'stoc', label: '株式会社エストック' }, { key: 'toc', label: '株式会社ティ・オー・シー' }], dateJa: '2026年10月25日',
   siteRequest: R.buildRequestText(g2.urgent, 'site', evil + ' 御中'), dnsRequest: R.buildRequestText(g2.dns, 'dns'),
 };
 ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err, html) => {
@@ -98,8 +98,47 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   ok(/@page\s*\{\s*size:\s*210mm 297mm/.test(html), '@pageがA4寸法(210mm 297mm)');
   ok(html.includes('すぐにご確認いただきたい項目') && html.includes('メール・ドメイン設定'), '区分見出し');
   ok(html.includes('問題が見つからなかった項目'), 'ok一覧');
-  ok(!html.includes('エストック') && !html.includes('森澤') && !html.includes('morisawa@') && !html.includes('0120-830-046'), '差出人(社名・担当者・連絡先)を出さない(TOCと共用)');
+  ok(!html.includes('ティ・オー・シー</td>') && !html.includes('<th>作成</th>') && !html.includes('morisawa@') && !html.includes('山田'), 'from なしは作成行・担当者を出さない');
+  ok(!html.includes('TEL 0120'), 'from なしは電話を出さない');
   ok(html.includes('本レポートをお届けした担当者'), 'フッターは汎用の問い合わせ文');
+
+  // ---- 作成元の選択(設定・検証・描画) ----
+  const senders = S.loadSenders();
+  ok(senders.stoc && senders.toc, '設定ファイルから stoc / toc を読む');
+  eq(S.loadSenders('/nonexistent/x.json'), {}, '設定読み込み失敗は空扱い');
+  const bad = path.join(require('os').tmpdir(), 'report-senders-bad-' + process.pid + '.json');
+  fs.writeFileSync(bad, '{壊れたJSON'); eq(S.loadSenders(bad), {}, '壊れた設定は空扱い'); fs.unlinkSync(bad);
+  const render = (q) => new Promise((resolve, reject) => {
+    const r = S.resolveSender(senders, q);
+    ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), {
+      ...vm, company: q.company || '', input: q.url || 'https://example.co.jp/',
+      sender: r.sender, from: r.from, person: r.person, mail: r.mail,
+      senderOptions: Object.keys(senders).map((k) => ({ key: k, label: senders[k].label })),
+    }, (e, h) => (e ? reject(e) : resolve(h)));
+  });
+  const h1 = await render({ from: 'toc', person: '山田 太郎', mail: 'a@b.jp' });
+  ok(h1.includes('<th>作成</th><td>株式会社ティ・オー・シー 山田 太郎(TEL 0120-830-046)</td>'), '作成行(会社・担当者・電話)');
+  ok(h1.includes('ご不明点は 株式会社ティ・オー・シー 山田(TEL 0120-830-046／メール a@b.jp)まで。'), 'フッター(姓・電話・メール)');
+  ok(!h1.includes('本レポートをお届けした担当者'), '汎用フッターは出ない');
+  const h2 = await render({ from: 'stoc' });
+  ok(h2.includes('<td>株式会社エストック(TEL 0120-830-046)</td>'), '担当者なしは担当者を省く');
+  ok(h2.includes('ご不明点は 株式会社エストック(TEL 0120-830-046)まで。'), 'フッター: 担当者・メールを省く');
+  ok(!h2.includes('／メール'), 'メールなしは「／メール」を省く');
+  const h3 = await render({ from: 'evil', person: '山田', mail: 'a@b.jp' });
+  ok(!h3.includes('<th>作成</th>') && !h3.includes('TEL 0120') && h3.includes('本レポートをお届けした担当者'), '不正な from は無視');
+  const h3b = await render({ from: '__proto__', person: '山田' });
+  ok(!h3b.includes('<th>作成</th>'), '__proto__ は無視');
+  const h4 = await render({ from: 'toc', person: '<b>山田</b>', mail: 'x"><script>@b.jp' });
+  ok(!h4.includes('<b>山田</b>') && h4.includes('&lt;b&gt;山田&lt;/b&gt;'), '担当者名エスケープ');
+  ok(!h4.includes('<script>@b.jp') && !h4.includes('／メール'), '不正なメールは無視');
+  eq(S.resolveSender(senders, { from: 'toc', person: 'あ'.repeat(60) }).person.length, 40, '担当者名は40文字まで');
+  eq(S.resolveSender(senders, { from: 'toc', mail: 'a'.repeat(96) + '@b.jp' }).mail, '', 'メールは100文字まで');
+  eq(S.resolveSender(senders, { from: 'toc', mail: 'abc' }).mail, '', 'メール形式チェック');
+  const h5 = await render({ from: 'toc', person: '山田 太郎', mail: 'a@b.jp', url: 'https://example.co.jp/?a=1', company: '株式会社甲' });
+  ok(/<select name="from">[\s\S]*<option value="toc" selected>株式会社ティ・オー・シー<\/option>/.test(h5), 'フォームが from を保持');
+  ok(h5.includes('name="person" value="山田 太郎"') && h5.includes('name="mail" type="email" value="a@b.jp"'), 'フォームが person / mail を保持');
+  ok(h5.includes('name="url" value="https://example.co.jp/?a=1"') && h5.includes('name="company" value="株式会社甲"'), 'フォームが url / company を保持');
+  ok(/<option value="" selected>なし<\/option>/.test(await render({})) || !/<option value="[a-z]+" selected>/.test(await render({})), '初期値は「なし」');
 
   // ---- ルートは合言葉が必要(本物のサーバーを一時起動。DBは使わない) ----
   const port = 39000 + Math.floor(Math.random() * 900);
