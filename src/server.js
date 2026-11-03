@@ -153,20 +153,29 @@ app.get('/karte/:id', async (req, res) => {
 // ===== 営業・商談版 =====
 
 // 入口(未認証ならPIN入力、認証済みならURL入力画面)
+// ?url= で渡されたURLを検証(http/httpsのみ・長さ制限)。不正なら空文字
+function cleanPrefillUrl(v) {
+  if (typeof v !== 'string') return '';
+  const t = v.trim();
+  if (!t || t.length > 2000 || /[\u0000-\u001f\u007f\s]/.test(t)) return '';
+  try { const u = new URL(t); return (u.protocol === 'http:' || u.protocol === 'https:') ? t : ''; } catch { return ''; }
+}
 app.get('/sales', (req, res) => {
-  if (!salesAuthed(req)) return res.render('sales_login', { error: null });
-  res.render('sales', { error: null });
+  const prefill = cleanPrefillUrl(req.query.url);
+  if (!salesAuthed(req)) return res.render('sales_login', { error: null, prefill });
+  res.render('sales', { error: null, prefill });
 });
 
 // 合言葉の照合
 app.post('/sales/login', (req, res) => {
   const pin = (req.body.pin || '').trim();
   if (pin !== SALES_PIN) {
-    return res.status(401).render('sales_login', { error: '合言葉が違います。' });
+    return res.status(401).render('sales_login', { error: '合言葉が違います。', prefill: cleanPrefillUrl(req.body.prefill) });
   }
   // 署名付きクッキーを発行(12時間)
   res.setHeader('Set-Cookie', `sales_auth=${SALES_COOKIE}; HttpOnly; SameSite=Lax; Max-Age=43200; Path=/sales`);
-  res.redirect('/sales');
+  const pf = cleanPrefillUrl(req.body.prefill);
+  res.redirect(pf ? '/sales?url=' + encodeURIComponent(pf) : '/sales');
 });
 
 app.get('/sales/logout', (req, res) => {
