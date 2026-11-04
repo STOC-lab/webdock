@@ -84,7 +84,7 @@ const g2 = R.groupItems(scan.results);
 const evil = '<script>alert("x")</script>株式会社';
 const vm = {
   scan, company: evil, input: 'https://example.co.jp/?a="b"', g: g2, BUCKETS: R.BUCKETS, BUCKET_ORDER: R.BUCKET_ORDER, statusLabel: R.statusLabel,
-  sender: null, from: '', person: '', mail: '', req: true, guideFor: R.guideFor, proposal: null, senderOptions: [{ key: 'stoc', label: '株式会社エストック' }, { key: 'toc', label: '株式会社ティ・オー・シー' }], dateJa: '2026年10月25日',
+  sender: null, from: '', person: '', mail: '', req: true, guideFor: R.guideFor, proposal: null, senderOptions: [{ key: 'stoc', label: 'STOC' }, { key: 'toc', label: 'TOC本社' }], dateJa: '2026年10月25日',
   siteRequest: R.buildRequestText(g2.urgent, 'site', evil + ' 御中'), dnsRequest: R.buildRequestText(g2.dns, 'dns'),
 };
 ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err, html) => {
@@ -121,8 +121,8 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
     }, (e, h) => (e ? reject(e) : resolve(h)));
   });
   const h1 = await render({ from: 'toc', person: '山田 太郎', mail: 'a@b.jp' });
-  ok(h1.includes('<th>作成</th><td>株式会社ティ・オー・シー 山田 太郎(TEL 0120-005-486)</td>'), '作成行(会社・担当者・電話)');
-  ok(h1.includes('ご不明点は 株式会社ティ・オー・シー 山田(TEL 0120-005-486／メール a@b.jp)まで。'), 'フッター(姓・電話・メール)');
+  ok(h1.includes('<th>作成</th><td>株式会社ティ・オー・シー 本社 山田 太郎(TEL 0120-005-486)</td>'), '作成行(会社・担当者・電話)');
+  ok(h1.includes('ご不明点は 株式会社ティ・オー・シー 本社 山田(TEL 0120-005-486／メール a@b.jp)まで。'), 'フッター(姓・電話・メール)');
   ok(!h1.includes('本レポートをお届けした担当者'), '汎用フッターは出ない');
   const h2 = await render({ from: 'stoc' });
   ok(h2.includes('<td>株式会社エストック(TEL 0120-830-046)</td>'), '担当者なしは担当者を省く');
@@ -139,10 +139,30 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   eq(S.resolveSender(senders, { from: 'toc', mail: 'a'.repeat(96) + '@b.jp' }).mail, '', 'メールは100文字まで');
   eq(S.resolveSender(senders, { from: 'toc', mail: 'abc' }).mail, '', 'メール形式チェック');
   const h5 = await render({ from: 'toc', person: '山田 太郎', mail: 'a@b.jp', url: 'https://example.co.jp/?a=1', company: '株式会社甲' });
-  ok(/<select name="from">[\s\S]*<option value="toc" selected>株式会社ティ・オー・シー<\/option>/.test(h5), 'フォームが from を保持');
+  ok(/<select name="from">[\s\S]*<option value="toc" selected>TOC本社<\/option>/.test(h5), 'フォームが from を保持');
   ok(h5.includes('name="person" value="山田 太郎"') && h5.includes('name="mail" type="email" value="a@b.jp"'), 'フォームが person / mail を保持');
   ok(h5.includes('name="url" value="https://example.co.jp/?a=1"') && h5.includes('name="company" value="株式会社甲"'), 'フォームが url / company を保持');
   ok(/<option value="" selected>なし<\/option>/.test(await render({})) || !/<option value="[a-z]+" selected>/.test(await render({})), '初期値は「なし」');
+
+  // ---- 作成元4種・総合点 ----
+  eq(Object.keys(senders), ['stoc', 'toc', 'toc_kobe', 'toc_osaka'], '作成元は4つ・順序固定');
+  const hs = await render({});
+  const opts = [...hs.matchAll(/<option value="([a-z_]*)"[^>]*>([^<]*)<\/option>/g)].map((m) => m[1] + ':' + m[2]);
+  eq(opts.slice(0, 5), [':なし', 'stoc:STOC', 'toc:TOC本社', 'toc_kobe:TOC神戸', 'toc_osaka:TOC大阪'], '選択肢が順に並ぶ');
+  ok((await render({ from: 'toc_kobe' })).includes('株式会社ティ・オー・シー 神戸(TEL 0120-840-730)'), 'toc_kobe の電話');
+  ok((await render({ from: 'toc_osaka' })).includes('株式会社ティ・オー・シー 大阪(TEL 0120-005-486)'), 'toc_osaka の電話');
+  ok((await render({ from: 'toc' })).includes('<td>株式会社ティ・オー・シー 本社(TEL 0120-005-486)</td>'), 'toc は本社');
+  const renderScan = (extra) => new Promise((resolve, reject) => ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), { ...vm, scan: { ...scan, ...extra } }, (e, h) => (e ? reject(e) : resolve(h))));
+  const NOTE = '総合点は、外から確認できた項目の結果をもとにした目安です';
+  const hs1 = await renderScan({ score: 62, grade: 'C' });
+  ok(hs1.includes('<tr><th>総合点</th><td><strong>62点</strong> / 100点(判定 C)</td></tr>'), '総合点の行');
+  ok(hs1.indexOf('<th>点検日</th>') < hs1.indexOf('<th>総合点</th>'), '総合点は点検日の次');
+  ok(hs1.includes(NOTE), '総合点の注記');
+  const hs2 = await renderScan({ score: 62 });
+  ok(hs2.includes('<strong>62点</strong> / 100点</td>') && !hs2.includes('判定'), 'grade なしは判定を省く');
+  const hs3 = await renderScan({ score: null, grade: '—' });
+  ok(!hs3.includes('<th>総合点</th>') && !hs3.includes(NOTE), 'score null は行も注記も出さない');
+  ok(!(await renderScan({})).includes('<th>総合点</th>'), 'score undefined は行を出さない');
 
   // ---- 確認依頼文の ON/OFF(直接営業モード) ----
   eq(R.resolveReq({}, ''), true, 'req初期値: 作成元なしはON');

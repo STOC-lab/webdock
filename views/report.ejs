@@ -80,8 +80,10 @@
   <table class="meta">
     <tr><th>対象サイト</th><td><%= scan.domain %></td></tr>
     <tr><th>点検日</th><td><%= dateJa %></td></tr>
+    <% if (scan.score != null) { %><tr><th>総合点</th><td><strong><%= scan.score %>点</strong> / 100点<%= scan.grade ? '(判定 ' + scan.grade + ')' : '' %></td></tr><% } %>
     <% if (sender) { %><tr><th>作成</th><td><%= sender.company %><%= sender.person ? ' ' + sender.person : '' %>(TEL <%= sender.tel %>)</td></tr><% } %>
   </table>
+  <% if (scan.score != null) { %><p class="note">総合点は、外から確認できた項目の結果をもとにした目安です(版が確認できない項目などは点数に含めていません)。</p><% } %>
 
   <h2>点検の範囲</h2>
   <p>本レポートは、どなたでも閲覧できる<strong>公開情報の範囲</strong>で、ホームページの設定状況を確認したものです。ログイン、サーバーへの侵入、負荷をかける検査は一切行っていません。結果は<strong>点検時点のもの</strong>であり、その後の設定変更により変わる場合があります。</p>
