@@ -149,8 +149,8 @@ ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), vm, async (err
   const hs = await render({});
   const opts = [...hs.matchAll(/<option value="([a-z_]*)"[^>]*>([^<]*)<\/option>/g)].map((m) => m[1] + ':' + m[2]);
   eq(opts.slice(0, 5), [':なし', 'stoc:STOC', 'toc:TOC本社', 'toc_kobe:TOC神戸', 'toc_osaka:TOC大阪'], '選択肢が順に並ぶ');
-  ok((await render({ from: 'toc_kobe' })).includes('株式会社ティ・オー・シー 神戸(TEL 0120-840-730)'), 'toc_kobe の電話');
-  ok((await render({ from: 'toc_osaka' })).includes('株式会社ティ・オー・シー 大阪(TEL 0120-005-486)'), 'toc_osaka の電話');
+  ok((await render({ from: 'toc_kobe' })).includes('株式会社ティ・オー・シー 神戸支店(TEL 0120-840-730)'), 'toc_kobe の電話');
+  ok((await render({ from: 'toc_osaka' })).includes('株式会社ティ・オー・シー 大阪支店(TEL 0120-005-486)'), 'toc_osaka の電話');
   ok((await render({ from: 'toc' })).includes('<td>株式会社ティ・オー・シー 本社(TEL 0120-005-486)</td>'), 'toc は本社');
   const renderScan = (extra) => new Promise((resolve, reject) => ejs.renderFile(path.join(__dirname, '..', 'views', 'report.ejs'), { ...vm, scan: { ...scan, ...extra } }, (e, h) => (e ? reject(e) : resolve(h))));
   const NOTE = '総合点は、外から確認できた項目の結果をもとにした目安です';
