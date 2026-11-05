@@ -757,21 +757,22 @@ function registerAdminWarehouse(app, deps = {}) {
   router.post('/replace/promote.csv', wrap(async (req, res) => {
     const parsed = replaceCand.parseQuery(req.body);
     if (parsed.error) return res.status(400).type('text/plain').send(parsed.error);
-    const { HEADERS, rowToCsv } = require('../cli/warehouse-promote');
+    const { HEADERS, rowToCsv, isNoPhone } = require('../cli/warehouse-promote');
     const wh = require('./warehouse');
     const mark = ['1', 'on', 'true'].includes(String(Array.isArray(req.body.mark) ? req.body.mark[req.body.mark.length - 1] : req.body.mark || '').toLowerCase());
     const ids = [];
+    let noPhone = 0; // 電話番号なしで除外した件数(固定条件。出力せず promoted_at も付けない)
     const chunks = [wh.encodeShiftJis(HEADERS.map((h) => h).join(',') + '\r\n')];
     try {
       await replaceStore.each(parsed.opts, async (rows) => {
-        chunks.push(wh.encodeShiftJis(rows.map((r) => { ids.push(r.id); return rowToCsv(r); }).join('')));
+        chunks.push(wh.encodeShiftJis(rows.map((r) => { if (isNoPhone(r.phone)) { noPhone++; return ''; } ids.push(r.id); return rowToCsv(r); }).join('')));
       }, { onlyNotInStoc: true });
       if (mark && ids.length) await replaceStore.mark(ids);
     } catch (e) {
       console.error('[admin] replace promote csv error:', e && e.message);
       return res.status(500).type('text/plain').send('CSVを作れませんでした。');
     }
-    res.set({ 'Content-Type': 'text/csv; charset=Shift_JIS', 'Content-Disposition': `attachment; filename="replace_promote_${stamp(now())}.csv"` });
+    res.set({ 'Content-Type': 'text/csv; charset=Shift_JIS', 'Content-Disposition': `attachment; filename="replace_promote_${stamp(now())}.csv"`, 'X-Excluded-No-Phone': String(noPhone) });
     res.send(Buffer.concat(chunks));
   }));
 

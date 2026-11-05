@@ -11,6 +11,7 @@
  * --exclude-large は size_class='large'(従業員が多い会社)を外す(未調査・不明は残す)。--small-only は size_class='small' だけ。
  * 除外ルール(rules/<名前>.json、cli/warehouse-rules.js で作成)は書き出し時にJSで適用する(倉庫には全件残る)。
  * --limit は ルール除外・電話番号重複除去のあとの件数。--report-only はCSVを書かず件数だけ表示。
+ * 電話番号が空(NULL・空・ハイフン/空白だけ)の行は、常に除外する(固定条件。倉庫には残し、promoted_at も付けない)。
  * 対象: stoc_store_id IS NULL(営業アプリに未登録)かつ promoted_at IS NULL(未出力)
  */
 
@@ -109,6 +110,8 @@ function loadRules(name) {
 }
 
 const normPhone = (p) => String(p || '').replace(/\D/g, '');
+/** 電話なし(NULL・空・ハイフン/空白だけ)。出力から必ず外す固定条件(--rules/--no-rules に関係しない) */
+const isNoPhone = (p) => p === null || p === undefined || /^[\s\u3000\-\u2010-\u2015\u2212\u30fc\uff0d\uff70]*$/.test(String(p));
 const PAGE = 5000;
 
 /**
@@ -119,7 +122,7 @@ async function selectRows(pool, o, rules, log) {
   const { sql, params } = buildQuery(o);
   const check = rules ? compileRules(rules) : null;
   const dedupe = o.dedupePhone === undefined ? !!(rules && (rules.dedupeColumns || []).includes('電話番号')) : o.dedupePhone;
-  const st = { withForm: 0, scanned: 0, excluded: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null, sizeExcluded: null, noSalesExcluded: null };
+  const st = { withForm: 0, scanned: 0, excluded: 0, noPhone: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null, sizeExcluded: null, noSalesExcluded: null };
   if (o.excludeLarge || o.smallOnly) {
     try {
       const c = buildSizeExcludedCountQuery(o);
@@ -140,6 +143,7 @@ async function selectRows(pool, o, rules, log) {
     const [rows] = await pool.query(sql + ' LIMIT ? OFFSET ?', [...params, PAGE, off]);
     for (const r of rows) {
       st.scanned++;
+      if (isNoPhone(r.phone)) { st.noPhone++; continue; }
       if (check) {
         const hit = check(r);
         if (hit) {
@@ -171,6 +175,7 @@ function printStats(st, log = console.error) {
   log(`走査した行: ${st.scanned}`);
   if (st.sizeExcluded !== null && st.sizeExcluded !== undefined) log(`会社規模で除外: ${st.sizeExcluded}(ルール除外の前の件数)`);
   if (st.noSalesExcluded !== null && st.noSalesExcluded !== undefined) log(`営業お断りで除外: ${st.noSalesExcluded}(ルール除外の前の件数)`);
+  log(`電話番号なしで除外: ${st.noPhone}件`);
   log(`ルールで除外: ${st.excluded}`);
   const top = [...st.byKeyword.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
   for (const [k, n] of top) log(`  ${k} : ${n}`);
@@ -224,4 +229,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { parseArgs, buildQuery, buildSizeExcludedCountQuery, buildNoSalesExcludedCountQuery, printStats, loadRules, selectRows, rowToCsv, HEADERS };
+module.exports = { parseArgs, buildQuery, buildSizeExcludedCountQuery, buildNoSalesExcludedCountQuery, printStats, loadRules, selectRows, rowToCsv, isNoPhone, HEADERS };
