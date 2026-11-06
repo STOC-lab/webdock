@@ -303,11 +303,39 @@ async function fetchPassive(raw, budget, deps) {
 }
 
 /**
- * 診断開始URLがhttpsで、fetchHomepage が http→https 転送を観測していないときだけ、
- * 最終ホストに対して probeHttpRedirect を実行して page.httpProbe に入れる。page を返す。
+ * 診断の前処理。
+ * 1) page.finalUrl が http: のとき、同じホスト・パス+クエリで https:// を1回取得して昇格を試みる。
+ *    成功(例外なし・最終URLが https: で同一サイト・ステータス 200〜399)なら https 側の page を返し、
+ *    元の http 応答は page.httpProbe(serves_http)に退避する(probe は呼ばない)。
+ *    失敗なら元の page を返し、理由を page.httpsUpgradeError に入れる。
+ * 2) 診断開始URLがhttpsで、fetchHomepage が http→https 転送を観測していないときだけ、
+ *    最終ホストに対して probeHttpRedirect を実行して page.httpProbe に入れる。
+ * deps.fetchHomepage で取得関数を差し替え可能(テスト用)。
  */
-async function withHttpProbe(page, probe) {
+async function withHttpProbe(page, probe, deps) {
   try {
+    if (page && /^http:/i.test(page.finalUrl || '') && !page.httpToHttps) {
+      const orig = new URL(page.finalUrl);
+      const target = new URL(orig.toString());
+      target.protocol = 'https:';
+      target.port = ''; // http のポート指定は https に持ち越さない
+      target.hash = '';
+      const fetcher = (deps && deps.fetchHomepage) || fetchHomepage;
+      try {
+        const up = await fetcher(target.toString());
+        const fin = up && up.finalUrl ? new URL(up.finalUrl) : null;
+        if (!fin || fin.protocol !== 'https:') throw new Error('https のページに到達できませんでした');
+        if (!sameSiteHost(orig.hostname, fin.hostname)) throw new Error('別のサイトへ転送されました');
+        if (!(up.status >= 200 && up.status < 400)) throw new Error(`HTTP ${up.status} が返りました`);
+        up.httpProbe = { result: 'serves_http', status: page.status, chain: page.redirectChain };
+        up.upgradedFromHttp = true;
+        up.originalHttpUrl = page.finalUrl;
+        return up;
+      } catch (e) {
+        page.httpsUpgradeError = String((e && e.message) || e).slice(0, 80);
+        return page;
+      }
+    }
     if (page && !page.httpToHttps && /^https:/i.test(page.finalUrl || '')) {
       page.httpProbe = await (probe || probeHttpRedirect)(new URL(page.finalUrl).hostname);
     }
