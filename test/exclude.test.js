@@ -158,7 +158,7 @@ const ok = (c, msg) => eq(!!c, true, msg);
   ok(!u0.includes('site_host'), '取り込み: 列なしなら従来のSQL');
   const u1 = upsertSql(2, true, true);
   ok(u1.includes(',site_host,first_seen_at') && (u1.match(/\(\?(,\?)*,NOW\(\),NOW\(\)\)/g) || []).every((x) => (x.match(/\?/g) || []).length === 22), '取り込み: site_host を列に追加(行ごとに22個)');
-  ok(u1.indexOf('site_host = IF(website_url IS NULL') > 0 && u1.indexOf('site_host = IF(website_url IS NULL') < u1.indexOf('website_url = IF('), '取り込み: site_host の更新は website_url の更新より前');
+  ok(u1.indexOf('site_host = IF(') > 0 && u1.indexOf('site_host = IF(') < u1.indexOf('website_url = IF('), '取り込み: site_host の更新は website_url の更新より前');
 
   // まとめ.txt に診断前の除外が出る
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'excl-'));

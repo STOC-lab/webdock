@@ -119,19 +119,39 @@ const COLS = ['cid', 'fallback_key', 'name', 'category', 'category_main', 'posta
 const clip = (v, n) => (typeof v === 'string' && v.length > n ? v.slice(0, n) : v);
 const LIMITS = { cid: 20, name: 255, category: 500, category_main: 100, business_status: 50, postal: 10, address_raw: 500, address: 500, prefecture: 10, phone: 30, gbp_registered: 10, website_url: 1000, gmap_url: 1000, place_id: 100, source_file: 300 };
 const fillIfEmpty = (c) => `${c} = IF(${c} IS NULL OR ${c} = '', VALUES(${c}), ${c})`;
+
+/**
+ * 取り込みで既存の同じ店に当たったときの website_url の残し方(SQL と JS で同じ判定)。
+ *   1. 既存が空(NULL/'')                         → 取り込む値(取り込む値も空なら空のまま)
+ *   2. 既存が http:// で、取り込む値が https://  → 取り込む値に置き換え(ホストが違っても置き換える)
+ *   3. それ以外                                   → 既存を残す(手入力で直した可能性があるため)
+ *      (既存https×取り込みhttp、両方httpsで異なる、取り込みが空、両方httpで異なる 等)
+ * 判定は大文字小文字を無視し、前後空白を除いて 'http://' / 'https://' で始まるかで見る。
+ * websiteReplaceCond() が SQL 側、pickWebsiteUrl() が JS 側。必ず同じ結果になるようにすること(test/importurl.test.js)。
+ */
+const WEBSITE_REPLACE_COND = "((website_url IS NULL OR website_url = '') OR (LOWER(TRIM(website_url)) LIKE 'http://%' AND LOWER(TRIM(VALUES(website_url))) LIKE 'https://%'))";
+const websiteReplaceCond = () => WEBSITE_REPLACE_COND;
+const urlScheme = (u) => { const t = String(u ?? '').trim().toLowerCase(); return t.startsWith('http://') ? 'http' : t.startsWith('https://') ? 'https' : ''; };
+function pickWebsiteUrl(existing, incoming) {
+  if (existing === null || existing === undefined || existing === '') return incoming === undefined ? null : incoming;
+  if (urlScheme(existing) === 'http' && urlScheme(incoming) === 'https') return incoming;
+  return existing;
+}
 const newer = (c) => `${c} = COALESCE(VALUES(${c}), ${c})`;
 
 /** hasSiteHost=true(sql/warehouse_migrate_005.sql 適用済み)なら site_host 列も入れる */
 function upsertSql(n, hasBs, hasSiteHost = false) {
   const cols = hasSiteHost ? [...COLS, 'site_host'] : COLS;
   const ph = '(' + cols.map(() => '?').join(',') + ',NOW(),NOW())';
-  // site_host は website_url と一緒に動かす: 既存の website_url が空のときだけ新しい値を入れる(この代入は website_url の更新より前に書くこと)
-  const siteHost = hasSiteHost ? "site_host = IF(website_url IS NULL OR website_url = '', VALUES(site_host), site_host),\n  " : '';
+  // site_host は website_url と一緒に動かす: website_url が置き換わるときだけ新しい値を入れる(この代入は website_url の更新より前に書くこと)
+  // 置き換え条件は website_url と同じ(websiteReplaceCond)。
+  const siteHost = hasSiteHost ? `site_host = IF(${websiteReplaceCond()}, VALUES(site_host), site_host),\n  ` : '';
   return `INSERT INTO stoc_master.shops (${cols.join(',')},first_seen_at,last_seen_at) VALUES ${Array(n).fill(ph).join(',')}
 ON DUPLICATE KEY UPDATE last_seen_at = NOW(),
   ${siteHost}  ${newer('rating')}, ${newer('review_count')}, ${newer('photo_count')}, ${newer('lat')}, ${newer('lng')},
   ${hasBs ? 'business_status = VALUES(business_status)' : 'business_status = business_status'},
-  ${['website_url', 'phone', 'category', 'category_main', 'postal', 'address_raw', 'address', 'prefecture', 'place_id', 'gmap_url', 'gbp_registered'].map(fillIfEmpty).join(',\n  ')}`;
+  website_url = IF(${websiteReplaceCond()}, VALUES(website_url), website_url),
+  ${['phone', 'category', 'category_main', 'postal', 'address_raw', 'address', 'prefecture', 'place_id', 'gmap_url', 'gbp_registered'].map(fillIfEmpty).join(',\n  ')}`;
 }
 
 const sameNum = (a, b) => (a === null || a === undefined ? null : Number(a)) === (b === null || b === undefined ? null : Number(b));
@@ -374,4 +394,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { upsertBatch, planHistory, parseArgs, walk, globToRegExp, processFile, upsertSql, linkStep, carryFormsStep, makePool };
+module.exports = { upsertBatch, planHistory, parseArgs, walk, globToRegExp, processFile, upsertSql, websiteReplaceCond, pickWebsiteUrl, linkStep, carryFormsStep, makePool };
