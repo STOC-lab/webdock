@@ -38,6 +38,7 @@
     "test:replace": "node test/replace.test.js",
     "test:scoresync": "node test/scoresync.test.js",
     "test:importurl": "node test/importurl.test.js",
+    "test:meorank": "node test/meorank.test.js",
     "test:httpsupgrade": "node test/httpsupgrade.test.js",
     "score-scan": "node cli/score-scan.js",
     "metrics-baseline": "node cli/metrics-baseline.js"

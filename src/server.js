@@ -18,6 +18,7 @@ const { registerPages } = require('./pageRoutes');
 const { groupItems, buildRequestText, resolveReq, guideFor, buildProposal, BUCKETS, BUCKET_ORDER, statusLabel } = require('./reportBuckets');
 const { jstDateJa } = require('./outreach');
 const { loadSenders, resolveSender } = require('./reportSender');
+const meo = require('./meoRank');
 
 const PORT = Number(process.env.PORT || 3020);
 const SERVICE_NAME = process.env.SERVICE_NAME || 'WEBドック';
@@ -198,10 +199,36 @@ app.post('/sales/scan', async (req, res) => {
     };
     // 記録は残す(営業現地診断)。失敗しても画面は出す。
     try { await db.saveScan({ ...scan, source: 'sales', ip }); } catch (e) { console.error('sales saveScan:', e.message); }
-    res.render('sales_result', { scan, items: sortBySeverity(results), companyInfo: COMPANY_INFO, inputUrl: input });
+    res.render('sales_result', { scan, items: sortBySeverity(results), companyInfo: COMPANY_INFO, inputUrl: input, meoHasKey: !!process.env.GOOGLE_PLACES_API_KEY, meoNoKeyMessage: meo.NO_KEY_MESSAGE });
   } catch (e) {
     const msg = e && e.userSafe ? e.message : '診断中にエラーが発生しました。URLをご確認ください。';
     res.status(400).render('sales', { error: msg });
+  }
+});
+
+// ---- MEO順位(Googleマップ)。営業ログイン必須(/sales と同じ合言葉クッキー)----
+const jsonBody = express.json({ limit: '10kb' });
+app.post('/sales/meo-keywords', jsonBody, (req, res) => {
+  if (!salesAuthed(req)) return res.status(401).json({ error: 'もう一度ログインしてください。' });
+  const b = req.body || {};
+  res.json({ keywords: meo.suggestKeywords({ address: String(b.address || ''), category: String(b.category || '') }) });
+});
+app.post('/sales/meo-rank', jsonBody, async (req, res) => {
+  if (!salesAuthed(req)) return res.status(401).json({ error: 'もう一度ログインしてください。' });
+  if (!process.env.GOOGLE_PLACES_API_KEY) return res.json({ placeId: null, noKey: true, error: meo.NO_KEY_MESSAGE });
+  const b = req.body || {};
+  const name = String(b.name || '').trim().slice(0, 100);
+  const address = String(b.address || '').trim().slice(0, 200);
+  const keywords = (Array.isArray(b.keywords) ? b.keywords : []).map((k) => String(k || '').trim().slice(0, 60)).filter(Boolean).slice(0, 3);
+  if (!name) return res.status(400).json({ error: '店名を入力してください。' });
+  if (!keywords.length) return res.status(400).json({ error: 'キーワードを1つ以上入力してください。' });
+  // 連打防止(同じ営業ユーザー=同じ接続元で5秒以内の再実行は拒否)
+  if (meo.tooSoon('meo:' + clientIp(req))) return res.status(429).json({ error: '続けて調べられません。5秒ほど待ってからもう一度お試しください。' });
+  try {
+    res.json(await meo.checkRanks({ name, address, keywords }));
+  } catch (e) {
+    console.error('meo-rank:', e && e.message);
+    res.status(502).json({ error: 'Googleマップの順位を取得できませんでした。しばらくしてからお試しください。' });
   }
 });
 

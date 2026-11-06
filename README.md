@@ -661,3 +661,16 @@ node cli/gbp-debug.js --jsonl exports/phone_list_xxxx.csv.jsonl --limit 5
 ```
 
 開いたURL・最終URL・確認画面か・見つけた見出し・抽出結果・判定に使った前後の文字列を表示し、`/tmp/gbp-debug/<cid>.png`(スクリーンショット)と `<cid>.txt`(画面の本文全部)を保存します。見出しや「n 週間前」の位置が違っていたら、`src/gbpActivity.js` 先頭のキーワード配列(`OWNER_REPLY_KEYWORDS` / `POST_HEADINGS` / `REVIEW_HEADINGS` など)に文言を足してください。jsonl に `cid` / `placeId` / `gmapUrl` を記録するので、`--jsonl` で実際の対象店舗をそのまま試せます(`--headed` でブラウザを見ながら確認することもできます)。
+
+
+## MEO順位(Googleマップでの表示順位)
+
+営業画面(診断結果)の「MEO順位(Googleマップ)」欄で、店名・住所・業種から3キーワードぶんの順位(60位以内)を調べます。Google公式の Places API (New) の Text Search を「IDのみ」(フィールドマスク `places.id,nextPageToken` 固定)で使うので、この区分は無料・無制限です。`src/meoRank.js` のフィールドマスクは変更しないでください(増やすと有料になります)。
+
+設定:
+1. Google Cloud でプロジェクトを作り、「Places API (New)」を有効化します。
+2. APIキーを作り、「APIの制限」を **Places API (New) のみ** にします(可能ならサーバーのIPでも制限)。
+3. 念のため、予算アラートと上限(割り当て)を設定しておきます。
+4. `.env` に `GOOGLE_PLACES_API_KEY=<キー>` を追記し、`pm2 restart webdock --update-env`。
+
+キー未設定のときは、この欄に「管理者がGoogleのAPIキーを設定してください」と出るだけで、ほかの機能は普通に動きます。1回の調査でAPI呼び出しは最大10回(店舗特定1回+キーワード3つ×最大3ページ)。結果は24時間メモリにキャッシュし、同じ接続元からの5秒以内の再実行は断ります。テスト: `npm run test:meorank`。

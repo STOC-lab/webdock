@@ -245,3 +245,13 @@ code{background:#eef2f8;padding:2px 6px;border-radius:5px;font-size:13px}
 .item-analogy span,.item-scenario span{display:block}
 .pg-list .item-analogy,.pg-list .item-scenario{font-size:14px}
 @media print{.item-analogy,.item-scenario{break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+
+/* MEO順位(営業画面) */
+.meo-box{margin:20px 0;padding:16px;border:1px solid #cdd8ea;border-radius:10px;background:#fff}
+.meo-title{font-size:17px;margin:0 0 10px}
+.meo-form label{display:block;font-size:14px;font-weight:700;margin-bottom:8px}
+.meo-form input{display:block;width:100%;box-sizing:border-box;padding:8px;margin-top:4px;font-size:15px;border:1px solid #bbb;border-radius:6px}
+.meo-form .meo-kw{margin-bottom:6px}
+.meo-form button{margin:6px 8px 0 0;border:0;cursor:pointer}
+.meo-table{border-collapse:collapse;width:100%;margin-top:10px}
+.meo-table th,.meo-table td{border:1px solid #cdd8ea;padding:8px;text-align:left}

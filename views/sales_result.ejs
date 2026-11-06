@@ -54,6 +54,64 @@
   <% }) %>
 </section>
 
+<section class="meo-box" id="meoBox">
+  <h2 class="meo-title">MEO順位(Googleマップ)</h2>
+  <% if (!meoHasKey) { %>
+    <p class="note"><%= meoNoKeyMessage %></p>
+  <% } else { %>
+  <div class="meo-form">
+    <label>店名<input id="meoName" type="text" maxlength="100"></label>
+    <label>住所<input id="meoAddr" type="text" maxlength="200" placeholder="例: 兵庫県姫路市北条梅原町229"></label>
+    <label>業種<input id="meoCat" type="text" maxlength="50" placeholder="例: 美容室"></label>
+    <p class="note">検索キーワード(編集できます)</p>
+    <input class="meo-kw" type="text" maxlength="60"><input class="meo-kw" type="text" maxlength="60"><input class="meo-kw" type="text" maxlength="60">
+    <div><button type="button" id="meoSuggest" class="sales-again">キーワードを自動作成</button>
+    <button type="button" id="meoGo" class="sales-again">調べる</button></div>
+  </div>
+  <p id="meoMsg" class="note" role="status"></p>
+  <table id="meoTable" class="meo-table" hidden><thead><tr><th>キーワード</th><th>順位</th></tr></thead><tbody></tbody></table>
+  <p id="meoNote" class="note" hidden></p>
+  <script>
+  (function(){
+    var $ = function(id){ return document.getElementById(id); };
+    var kws = function(){ return Array.prototype.map.call(document.querySelectorAll('.meo-kw'), function(i){ return i.value.trim(); }); };
+    function post(url, body){
+      return fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+        .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ j._status = r.status; return j; }); });
+    }
+    $('meoSuggest').addEventListener('click', function(){
+      post('/sales/meo-keywords', { address: $('meoAddr').value, category: $('meoCat').value }).then(function(j){
+        var list = j.keywords || [];
+        if (!list.length) { $('meoMsg').textContent = '住所(市区町村から)と業種を入力してください。'; return; }
+        $('meoMsg').textContent = '';
+        document.querySelectorAll('.meo-kw').forEach(function(i, n){ i.value = list[n] || ''; });
+      });
+    });
+    $('meoGo').addEventListener('click', function(){
+      var btn = $('meoGo'); btn.disabled = true; $('meoMsg').textContent = '調べています…(最大1分ほどかかります)';
+      $('meoTable').hidden = true; $('meoNote').hidden = true;
+      post('/sales/meo-rank', { name: $('meoName').value, address: $('meoAddr').value, keywords: kws() }).then(function(j){
+        btn.disabled = false;
+        if (j.error || !j.results) { $('meoMsg').textContent = j.error || '調べられませんでした。'; return; }
+        $('meoMsg').textContent = '';
+        var tb = $('meoTable').querySelector('tbody'); tb.textContent = '';
+        j.results.forEach(function(r){
+          var tr = document.createElement('tr');
+          var a = document.createElement('td'); a.textContent = r.keyword;
+          var b = document.createElement('td'); b.textContent = r.rank ? r.rank + '位' : '圏外(60位以内に表示なし)';
+          tr.appendChild(a); tr.appendChild(b); tb.appendChild(tr);
+        });
+        $('meoTable').hidden = false;
+        var d = new Date();
+        $('meoNote').textContent = 'Googleマップの表示順位の目安です。検索する場所・時間・端末によって変わります(' + (d.getMonth()+1) + '月' + d.getDate() + '日 当社調べ)';
+        $('meoNote').hidden = false;
+      }).catch(function(){ btn.disabled = false; $('meoMsg').textContent = '通信に失敗しました。'; });
+    });
+  })();
+  </script>
+  <% } %>
+</section>
+
 <section class="karte-note">
   <p>この結果は、ホームページを<strong>外から見える範囲</strong>で点検したものです。「要精密検査」は、実際の影響を詳しく調べる価値がある項目です。</p>
 </section>
