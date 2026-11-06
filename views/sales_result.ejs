@@ -60,9 +60,10 @@
     <p class="note"><%= meoNoKeyMessage %></p>
   <% } else { %>
   <div class="meo-form">
-    <label>店名<input id="meoName" type="text" maxlength="100"></label>
-    <label>住所<input id="meoAddr" type="text" maxlength="200" placeholder="例: 兵庫県姫路市北条梅原町229"></label>
-    <label>業種<input id="meoCat" type="text" maxlength="50" placeholder="例: 美容室"></label>
+    <% const mpr = (typeof meoPrefill !== 'undefined' && meoPrefill) ? meoPrefill : {}; %>
+    <label>店名<input id="meoName" type="text" maxlength="100" value="<%= mpr.name || '' %>"></label>
+    <label>住所<input id="meoAddr" type="text" maxlength="200" placeholder="例: 兵庫県姫路市北条梅原町229" value="<%= mpr.addr || '' %>"></label>
+    <label>業種<input id="meoCat" type="text" maxlength="50" placeholder="例: 美容室" value="<%= mpr.cat || '' %>"></label>
     <p class="note">検索キーワード(編集できます)</p>
     <input class="meo-kw" type="text" maxlength="60"><input class="meo-kw" type="text" maxlength="60"><input class="meo-kw" type="text" maxlength="60">
     <div><button type="button" id="meoSuggest" class="sales-again">キーワードを自動作成</button>
@@ -87,6 +88,8 @@
         document.querySelectorAll('.meo-kw').forEach(function(i, n){ i.value = list[n] || ''; });
       });
     });
+    // STOC営業管理から店名・住所・業種が渡されたときは、キーワードを自動で作っておく
+    if ($('meoAddr').value && $('meoCat').value && !kws().some(function(v){ return v; })) $('meoSuggest').click();
     $('meoGo').addEventListener('click', function(){
       var btn = $('meoGo'); btn.disabled = true; $('meoMsg').textContent = '調べています…(最大1分ほどかかります)';
       $('meoTable').hidden = true; $('meoNote').hidden = true;

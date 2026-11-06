@@ -161,22 +161,35 @@ function cleanPrefillUrl(v) {
   if (!t || t.length > 2000 || /[\u0000-\u001f\u007f\s]/.test(t)) return '';
   try { const u = new URL(t); return (u.protocol === 'http:' || u.protocol === 'https:') ? t : ''; } catch { return ''; }
 }
+// STOC営業管理の「WEBドックで詳しく見る」から渡される店名・住所・業種(MEO順位の初期値に使う)
+function cleanPrefillText(v, max) {
+  if (typeof v !== 'string') return '';
+  return v.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+function meoPrefillFrom(src) {
+  src = src || {};
+  return { name: cleanPrefillText(src.name, 100), addr: cleanPrefillText(src.addr, 200), cat: cleanPrefillText(src.cat, 50) };
+}
+function meoPrefillQuery(mp) {
+  return ['name', 'addr', 'cat'].filter(k => mp[k]).map(k => '&' + k + '=' + encodeURIComponent(mp[k])).join('');
+}
 app.get('/sales', (req, res) => {
   const prefill = cleanPrefillUrl(req.query.url);
-  if (!salesAuthed(req)) return res.render('sales_login', { error: null, prefill });
-  res.render('sales', { error: null, prefill });
+  const meoPrefill = meoPrefillFrom(req.query);
+  if (!salesAuthed(req)) return res.render('sales_login', { error: null, prefill, meoPrefill });
+  res.render('sales', { error: null, prefill, meoPrefill });
 });
 
 // 合言葉の照合
 app.post('/sales/login', (req, res) => {
   const pin = (req.body.pin || '').trim();
   if (pin !== SALES_PIN) {
-    return res.status(401).render('sales_login', { error: '合言葉が違います。', prefill: cleanPrefillUrl(req.body.prefill) });
+    return res.status(401).render('sales_login', { error: '合言葉が違います。', prefill: cleanPrefillUrl(req.body.prefill), meoPrefill: meoPrefillFrom(req.body) });
   }
   // 署名付きクッキーを発行(12時間)
   res.setHeader('Set-Cookie', `sales_auth=${SALES_COOKIE}; HttpOnly; SameSite=Lax; Max-Age=43200; Path=/sales`);
   const pf = cleanPrefillUrl(req.body.prefill);
-  res.redirect(pf ? '/sales?url=' + encodeURIComponent(pf) : '/sales');
+  res.redirect(pf ? '/sales?url=' + encodeURIComponent(pf) + meoPrefillQuery(meoPrefillFrom(req.body)) : '/sales');
 });
 
 app.get('/sales/logout', (req, res) => {
@@ -199,7 +212,7 @@ app.post('/sales/scan', async (req, res) => {
     };
     // 記録は残す(営業現地診断)。失敗しても画面は出す。
     try { await db.saveScan({ ...scan, source: 'sales', ip }); } catch (e) { console.error('sales saveScan:', e.message); }
-    res.render('sales_result', { scan, items: sortBySeverity(results), companyInfo: COMPANY_INFO, inputUrl: input, meoHasKey: !!process.env.GOOGLE_PLACES_API_KEY, meoNoKeyMessage: meo.NO_KEY_MESSAGE });
+    res.render('sales_result', { scan, items: sortBySeverity(results), companyInfo: COMPANY_INFO, inputUrl: input, meoPrefill: meoPrefillFrom({ name: req.body.meo_name, addr: req.body.meo_addr, cat: req.body.meo_cat }), meoHasKey: !!process.env.GOOGLE_PLACES_API_KEY, meoNoKeyMessage: meo.NO_KEY_MESSAGE });
   } catch (e) {
     const msg = e && e.userSafe ? e.message : '診断中にエラーが発生しました。URLをご確認ください。';
     res.status(400).render('sales', { error: msg });

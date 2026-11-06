@@ -8,6 +8,10 @@
   <form class="scan-form" id="scanForm" method="post" action="/sales/scan">
     <input name="url" type="text" inputmode="url" autocomplete="off"
            placeholder="example.co.jp または https://example.co.jp" required autofocus value="<%= pf %>">
+    <% const mps = (typeof meoPrefill !== 'undefined' && meoPrefill) ? meoPrefill : {}; %>
+    <input type="hidden" name="meo_name" value="<%= mps.name || '' %>">
+    <input type="hidden" name="meo_addr" value="<%= mps.addr || '' %>">
+    <input type="hidden" name="meo_cat" value="<%= mps.cat || '' %>">
     <button type="submit">今すぐ診断する</button>
   </form>
   <% if (pf && !error) { %><p class="note" id="autoNote">店舗のURLで診断を開始しています…(開始しない場合は上のボタンを押してください)</p>
