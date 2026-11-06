@@ -80,7 +80,9 @@ function checkHttpsRedirect(page) {
         summary: `http://${host}/ を開くと https に切り替わらず、そのまま暗号化なしで表示されます`,
         why: '古いリンクやブックマークから来た人は、暗号化されない状態で閲覧・問い合わせすることになります。',
         fix: '制作会社に「http→httpsへの常時リダイレクトを設定してほしい」と依頼してください。',
-        evidence: `http://${host}/ が転送されずにHTTP ${probe.status} を返しました`,
+        evidence: page.upgradedFromHttp
+          ? `入力された http:// のURLでは転送されず、https:// でも表示できることを確認(http は HTTP ${probe.status} を返しました)`
+          : `http://${host}/ が転送されずにHTTP ${probe.status} を返しました`,
       };
     }
     if (probe && probe.result === 'unreachable') {
@@ -97,7 +99,7 @@ function checkHttpsRedirect(page) {
     summary: 'このサイトは https に対応していません',
     why: 'Chrome では住所欄に「保護されていない通信」と表示されます。フォームの入力内容も暗号化されずに送られます。',
     fix: '制作会社に「SSL証明書を入れて、サイト全体を https にしてほしい」と依頼してください。',
-    evidence: `最終URL: ${page.finalUrl}`,
+    evidence: `最終URL: ${page.finalUrl}` + (page.httpsUpgradeError ? ` / https:// でも接続を試しましたが表示できませんでした(${page.httpsUpgradeError})` : ''),
   };
 }
 

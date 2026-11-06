@@ -37,6 +37,7 @@
     "test:blog": "node test/blog.test.js",
     "test:replace": "node test/replace.test.js",
     "test:scoresync": "node test/scoresync.test.js",
+    "test:httpsupgrade": "node test/httpsupgrade.test.js",
     "score-scan": "node cli/score-scan.js",
     "metrics-baseline": "node cli/metrics-baseline.js"
   },
