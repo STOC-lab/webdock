@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# パスワードやAPIキーを、画面に表示せずに .env に書き込む。
+#   使い方: envset 項目名            (例: envset SMTP_PASS)
+#           envset 項目名 webdock    (WEBドックだけ)
+#           envset 項目名 stoc       (営業管理だけ)
+# 項目が入っている .env をすべて書き換える。どこにも無ければ WEBドックの .env の最後に足す。
+# 書き換える前に .env.bak_envset_日時 を作り、WEBドックは自動で再起動する。
+set -euo pipefail
+KEY="${1:-}"; ONLY="${2:-all}"
+if [[ ! "$KEY" =~ ^[A-Z][A-Z0-9_]*$ ]]; then echo "使い方: envset 項目名(半角大文字。例: SMTP_PASS)"; exit 1; fi
+declare -A FILES=( [webdock]=/var/www/webdock/.env [stoc]=/var/www/stoc-sales-engine/.env )
+targets=()
+for app in webdock stoc; do
+  [[ "$ONLY" != all && "$ONLY" != "$app" ]] && continue
+  f="${FILES[$app]}"; [[ -f "$f" ]] || continue
+  grep -qE "^${KEY}=" "$f" && targets+=("$app")
+done
+if [[ ${#targets[@]} -eq 0 ]]; then
+  if [[ "$ONLY" == stoc ]]; then targets=(stoc); else targets=(webdock); fi
+  echo "「${KEY}」はまだ無いので、${targets[0]} の .env の最後に足します。"
+else
+  echo "「${KEY}」を書き換える先: ${targets[*]}"
+fi
+read -rsp "新しい値を入力(画面には出ません): " V1; echo
+read -rsp "確認のため、もう一度入力: " V2; echo
+if [[ "$V1" != "$V2" ]]; then echo "2回の入力が違うので、何も変更しませんでした。"; exit 1; fi
+if [[ -z "$V1" ]]; then echo "空なので、何も変更しませんでした。"; exit 1; fi
+if [[ "$V1" == *"'"* && "$V1" == *'"'* ]]; then echo "値に ' と \" の両方が入っていると .env で正しく読めないため、変更しませんでした。どちらか一方だけにしてください。"; exit 1; fi
+ts=$(date +%Y%m%d_%H%M%S)
+for app in "${targets[@]}"; do
+  f="${FILES[$app]}"; touch "$f"; cp -p "$f" "$f.bak_envset_$ts"
+  ENVSET_VALUE="$V1" python3 - "$f" "$KEY" <<'PY'
+import os, re, sys
+path, key = sys.argv[1], sys.argv[2]
+val = os.environ["ENVSET_VALUE"]
+# 記号を含む値は単一引用符で囲む(値に ' が入るときは二重引用符で囲む。両方入る値は手前で断っている)
+if re.fullmatch(r"[A-Za-z0-9_./:@,+-]*", val): line = f"{key}={val}"
+elif "'" not in val: line = f"{key}='{val}'"
+else: line = key + '="' + val + '"'
+lines = open(path, encoding="utf-8").read().splitlines()
+out, done = [], False
+for l in lines:
+    if l.startswith(key + "=") and not done: out.append(line); done = True
+    elif l.startswith(key + "="): continue
+    else: out.append(l)
+if not done: out.append(line)
+open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
+PY
+  echo "  ${app}: 書き換えました(バックアップ: $(basename "$f").bak_envset_$ts)"
+done
+unset V1 V2
+if printf '%s\n' "${targets[@]}" | grep -qx webdock; then
+  pm2 restart webdock --update-env >/dev/null && echo "  WEBドックを再起動しました。"
+  echo "  ※ 点数調べ(score-hyogo など)も同じ値を使う場合は: pm2 restart score-hyogo --update-env"
+fi
+printf '%s\n' "${targets[@]}" | grep -qx stoc && echo "  営業管理は再起動不要です(次の画面表示から反映されます)。"
+echo "完了しました。値の確認は envshow で(伏せ字で表示されます)。"

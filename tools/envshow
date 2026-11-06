@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# .env の中身を、パスワード類を伏せ字にして表示する(チャットに貼っても安全な形)。
+#   使い方: envshow           (WEBドックと営業管理の両方)
+#           envshow webdock   / envshow stoc
+ONLY="${1:-all}"
+declare -A FILES=( [webdock]=/var/www/webdock/.env [stoc]=/var/www/stoc-sales-engine/.env )
+for app in webdock stoc; do
+  [[ "$ONLY" != all && "$ONLY" != "$app" ]] && continue
+  f="${FILES[$app]}"; [[ -f "$f" ]] || continue
+  echo "=== ${app} (${f}) ==="
+  python3 - "$f" <<'PY'
+import re, sys
+secret = re.compile(r"(PASS|SECRET|KEY|TOKEN|PIN|PASSWORD|PWD|AUTH|SID)", re.I)
+for l in open(sys.argv[1], encoding="utf-8").read().splitlines():
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", l)
+    if not m: print(l if l.strip().startswith("#") or not l.strip() else "(読めない行)"); continue
+    k, v = m.group(1), m.group(2).strip().strip("'\"")
+    if secret.search(k): print(f"{k}={'(空)' if not v else v[:3] + '*' * 6}  [{len(v)}文字]")
+    else: print(f"{k}={v}")
+PY
+done
