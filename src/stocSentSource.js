@@ -117,7 +117,7 @@ function chainHostsOf(urls, min = EX.CHAIN_MIN) {
 
 /** 営業管理の全店のウェブサイトURLからチェーン・共通ドメインを数える(全都道府県。50万行ほどを1回読む) */
 async function loadStocChainHosts(pool, db = S.stocDbName()) {
-  const [rows] = await pool.query(`SELECT website_url FROM ${db}.stores WHERE website_url IS NOT NULL AND website_url <> ''`);
+  const [rows] = await pool.query(`SELECT website_url FROM ${db}.stores WHERE website_url IS NOT NULL AND website_url <> '' AND merged_into IS NULL`);
   return chainHostsOf(rows.map((r) => r.website_url));
 }
 
