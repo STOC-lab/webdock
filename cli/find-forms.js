@@ -216,6 +216,7 @@ SELECT s.id, s.name, s.website_url, s.prefecture, s.score
 FROM stores s
 LEFT JOIN store_contact_channels c ON c.store_id = s.id
 WHERE s.website_url IS NOT NULL AND s.website_url <> ''
+  AND s.merged_into IS NULL
   AND (s.status IS NULL OR s.status NOT IN ('失注','契約'))
   AND (c.manual_inquiry_url IS NULL OR c.manual_inquiry_url = '')
   AND (c.confirmed_inquiry_url IS NULL OR c.confirmed_inquiry_url = '')

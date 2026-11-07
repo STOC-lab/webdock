@@ -269,7 +269,7 @@ async function linkStep(pool, log = console.error) {
     const [res] = await pool.query(
       `UPDATE stoc_master.shops w JOIN stoc_sales.stores s ON s.cid = ${wcid}
        SET w.stoc_store_id = s.id
-       WHERE w.id >= ? AND w.id < ? AND w.cid IS NOT NULL AND (w.stoc_store_id IS NULL OR w.stoc_store_id <> s.id)`,
+       WHERE w.id >= ? AND w.id < ? AND w.cid IS NOT NULL AND s.merged_into IS NULL AND (w.stoc_store_id IS NULL OR w.stoc_store_id <> s.id)`,
       [lo, lo + LINK_CHUNK]);
     linked += res.affectedRows;
   }
