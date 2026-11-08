@@ -1,0 +1,63 @@
+<%- include('_head') %>
+<%
+  const n = (v) => Number(v || 0).toLocaleString('ja-JP');
+  const f = (typeof form !== 'undefined' && form) ? form : null;
+  const val = (k, d) => f ? (f[k] === undefined ? '' : f[k]) : d;
+%>
+<section class="adm-card">
+  <h1>夜間フォーム探し</h1>
+  <p class="adm-help">倉庫の店のホームページから、問い合わせフォームのURLを夜間に自動で探します(フォームの送信はしません)。
+    電話番号あり・業種ルールを通る店を、口コミの多い順に調べます。同じサイトへは10秒以上あけ、統合済みの店は対象にしません。</p>
+  <% if (sched) { %>
+  <p class="adm-big">いまの設定:
+    <strong><%= sched.start %>時〜<%= sched.end %>時</strong>
+    <%= sched.enabled ? '' : '(停止中)' %>
+    <% if (sched.from) { %> / <%= sched.from %> から<% } %></p>
+  <% if (!sched.tableReady) { %><p class="adm-help">設定の表がまだありません(.env の値か既定値を使っています)。sql/warehouse_migrate_009.sql を適用してください。</p><% } %>
+  <form method="post" action="<%= BASE %>/night/settings" class="adm-form">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <p><label>開始(時) <input type="number" name="start" min="0" max="23" value="<%= val('start', sched.start) %>" required></label>
+       <label>終了(時) <input type="number" name="end" min="0" max="23" value="<%= val('end', sched.end) %>" required></label>
+       <span class="adm-help">終了の時刻は含みません。開始が終了より大きいと日またぎ(22→6)、同じ値なら終日です。</span></p>
+    <p><label><input type="checkbox" name="enabled" value="1" <%= (f ? f.enabled : sched.enabled) ? 'checked' : '' %>> 動かす(外すと止まります)</label></p>
+    <p><label>この日時から動かす <input type="text" name="from" placeholder="2026-11-09 22:00" value="<%= val('from', sched.from || '') %>"></label>
+       <span class="adm-help">空なら制限なし。この日時より前は、夜間でも動きません。</span></p>
+    <button class="adm-btn" type="submit">保存する</button>
+  </form>
+  <p class="adm-help">この設定には、夜間フォーム探し(form-finder-wh-night)のほか、規模チェック(size-*)と営業お断り判定(nosales-*)も従います。</p>
+  <% } %>
+</section>
+<% if (stats) { %>
+<section class="adm-card">
+  <h2>進み具合</h2>
+  <p class="adm-big">今夜(<%= stats.since.slice(5, 16) %> 以降)の処理: <strong><%= n(stats.totals.tonight) %></strong> 件 /
+    残りの対象: <strong><%= n(stats.totals.remaining) %></strong> 件
+    <span class="adm-help">(残りはURLと電話番号があって未調査の店。業種ルールで外れる店も含みます)</span></p>
+  <p>あり <strong><%= n(stats.totals.found) %></strong> / なし <strong><%= n(stats.totals.none) %></strong> /
+    要確認 <strong><%= n(stats.totals.needs) %></strong> / エラー <strong><%= n(stats.totals.err) %></strong></p>
+  <div class="adm-scroll">
+  <table class="adm-table">
+    <thead><tr><th>都道府県</th><th>あり</th><th>なし</th><th>要確認</th><th>エラー</th><th>今夜の処理</th><th>残り</th></tr></thead>
+    <tbody>
+    <% stats.rows.forEach(function (r) { %>
+      <tr><td><%= r.prefecture %></td><td><%= n(r.found) %></td><td><%= n(r.none) %></td><td><%= n(r.needs) %></td>
+        <td><%= n(r.err) %></td><td><%= n(r.tonight) %></td><td><%= n(r.remaining) %></td></tr>
+    <% }) %>
+    </tbody>
+  </table>
+  </div>
+</section>
+<section class="adm-card">
+  <h2>エラーの理由</h2>
+  <% if (!stats.reasons.length) { %><p class="adm-help">エラーはありません。</p><% } else { %>
+  <table class="adm-table">
+    <thead><tr><th>理由</th><th>件数</th></tr></thead>
+    <tbody>
+    <% stats.reasons.forEach(function (r) { %><tr><td><%= r.note %></td><td><%= n(r.n) %></td></tr><% }) %>
+    </tbody>
+  </table>
+  <p class="adm-help">一時的なエラー(503・500・429・接続不可・応答なし・タイムアウト)は、その場で2回まで再試行します。403・ドメインなし等は90日あけて再試行します。</p>
+  <% } %>
+</section>
+<% } %>
+<%- include('_foot') %>

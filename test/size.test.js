@@ -200,10 +200,10 @@ const noRobots = async () => '';
   q = ff.buildWarehouseSizeTargetQuery({ prefecture: '兵庫県', category: ['100%_off'], limit: 5 });
   eq(q.params[1], '%100\\%\\_off%', 'size query escapes wildcards');
   q = ff.buildWarehouseTargetQuery({ recheckDays: 90, errorRetryDays: 7, prefecture: '兵庫県', limit: 500, retryNeedsBrowser: false, category: ['製造', '建設'] });
-  eq(q.params, [['兵庫県'], '%製造%', '%建設%', 7, 90, 500], 'warehouse query with category params');
+  eq(q.params, [['兵庫県'], '%製造%', '%建設%', 7, 90, 90, 500], 'warehouse query with category params');
   ok(/category_main LIKE \? OR category_main LIKE \?/.test(q.sql), 'warehouse query category');
   q = ff.buildWarehouseTargetQuery({ recheckDays: 90, errorRetryDays: 7, prefecture: '兵庫県', limit: 500, retryNeedsBrowser: false });
-  eq(q.params, [['兵庫県'], 7, 90, 500], 'warehouse query unchanged without category');
+  eq(q.params, [['兵庫県'], 7, 90, 90, 500], 'warehouse query unchanged without category');
 
   eq(ff.sizeToShopUpdate({ employees: 12, capitalYen: 10000000, listed: null, sizeClass: 'small', note: 'x'.repeat(300), profileUrl: 'https://a.jp/c' }),
     { employees: 12, capital_yen: 10000000, listed: null, size_class: 'small', size_note: 'x'.repeat(100), profile_url: 'https://a.jp/c' }, 'sizeToShopUpdate');

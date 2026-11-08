@@ -13,6 +13,25 @@ const { fetchHomepage, fetchHead } = require('./safeFetch');
 
 const MAX_PAGES = 4;          // 1サイトで取得するページ数の上限(トップ+候補3)
 const MAX_CANDIDATES = 3;
+// 問い合わせのリンクが見つからない・JSで作られたサイトのとき試す、定番のパス(取得ページ数の上限 MAX_PAGES の範囲で)
+const FALLBACK_PATHS = ['/contact', '/inquiry', '/contact-us', '/otoiawase', '/contact/', '/inquiry/', '/toiawase', '/form', '/mail'];
+const SITEMAP_CONTACT_RE = /\/(?:contact|inquiry|enquiry|otoiawase|toiawase|contact-us|contactus|mailform|mail-form|support)(?:[/._-]|$)/i;
+
+/** sitemap.xml の <loc> から、問い合わせっぽい同一ホストのURLを短い順に取り出す(純粋関数) */
+function sitemapContactUrls(xml, siteHost, limit = 3) {
+  const out = [];
+  const re = /<loc>\s*([^<\s]+)\s*<\/loc>/gi;
+  let m;
+  while ((m = re.exec(String(xml || ''))) && out.length < 200) {
+    const u = decodeEntities(m[1]);
+    const h = hostOf(u);
+    if (!h || (siteHost && h !== siteHost && h.replace(/^www\./, '') !== String(siteHost).replace(/^www\./, ''))) continue;
+    let path;
+    try { path = new URL(u).pathname; } catch { continue; }
+    if (SITEMAP_CONTACT_RE.test(path) && !out.includes(u)) out.push(u);
+  }
+  return out.sort((a, b) => a.length - b.length).slice(0, limit);
+}
 
 /** 自社サイトではないホスト(これらは「フォームなし」扱い) */
 const NON_OWN_SITE_HOSTS = [
@@ -576,13 +595,10 @@ async function findContact(websiteUrl, opts = {}) {
   scored.sort((a, b) => b.score - a.score || a.idx - b.idx);
   const candidates = scored.slice(0, MAX_CANDIDATES);
 
-  if (!candidates.length) {
-    return noFormEnd('問い合わせ候補リンクなし');
-  }
-
   let robotsRules = null;
   let skipped = 0;
-  for (const c of candidates) {
+  /** 候補1件を調べる。フォームが見つかれば finish() の結果、なければ null(続行)、取得上限なら 'limit' */
+  async function examine(c) {
     if (isFormServiceUrl(c.url)) {
       result.status = 'url_found';
       result.inquiryUrl = c.url;
@@ -590,25 +606,25 @@ async function findContact(websiteUrl, opts = {}) {
       result.note = '外部フォームサービス';
       return finish();
     }
-    if (pagesFetched >= MAX_PAGES) break;
+    if (pagesFetched >= MAX_PAGES) return 'limit';
 
     if (robotsRules === null) {
       try { robotsRules = parseRobots(await fetchRobots(new URL(finalUrl).origin)); } catch { robotsRules = []; }
     }
-    if (isDisallowed(robotsRules, c.url)) { skipped++; continue; }
+    if (isDisallowed(robotsRules, c.url)) { skipped++; return null; }
 
     let page;
     try {
       pagesFetched++;
       page = await fetchPage(c.url);
-    } catch { continue; }
-    if (!page || page.status >= 400) continue;
+    } catch { return null; }
+    if (!page || page.status >= 400) return null;
     collect(page, siteHost);
     if (!jsSite && isJsBuilder('', page.body)) jsSite = true;
     const f = detectForm(page.body);
     const pageNoSales = detectNoSales(page.body);
     const pageUrl = page.finalUrl || c.url;
-    if (deepStart && isOrgPage(page.body)) { orgRejected++; continue; }
+    if (deepStart && isOrgPage(page.body)) { orgRejected++; return null; }
     if (f.hasContactForm) {
       formPageNoSales = pageNoSales;
       result.status = 'url_found';
@@ -629,13 +645,64 @@ async function findContact(websiteUrl, opts = {}) {
       result.note = '外部フォームサービス';
       return finish();
     }
+    return null;
   }
 
+  /**
+   * 定番の場所を探す(リンクが見つからない・JSサイトのとき)。取得ページ数の上限(MAX_PAGES)は守る:
+   * 残りが2ページ以上なら1ページを sitemap.xml に使い、残りを sitemap の問い合わせっぽいURL → 定番のパスの順に試す。
+   * 見つかれば finish() の結果、なければ null。
+   */
+  async function fallbackSearch(tried) {
+    if (opts.fallbackPaths === false) return null;
+    let origin;
+    try { origin = new URL(finalUrl).origin; } catch { return null; }
+    const urls = [];
+    if (MAX_PAGES - pagesFetched >= 2) {
+      try {
+        let rb = robotsRules;
+        if (rb === null) { try { rb = robotsRules = parseRobots(await fetchRobots(origin)); } catch { rb = robotsRules = []; } }
+        if (!isDisallowed(rb, origin + '/sitemap.xml')) {
+          pagesFetched++;
+          const sm = await fetchPage(origin + '/sitemap.xml');
+          if (sm && sm.status < 400 && typeof sm.body === 'string') urls.push(...sitemapContactUrls(sm.body, siteHost));
+        }
+      } catch { /* sitemap が無い・取れない: 定番のパスだけ試す */ }
+    }
+    for (const p of FALLBACK_PATHS) urls.push(origin + p);
+    for (const u of urls) {
+      const key = u.replace(/\/$/, '');
+      if (tried.has(key)) continue;
+      tried.add(key);
+      if (pagesFetched >= MAX_PAGES) break;
+      const r = await examine({ url: u });
+      if (r === 'limit') break;
+      if (r) return r;
+    }
+    return null;
+  }
+  const triedUrls = new Set([...seen]);
+  const withFallback = async (note) => {
+    const r = await fallbackSearch(triedUrls);
+    return r || noFormEnd(note);
+  };
+
+  if (!candidates.length) {
+    return withFallback('問い合わせ候補リンクなし');
+  }
+  for (const c of candidates) {
+    triedUrls.add(c.url.replace(/\/$/, ''));
+    const r = await examine(c);
+    if (r === 'limit') break;
+    if (r) return r;
+  }
+
+  if (jsSite) return withFallback(`候補${candidates.length}件確認、フォームなし` + (skipped ? `(robots除外${skipped}件)` : ''));
   return noFormEnd(`候補${candidates.length}件確認、フォームなし` + (skipped ? `(robots除外${skipped}件)` : ''));
 }
 
 module.exports = {
-  extractLinks, scoreContactLink, detectForm, extractEmails, extractInstagram,
+  sitemapContactUrls, FALLBACK_PATHS, extractLinks, scoreContactLink, detectForm, extractEmails, extractInstagram,
   findContact, NON_OWN_SITE_HOSTS, FORM_SERVICES, isNonOwnSite, isFormServiceUrl,
   detectNoSales, NOTE_NO_SALES, parseRobots, isDisallowed, hostOf, MAX_PAGES, stripTags, decodeEntities,
   parseNonOwnTerms, loadNonOwnTerms, defaultTermsFile, nonOwnReason, matchesBuiltinNonOwn, matchesNonOwnList,
