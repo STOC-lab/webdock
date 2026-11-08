@@ -18,7 +18,7 @@ const DIRECT_GUIDE = {
 /** 「対応の目安」の文面。direct が真で差し替えがある区分だけ DIRECT_GUIDE を使う */
 function guideFor(bucket, direct) {
   if (direct && Object.prototype.hasOwnProperty.call(DIRECT_GUIDE, bucket)) return DIRECT_GUIDE[bucket];
-  return BUCKETS[bucket] ? BUCKETS[bucket].guide : '';
+  return Object.prototype.hasOwnProperty.call(BUCKETS, bucket) ? BUCKETS[bucket].guide : '';
 }
 
 /**
@@ -37,7 +37,7 @@ function resolveReq(query, from) {
 
 /** 区分ごとの件数 { urgent, partial, renewal, dns, total } */
 function countBuckets(g) {
-  const n = (b) => (g && g[b] ? g[b].length : 0);
+  const n = (b) => (g && Object.prototype.hasOwnProperty.call(g, b) && Array.isArray(g[b]) ? g[b].length : 0);
   const c = { urgent: n('urgent'), partial: n('partial'), renewal: n('renewal'), dns: n('dns') };
   c.total = c.urgent + c.partial + c.renewal + c.dns;
   return c;
@@ -97,8 +97,11 @@ const BUCKET_TABLE = {
 /** 1項目の区分を返す。ok・unknown(・未知の状態)は null */
 function bucketOf(item) {
   if (!item || (item.status !== 'bad' && item.status !== 'warn')) return null;
-  const row = BUCKET_TABLE[item.key];
-  if (row) return item.noScore && item.status === 'warn' && row.hidden ? row.hidden : row[item.status];
+  const row = Object.prototype.hasOwnProperty.call(BUCKET_TABLE, item.key) ? BUCKET_TABLE[item.key] : null;
+  if (row) {
+    const b = item.noScore && item.status === 'warn' && row.hidden ? row.hidden : row[item.status];
+    if (BUCKET_ORDER.indexOf(b) !== -1) return b;
+  }
   return item.remedy === 'dns' ? 'dns' : 'partial'; // 未登録のkeyは remedy で判断
 }
 
@@ -110,9 +113,10 @@ function statusLabel(status) {
 /** 結果配列 → { urgent, partial, renewal, dns, okItems }。各区分内は bad→warn の順 */
 function groupItems(results) {
   const out = { urgent: [], partial: [], renewal: [], dns: [], okItems: [] };
-  (results || []).forEach((r) => {
+  const list = Array.isArray(results) ? results : [];
+  list.forEach((r) => {
     const b = bucketOf(r);
-    if (b) out[b].push(r);
+    if (b && BUCKET_ORDER.indexOf(b) !== -1 && Array.isArray(out[b])) out[b].push(r);
     else if (r && r.status === 'ok') out.okItems.push(r);
   });
   BUCKET_ORDER.forEach((b) => out[b].sort((x, y) => (x.status === y.status ? 0 : x.status === 'bad' ? -1 : 1)));
