@@ -223,6 +223,19 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   const lines = []; promote.printStats(sel.stats, (l) => lines.push(l));
   ok(lines.some((l) => l.startsWith('営業お断りで除外: 7')), 'promote: 統計行');
 
+  // promote: STOC営業管理との電話番号の総当たり照合
+  { const idx = promote.buildPhoneIndex([
+      { id: 1, phone: '079-291-0550', phone_mobile: null, phone_free: '0120-214-616', phone_other: '０７９２９８７０７７' },
+      { id: 2, phone: '', phone_mobile: '090-1111-2222', phone_free: '0120214616', phone_other: '12345' }]);
+    eq(promote.matchPhone(idx, '0792987077').kind, 'registered', '電話照合: 列が違っても(その他=全角)固定が一致');
+    eq(promote.matchPhone(idx, '090 1111 2222').kind, 'registered', '電話照合: 携帯が一致');
+    const rv = promote.matchPhone(idx, '0120-214-616');
+    eq([rv.kind, rv.free[0].stores], ['review', 2], '電話照合: フリーダイヤルだけ一致は要確認+STOCの店数');
+    eq(promote.matchPhone(idx, '12345').kind, null, '電話照合: 6桁未満は照合しない');
+    eq(promote.matchPhone(idx, '0120214616,0792910550').kind, 'registered', '電話照合: 複数番号で固定が一致なら登録済み');
+    eq(promote.matchPhone(idx, '03-0000-0000').kind, null, '電話照合: 不一致');
+    ok(promote.parseArgs(['--no-phone-check', '--report-only']).phoneCheck === false && promote.parseArgs(['--report-only']).phoneCheck === true, '--no-phone-check'); }
+
   // --no-sales-only(既存フォームの営業お断り確認)
   const ff = require('../cli/find-forms');
   const pa = ff.parseArgs(['--source', 'warehouse', '--prefecture', '兵庫県', '--no-sales-only', '--loop']);
