@@ -181,6 +181,8 @@ function buildPromoteArgs(body, { mode, exportDir, now }) {
       return { error: '業種キーワードの入力が正しくありません(カンマ区切り・1語20文字まで)。' };
     }
     args.push('--main-category', cats.join(','), '--no-rules');
+  } else {
+    args.push('--rules', 'MEO用');
   }
   if (body.form_found) args.push('--form-found');
   if (size === 'exclude_large') args.push('--exclude-large');
