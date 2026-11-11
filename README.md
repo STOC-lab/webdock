@@ -384,7 +384,7 @@ mkdir -p /var/data/gmp && cd /var/data/gmp && unzip -q -O cp932 gmp_all.zip -d a
 
 ### 3. 取り込み
 
-まずお試し(DBには書き込まず、ファイルごとの件数だけ表示):
+まず試し取り込み(倉庫を読み取り専用で読み、書き込み・リンク処理なしで本番と同じ照合の件数だけ表示。倉庫のDB接続が必要):
 
 ```
 cd /path/to/webdock
@@ -396,6 +396,15 @@ npm run wh:import -- --root /var/data/gmp/all --dry-run
 ```
 npm run wh:import -- --root /var/data/gmp/all
 ```
+
+**照合の順番**: CIDで一致 → 電話番号で一致(CIDがない行だけ) → 新規。電話番号の照合は次のとおりです。
+
+- 数字だけにそろえ、`,` `/` `、` で分けた番号のどれか1つでも一致すれば候補。0120/0800/0570・空欄・6桁未満の番号・都道府県が決まらない行は照合しません。同じ都道府県の既存の店から探します。
+- 候補が1件 → 同じ店。複数 → 屋号が似ている店(`src/stocMatch.js` の `normShopName` / `nameLike`)が1件だけならその店。決まらなければ **保留**(新しく追加せず、既存の店も更新しない。ログに電話番号と屋号を表示)。
+- 同じ取り込みの中で先に新規追加した店とも照合します(同じファイル内の重複を防ぐ)。
+- 既存の店の更新は **空欄の項目だけ補い、上書きしません**。URLは、既存が空なら補う / 同じサイトの http→https は置き換え / 別のサイトのURLなら元を残して件数だけ数える(CIDで一致したときのURLの扱いは従来どおり)。
+- 結果は CLI・`import_runs`(`cid_matched` `phone_matched` `phone_url_filled` `phone_url_differed` `held`。新規=`inserted`・スキップ=`skipped`)・管理画面のジョブ画面に出ます。「電話+屋号が同じ」(従来の `fallback_key` 一致)は別に数えます。
+- 事前に `mysql --default-character-set=utf8mb4 < sql/warehouse_migrate_011.sql`(何度実行しても安全。`shops.phone` の1つ目・2つ目の番号の生成列と索引を作る。3つ目以降の番号は索引に入らない)。**適用していなければ電話番号の照合を飛ばして警告を出し、今までどおり動きます。**
 
 取り込みの最後に、営業アプリに同じCIDの店舗があれば `stoc_store_id` が自動で入ります(単独実行: `--link-only`)。件数の確認:
 
@@ -547,7 +556,7 @@ location /admin/ {
 
 - アプリは「同じ機械(127.0.0.1)のnginxから来た接続」の `X-Real-IP` だけを信用します。外から直接つないだ相手が `X-Forwarded-For` を偽っても無視されます(それでもポート3020は外に公開しないでください)。
 - 初回だけ: `npm install`、`mkdir -p /var/data/gmp/uploads`(アプリを動かすユーザーが書き込める権限)、`pm2 restart webdock --update-env`、`nginx -t && systemctl reload nginx`。
-- 取り込みは、`gmp_*.csv` または .zip をアップロード → 自動で `warehouse-import` を実行(最後に営業管理とのひも付けも自動)。「営業管理とつなぐ」ボタンは、営業管理へCSVを入れた後にフォームURL・メールを引き継ぐ処理です。
+- 取り込みは、`gmp_*.csv` または .zip をアップロード → 自動で `warehouse-import` を実行(最後に営業管理とのひも付けも自動)。「試し取り込み(倉庫には書き込まない)」ボタンは `--dry-run` で、倉庫には書き込まず同じ照合の件数だけ出します。「営業管理とつなぐ」ボタンは、営業管理へCSVを入れた後にフォームURL・メールを引き継ぐ処理です。
 - テスト: `npm run test:admin`(DB不要)
 
 ### 収集ツールの元ファイル(14列)の取り込みと閉業店の扱い

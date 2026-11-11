@@ -406,6 +406,25 @@ function parseNightForm(body) {
   return { values: { night_start: String(start), night_end: String(end), night_enabled: body.enabled ? '1' : '0', night_from: fromRaw } };
 }
 
+/** 取り込み(cli/warehouse-import.js)のログから、最後の「取り込み結果JSON: {...}」の行を読む。なければ・壊れていれば null */
+function parseImportSummary(log) {
+  const lines = Array.isArray(log) ? log : [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^取り込み結果JSON: (\{.*\})\s*$/.exec(String(lines[i]));
+    if (!m) continue;
+    try {
+      const o = JSON.parse(m[1]);
+      const n = (k) => (Number.isFinite(Number(o[k])) ? Number(o[k]) : 0);
+      return {
+        dryRun: !!o.dryRun, phoneMatching: o.phoneMatching !== false, files: n('files'), rows: n('rows'), cid: n('cid'), phone: n('phone'),
+        phoneUrlFilled: n('phoneUrlFilled'), phoneUrlDiffered: n('phoneUrlDiffered'), exact: n('exact'), held: n('held'),
+        inserted: n('inserted'), skipped: n('skipped'), errors: n('errors'),
+      };
+    } catch { return null; }
+  }
+  return null;
+}
+
 // ---- 本体 ----
 function registerAdminWarehouse(app, deps = {}) {
   const password = deps.password !== undefined ? deps.password : process.env.WAREHOUSE_ADMIN_PASS || '';
@@ -720,7 +739,7 @@ function registerAdminWarehouse(app, deps = {}) {
       const dry = !!req.body.dry_run;
       const args = ['cli/warehouse-import.js', '--root', dir, '--pattern', IMPORT_PATTERN];
       if (dry) args.push('--dry-run');
-      const r = jobs.start({ title: `取り込み${dry ? '(確認のみ)' : ''}: ${path.basename(dir)}(${csvCount}ファイル)`, args, meta: { uploadDir: dir } });
+      const r = jobs.start({ title: `取り込み${dry ? '(試し取り込み・倉庫には書き込まない)' : ''}: ${path.basename(dir)}(${csvCount}ファイル)`, args, meta: { uploadDir: dir } });
       if (!r.ok) {
         rmDir(dir);
         return page(req, res, 'import', { nav: 'import', error: r.message, runningId: r.runningId, maxFiles: MAX_UPLOAD_FILES, maxMb: MAX_UPLOAD_BYTES / 1024 / 1024 }, 409);
@@ -883,6 +902,7 @@ function registerAdminWarehouse(app, deps = {}) {
     v.exportFile = j.meta ? j.meta.exportFile || null : null;
     v.groupDir = j.status === 'success' && j.meta && j.meta.groupDir && readGroupDir(j.meta.groupDir) ? j.meta.groupDir : null;
     v.singleDir = j.status === 'success' && j.meta && j.meta.singleDir && readGroupDir(j.meta.singleDir) ? j.meta.singleDir : null;
+    v.importSummary = j.meta && j.meta.uploadDir ? parseImportSummary(j.log) : null; // 取り込みの作業だけ
     return v;
   }
   router.get('/jobs/:id', wrap(async (req, res) => {
@@ -948,4 +968,4 @@ function registerAdminWarehouse(app, deps = {}) {
 }
 
 module.exports = {
-  parseNightForm, registerAdminWarehouse, clientIp, buildScoreScanArgs, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+  parseNightForm, parseImportSummary, registerAdminWarehouse, clientIp, buildScoreScanArgs, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
