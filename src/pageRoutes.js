@@ -31,11 +31,12 @@ const STATUS_ORDER = { bad: 0, warn: 1 };
 const MAKER_VALUES = ['has', 'none', 'unknown'];
 const MAKER_LABELS = { has: 'いる', none: 'いない・連絡がつかない', unknown: 'わからない' };
 const KARTE_SEVERITY = { bad: 0, warn: 1, unknown: 2, ok: 3 };
+const KARTE_STATUSES = Object.keys(KARTE_SEVERITY); // これ以外の status は捨てる
 
 /** 専用ページに保存した診断結果から、カルテ(views/karte.ejs)に渡す scan を組み立てる。項目がなければ null */
 function buildKarteScan(page) {
-  const results = P.parseFindings(page.findings_json).filter((r) => r && r.key)
-    .map((r, i) => ({ r, i })).sort((a, b) => ((KARTE_SEVERITY[a.r.status] ?? 2) - (KARTE_SEVERITY[b.r.status] ?? 2)) || a.i - b.i).map((x) => x.r);
+  const results = P.parseFindings(page.findings_json).filter((r) => r && r.key && KARTE_STATUSES.includes(r.status))
+    .map((r, i) => ({ r, i })).sort((a, b) => (KARTE_SEVERITY[a.r.status] - KARTE_SEVERITY[b.r.status]) || a.i - b.i).map((x) => x.r);
   if (!results.length) return null;
   const counts = {};
   for (const r of results) counts[r.status] = (counts[r.status] || 0) + 1;

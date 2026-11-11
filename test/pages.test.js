@@ -9,7 +9,7 @@ const P = require('../src/pages');
 const S = require('../src/stocBatch');
 const O = require('../src/outreachSingle');
 const EX = require('../src/exclusions');
-const { registerPages, validateLead } = require('../src/pageRoutes');
+const { registerPages, validateLead, buildKarteScan } = require('../src/pageRoutes');
 const { registerAdminWarehouse, buildB2bScanArgs } = require('../src/adminWarehouse');
 const { loadTemplates } = require('../src/outreach');
 const { parseArgs, parseDelimited, loadResultsByStore } = require('../cli/batch-scan');
@@ -463,6 +463,15 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     const r = await ctx.req('/r/AbCdEfGh12/request', { method: 'POST', headers: URLENC, body: form({ name: '山田', email: 'y@example.co.jp', maker: 'has', ft: attr(html, 'ft'), vt: attr(html, 'vt'), website: '' }) });
     eq(r.headers.get('location'), '/r/AbCdEfGh12/thanks', '診断結果なし: お礼の画面へ');
     ctx.server.close();
+  }
+  // カルテ: 想定外の status の項目は捨てる(全部想定外なら null = お礼の画面へ)
+  {
+    const mkp = (arr) => ({ id: 1, domain: 'example.co.jp', findings_json: JSON.stringify(arr) });
+    const sc = buildKarteScan(mkp([
+      { key: 'a', status: 'ok' }, { key: 'b', status: 'weird' }, { key: 'c', status: 'bad' }, { key: 'd' }, { key: 'e', status: 'unknown' }, { key: 'f', status: 'warn' }]));
+    eq(sc.result.results.map((r) => r.key), ['c', 'f', 'e', 'a'], 'カルテ: 想定外の status は捨てて重い順に並ぶ');
+    eq(sc.result.counts, { bad: 1, warn: 1, unknown: 1, ok: 1 }, 'カルテ: 想定外の status は集計に入らない');
+    eq(buildKarteScan(mkp([{ key: 'x', status: 'weird' }, { key: 'y' }])), null, 'カルテ: 全部想定外なら null(お礼の画面へ)');
   }
   // 通知メール: 件名の【優先】・電話/Zoom希望の明記
   {
