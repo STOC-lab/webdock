@@ -227,6 +227,9 @@ node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category
 - 「今後の案内は不要」リンク → 確認ページ → 停止を記録。
 - **見せ方の版(A/B)**: 専用ページは、トークンから決まる2つの版が半々で出る(`sha256(token)` の先頭1バイトの偶奇。DBに持たなくても同じページは常に同じ版)。`titles` = 主な指摘は全文、ほかの確認項目は題名だけ+「詳しい内容・優先順位・確認依頼文は簡易レポートで」の注記 / `full` = 題名+要約(従来どおり)。どちらも直し方の文は出さない。緊急時は `.env` の `PAGE_VARIANT_FORCE=titles|full` で全ページを固定できる(再起動が必要)。
 - **版の記録(移行007)**: `mysql < sql/warehouse_migrate_007.sql` で `webdock_pages.variant` を追加(何度実行しても安全。未適用でもページは動き、版の記録だけ飛ばす)。人が開いたとき・申し込んだときに控え、管理画面「専用ページ」に版ごとの 開かれた/申込/申込率 と一覧の「版」列が出る。STOCの履歴メモ(`sales_logs`)の末尾には「(表示:titles|full)」が付く(`report_inquiries` には入れない)。既存の行は列がNULLのままで、開かれたときに入る。
+- **倉庫から直接送る準備(移行010)**: `mysql < sql/warehouse_migrate_010.sql` で、倉庫の送信履歴 `stoc_master.webdock_sends`・バッチ `webdock_send_batches` と、`webdock_pages` の `origin`(stoc/warehouse。既存の行は stoc)・営業管理への登録の記録列を追加(何度実行しても安全)。この移行だけでは動きは変わらない。
+- **営業管理経由の出力の比較テスト**: `npm run test:golden` が、`buildSingleFiles` の出力一式(送信CSV・確認用・本文・まとめ・result.json)とSTOC登録・ページ作成に渡す値を `test/fixtures/single_stoc_golden/` と1文字ずつ比べる(文面は同じフォルダの templates の写しを使う)。営業管理経由の出力を意図して変えたときだけ `UPDATE_GOLDEN=1 npm run test:golden` で作り直す。
+- **STOC営業管理との照合の部品**は `src/stocMatch.js`(電話番号の総当たり・店名+住所)。取り出しCSV(`cli/warehouse-promote.js`)はここから同じ関数を使う。`{ withIds: true }` で作った索引は一致したSTOCの店IDとステータスも持つ(`matchShop`)。テストは `npm run test:stocmatch`。
 
 **STOC営業管理との対応**(`src/pages.js`。MEOレポートの `/report/<token>` と同じ表・列に書くので、STOCの画面に同じように出る)
 
