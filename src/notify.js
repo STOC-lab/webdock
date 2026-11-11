@@ -61,11 +61,12 @@ async function notifyLead(lead) {
  * 御社専用ページ(/r/<token>)からの「詳しい簡易レポートを希望する」の通知。
  * SMTP未設定時はログ出力のみ。info: { company, domain, name, email, phone, message, pageUrl, stocStoreId, batchCode, stocOk, stocError }
  */
-async function notifyPageLead(info) {
-  const to = process.env.STOC_NOTIFY_TO || process.env.LEAD_NOTIFY_TO || 'kit@stoc.co.jp';
-  const subject = `【${SERVICE_NAME}】専用ページから簡易レポート希望: ${info.company}(${info.domain})`;
+/** 通知メールの件名と本文(送信しない。テストで見る) */
+function buildPageLeadMail(info) {
+  // 制作会社が「いない・連絡がつかない」なら、件名の先頭に【優先】
+  const subject = `${info.priority ? '【優先】' : ''}【${SERVICE_NAME}】専用ページから簡易レポート希望: ${info.company}(${info.domain})`;
   const text = [
-    `${SERVICE_NAME}の御社専用ページから、詳しい簡易レポートの希望がありました。`,
+    `${SERVICE_NAME}の御社専用ページから、詳しい簡易レポートの希望がありました(申込者には、その場で詳しいカルテを表示しています)。`,
     '',
     `会社名   : ${info.company}`,
     `対象サイト: ${info.domain}`,
@@ -73,12 +74,20 @@ async function notifyPageLead(info) {
     `メール   : ${info.email}`,
     `電話     : ${info.phone || '(未入力)'}`,
     `ひとこと : ${info.message || '(なし)'}`,
+    ...(info.makerLabel ? [`サイトの制作会社: ${info.makerLabel}${info.priority ? ' ←【優先】窓口になる制作会社がありません' : ''}`] : []),
+    ...(info.wantCall ? ['★ 結果の説明を電話・Zoomで聞きたい(15分・無料)との希望あり。早めにご連絡ください。'] : []),
     `専用ページ: ${info.pageUrl}`,
     `STOCバッチ: ${info.batchCode || '-'} / 店舗ID: ${info.stocStoreId || '-'}`,
     `STOC見込み客: ${info.stocOk ? '登録しました(/report-leads の「相談・受取希望」)' : '登録できませんでした。この通知の内容を手で登録してください' + (info.stocError ? '(' + String(info.stocError).split('\n')[0] + ')' : '')}`,
     '',
     '→ メールで簡易レポートをお送りください。',
   ].join('\n');
+  return { subject, text };
+}
+
+async function notifyPageLead(info) {
+  const to = process.env.STOC_NOTIFY_TO || process.env.LEAD_NOTIFY_TO || 'kit@stoc.co.jp';
+  const { subject, text } = buildPageLeadMail(info);
   if (!process.env.SMTP_HOST) {
     console.log('[notifyPageLead:dev]\n' + text);
     return;
@@ -93,4 +102,4 @@ async function notifyPageLead(info) {
   await transporter.sendMail({ from: process.env.SMTP_FROM || 'alert@stoc-plus.site', to, subject, text });
 }
 
-module.exports = { notifyLead, notifyPageLead };
+module.exports = { notifyLead, notifyPageLead, buildPageLeadMail };
