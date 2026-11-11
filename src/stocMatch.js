@@ -170,6 +170,8 @@ function matchShop(index, shop) {
  * 戻り: { phone, addr }。withIds=true なら索引に店IDを持ち、status(店ID → 営業管理のステータス)も返す。
  */
 async function loadStocIndex(pool, db = require('./stocBatch').stocDbName(), { withIds = false, pageSize = 100000 } = {}) {
+  // 0・負数・小数などだと、空の索引がエラーなしで返り、STOCにある店を「ない」と判定してしまう
+  if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error(`pageSize は1以上の整数にしてください: ${pageSize}`);
   const PG = pageSize;
   const phone = new Map();
   const addr = new Map();

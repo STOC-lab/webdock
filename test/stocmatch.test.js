@@ -126,6 +126,13 @@ const STORES = [
     const r = await M.loadStocIndex(pool, 'stoc_sales', { withIds: true });
     eq([r.phone.size, r.addr.size, r.status.size], [0, 0, 0], '店がなければ空');
   }
+  // pageSize が不正なら、DBを読む前にエラーにする(空の索引を黙って返さない)
+  for (const bad of [0, -1, 1.5, NaN, '2', null]) {
+    const pool = fakePool(STORES);
+    let msg = null;
+    try { await M.loadStocIndex(pool, 'stoc_sales', { pageSize: bad }); } catch (e) { msg = e.message; }
+    ok(msg && /pageSize/.test(msg) && pool.log.length === 0, `pageSize=${String(bad)} はエラー(DBは読まない)`);
+  }
 
   console.log(`stocmatch: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
