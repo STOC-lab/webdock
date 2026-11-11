@@ -9,6 +9,20 @@
     <% if (/^phone_list_/.test(job.exportFile || '')) { %><div class="adm-help">電話営業リスト(UTF-8)です。倉庫に「出力済み」の印は付けていません。途中経過は同じ名前に .jsonl を付けた記録ファイルに残ります。</div>
     <% } else { %><div class="adm-warn">出した店には「出力済み」の印が付いています。ダウンロードしてから画面を離れてください。</div><% } %>
   <% } %></div>
+  <% if (job.importSummary) { var im = job.importSummary; %>
+  <h3>取り込みの結果(<%= im.rows %>行<%= im.dryRun ? '・試し取り込み' : '' %>)</h3>
+  <% if (im.dryRun) { %><div class="adm-warn">試し取り込みです。倉庫には何も書き込んでいません(営業管理とのひも付けもしていません)。本番の取り込みと同じ照合をした件数です。</div><% } %>
+  <% if (!im.phoneMatching) { %><div class="adm-warn">電話番号の照合用の索引(sql/warehouse_migrate_011.sql)がないため、電話番号の照合は飛ばしました。CIDがない行は「電話+屋号が同じ」のときだけ既存の店と一致します。</div><% } %>
+  <ul class="adm-list">
+    <li><strong>CIDで一致</strong>: <%= im.cid %>件</li>
+    <li><strong>電話番号で一致</strong>: <%= im.phone %>件(うちURLを補った <%= im.phoneUrlFilled %>件 ・ URLが異なった <%= im.phoneUrlDiffered %>件)</li>
+    <li><strong>複数一致で保留</strong>: <%= im.held %>件<% if (im.held) { %>(新しく追加も更新もしていません。下の記録に電話番号と屋号があります)<% } %></li>
+    <li><strong>新規</strong>: <%= im.inserted %>件</li>
+    <li><strong>スキップ</strong>: <%= im.skipped %>件(屋号がない行)</li>
+    <% if (im.exact) { %><li><strong>電話+屋号が同じ(従来の照合)</strong>: <%= im.exact %>件</li><% } %>
+  </ul>
+  <p class="adm-help">「URLを補った」は、既存の店のURLが空だったので入れた件数と、同じサイトの http を https に置き換えた件数の合計です。「URLが異なった」は、別のサイトのURLだったので元のURLを残した件数です。</p>
+  <% } %>
   <% if (typeof singleView !== 'undefined' && singleView) { %>
   <h3>送信用ファイル(全社共通の本文・1つの宛先CSV)</h3>
   <% if (singleView.direct) { %>
@@ -106,7 +120,7 @@
       st.className = 'adm-badge adm-' + j.status;
       document.getElementById('times').textContent = '開始 ' + fmt(j.startedAt) + (j.endedAt ? ' ／ 終了 ' + fmt(j.endedAt) : '');
       if (j.status === 'running') { setTimeout(tick, 2000); return; }
-      if (j.groupDir || j.singleDir) { location.reload(); return; }
+      if (j.groupDir || j.singleDir || j.importSummary) { location.reload(); return; }
       if (j.downloadUrl) {
         var dl = document.getElementById('dl');
         dl.textContent = '';

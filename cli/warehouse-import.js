@@ -9,6 +9,8 @@
  *   node cli/warehouse-import.js --link-only [--carry-forms]
  *   --carry-forms: リンク後、倉庫で見つけたフォームURL(とメール/Instagram)を営業アプリの
  *                  contact_channel_candidates / store_contact_channels へ引き継ぐ(通常の取り込みの最後にも実行)
+ *   照合: CIDで一致 → 電話番号で一致(CIDなしの行だけ。src/importMatch.js) → 新規。電話の索引は sql/warehouse_migrate_011.sql(なければ電話の照合は飛ばす)
+ *   --dry-run: 倉庫へは読み取りだけ接続し、書き込み・リンク処理なしで同じ照合の件数を出す(試し取り込み)
  * 接続: WH_DB_HOST(127.0.0.1) WH_DB_PORT WH_DB_USER WH_DB_PASS (.env)
  */
 
@@ -16,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const wh = require('../src/warehouse');
 const { siteHostOf } = require('../src/siteHost');
+const im = require('../src/importMatch');
 
 const BIG_FILE = 200 * 1024 * 1024;
 const CHUNK = 64 * 1024 * 1024;
@@ -249,6 +252,83 @@ function makePool() {
   });
 }
 
+/**
+ * --dry-run 用の読み取り専用の接続。接続は1本だけにして、使い始める前に await で
+ * 「読み取り専用にする → 本当に効いているか確かめる」。効いていなければ例外にして取り込みを始めない。
+ * 接続が切れて張り直されたときも、接続のたびに同じ設定をする(同じ1本の接続の中で順番に実行されるので、次のクエリより前に効く)。
+ */
+async function makeReadOnlyPool() {
+  const mysql = require('mysql2/promise');
+  const pool = mysql.createPool({
+    host: process.env.WH_DB_HOST || '127.0.0.1',
+    port: Number(process.env.WH_DB_PORT || 3306),
+    user: process.env.WH_DB_USER,
+    password: process.env.WH_DB_PASS,
+    charset: 'utf8mb4',
+    connectionLimit: 1,
+    flags: ['-FOUND_ROWS'],
+  });
+  // 設定に失敗した接続は捨てる(書ける接続を使い続けない)
+  pool.pool.on('connection', (conn) => { conn.query('SET SESSION TRANSACTION READ ONLY', (err) => { if (err) conn.destroy(); }); });
+  try {
+    await pool.query('SET SESSION TRANSACTION READ ONLY');
+    const [[r]] = await pool.query('SELECT @@session.transaction_read_only AS ro');
+    if (Number(r.ro) !== 1) throw new Error('読み取り専用の設定が効いていません');
+  } catch (e) {
+    await pool.end().catch(() => {});
+    throw e;
+  }
+  return pool;
+}
+
+/* ---------- CIDがない行の電話番号照合(src/importMatch.js)の書き込み側 ---------- */
+const NUMERIC_FILL = new Set(['rating', 'review_count', 'photo_count', 'lat', 'lng']);
+
+/**
+ * 電話番号で一致した既存の店の履歴(口コミ数・写真数・評価)に足す行。planHistory と同じ決まりで、新しい値は「空欄を補った後の値」。
+ * fills: classifyBatch の fills([{ id, before, state }])。戻り: [[shop_id, review_count, photo_count, rating]]
+ */
+function planPhoneHistory(fills) {
+  const rows = [];
+  for (const f of fills) {
+    const b = f.before, n = f.state;
+    if (n.review_count == null && n.photo_count == null && n.rating == null) continue;
+    const diff = !sameNum(n.review_count, b.review_count) || !sameNum(n.photo_count, b.photo_count) || !sameRating(n.rating, b.rating);
+    if (diff || !Number(b.has_hist)) rows.push([f.id, n.review_count ?? null, n.photo_count ?? null, n.rating ?? null]);
+  }
+  return rows;
+}
+
+/** 電話番号で一致した既存の店の空欄を補う(上書きしない)。戻り: 履歴に足した行数 */
+async function applyFills(pool, fills, hasSiteHost, hasHistory) {
+  for (const f of fills) {
+    const sets = ['last_seen_at = NOW()'];
+    const params = [];
+    for (const [c, v] of Object.entries(f.set)) {
+      if (c === 'website_url') continue;
+      sets.push(NUMERIC_FILL.has(c) ? `\`${c}\` = IF(\`${c}\` IS NULL, ?, \`${c}\`)` : `\`${c}\` = IF(\`${c}\` IS NULL OR \`${c}\` = '', ?, \`${c}\`)`);
+      params.push(LIMITS[c] ? clip(v, LIMITS[c]) : v);
+    }
+    if (f.set.website_url !== undefined) {
+      // 判定したときの値のままなら置き換える(その間に変わっていたら触らない)。
+      // MySQL は SET を左から順に代入するので、site_host(古い website_url と比べる)を website_url より前に書く
+      const url = clip(f.set.website_url, LIMITS.website_url);
+      const was = f.before.website_url ?? null;
+      if (hasSiteHost) { sets.push('site_host = IF(website_url <=> ?, ?, site_host)'); params.push(was, siteHostOf(url) || ''); }
+      sets.push('website_url = IF(website_url <=> ?, ?, website_url)'); params.push(was, url);
+    }
+    await pool.query(`UPDATE stoc_master.shops SET ${sets.join(', ')} WHERE id = ?`, [...params, f.id]);
+  }
+  let history = 0;
+  if (hasHistory) {
+    const rows = planPhoneHistory(fills);
+    if (rows.length) await insertHistory(pool, rows);
+    for (const f of fills) { if (rows.some((r) => String(r[0]) === String(f.id))) f.state.has_hist = 1; }
+    history = rows.length;
+  }
+  return history;
+}
+
 async function linkStep(pool, log = console.error) {
   try {
     await pool.query('SELECT 1 FROM stoc_sales.stores LIMIT 1');
@@ -331,6 +411,22 @@ async function carryFormsStep(pool, log = console.error) {
   return tot;
 }
 
+/**
+ * 1バッチを取り込む。CIDあり・新規・電話+屋号同一の行は今までの upsert、電話番号で一致した行は空欄だけ補う。
+ * dryRun のときは照合だけ(書き込まない)。戻り: このバッチの件数(im.newStats の形)
+ */
+async function importBatch(pool, recs, ctx, store, o) {
+  const plan = await im.classifyBatch(recs, store, ctx, o.source);
+  if (o.dryRun) return plan.stats;
+  if (plan.legacy.length) {
+    const scratch = { inserted: 0, updated: 0, history: 0 }; // 件数は classifyBatch のものを使う
+    await upsertBatch(pool, plan.legacy, scratch, o.hasBs, o.hasSiteHost, o.hasHistory);
+    plan.stats.history += scratch.history || 0;
+  }
+  if (plan.fills.length) plan.stats.history += await applyFills(pool, plan.fills, o.hasSiteHost, o.hasHistory);
+  return plan.stats;
+}
+
 async function main() {
   try { require('dotenv').config(); } catch { /* なくても動く */ }
   const o = parseArgs(process.argv.slice(2));
@@ -344,49 +440,85 @@ async function main() {
   }
   const root = path.resolve(o.root);
   const files = [...walk(root, o.pattern)];
-  console.error(`対象ファイル ${files.length}件 (${root})${o.dryRun ? ' [dry-run]' : ''}`);
-  const pool = o.dryRun ? null : makePool();
-  const total = { files: 0, rows: 0, inserted: 0, updated: 0, skipped: 0 };
+  console.error(`対象ファイル ${files.length}件 (${root})${o.dryRun ? ' [試し取り込み: 倉庫には書き込みません]' : ''}`);
+  // --dry-run でも照合のために倉庫を読む(読み取り専用の接続。書き込み・リンク処理はしない)
+  const pool = o.dryRun ? await makeReadOnlyPool() : makePool();
+  const total = im.newStats();
+  total.files = 0;
   const errors = [];
   let runId = null;
-  const hasSiteHost = pool ? await wh.columnExists(pool, 'shops', 'site_host') : false;
-  if (pool && !hasSiteHost) console.error('警告: shops.site_host 列がないため、サイトのホスト名は記録しません(sql/warehouse_migrate_005.sql を適用すると記録されます)。');
-  const hasHistory = pool ? await wh.tableExists(pool, 'shop_metrics_history') : false;
-  if (pool && !hasHistory) console.error('警告: shop_metrics_history 表がないため、口コミ数・写真数の履歴は記録しません(sql/warehouse_migrate_008.sql を適用すると記録されます)。');
-  const started = new Date();
-  if (pool) {
-    const [r] = await pool.query('INSERT INTO stoc_master.import_runs (started_at, root_path) VALUES (NOW(), ?)', [root.slice(0, 500)]);
-    runId = r.insertId;
-  }
+  let phoneEnabled = false, hasRunCols = false;
+  const heldAll = [];
   try {
-    for (const file of files) {
-      const st = { rows: 0, inserted: 0, updated: 0, skipped: 0 };
-      const withCid = { n: 0 };
-      try {
-        await processFile(file, root, o.batch, async (recs, hasBs) => {
-          for (const r of recs) if (r.cid) withCid.n++;
-          if (pool) await upsertBatch(pool, recs, st, hasBs, hasSiteHost, hasHistory);
-        }, st);
-      } catch (e) {
-        errors.push(`${path.relative(root, file)}: ${e.message}`);
-        console.error(`  エラー ${path.relative(root, file)}: ${e.message}`);
-      }
-      total.files++;
-      for (const k of ['rows', 'inserted', 'updated', 'skipped']) total[k] += st[k];
-      console.error(`[${total.files}/${files.length}] ${path.relative(root, file)} 読込${st.rows} CIDあり${withCid.n} 新規${st.inserted} 更新${st.updated} スキップ${st.skipped}`);
+    try { await pool.query('SELECT 1 FROM stoc_master.shops LIMIT 1'); } catch (e) {
+      throw new Error('倉庫のデータベースに接続できませんでした(WH_DB_* を確認してください): ' + e.message);
     }
-    console.error(`合計: ファイル${total.files} 読込${total.rows} 新規${total.inserted} 更新${total.updated} スキップ${total.skipped} エラー${errors.length}`);
-    if (pool) {
-      await linkStep(pool);
-      if (o.carryForms) await carryFormsStep(pool);
+    const hasSiteHost = o.dryRun ? false : await wh.columnExists(pool, 'shops', 'site_host');
+    if (!o.dryRun && !hasSiteHost) console.error('警告: shops.site_host 列がないため、サイトのホスト名は記録しません(sql/warehouse_migrate_005.sql を適用すると記録されます)。');
+    const hasHistory = o.dryRun ? false : await wh.tableExists(pool, 'shop_metrics_history');
+    if (!o.dryRun && !hasHistory) console.error('警告: shop_metrics_history 表がないため、口コミ数・写真数の履歴は記録しません(sql/warehouse_migrate_008.sql を適用すると記録されます)。');
+    phoneEnabled = await im.phoneIndexReady(pool);
+    if (!phoneEnabled) console.error('警告: 電話番号の照合用の索引がないため、電話番号の照合は飛ばします。CIDがない行は今までどおり「電話+屋号が同じ」のときだけ既存の店と一致します(sql/warehouse_migrate_011.sql を適用すると電話番号で照合します)。');
+    hasRunCols = o.dryRun ? false : await wh.columnExists(pool, 'import_runs', 'phone_matched');
+    if (!o.dryRun && !hasRunCols) console.error('警告: import_runs に電話照合の件数の列がないため、取り込みの記録には従来の件数だけ書きます(sql/warehouse_migrate_011.sql を適用すると記録されます)。');
+    const store = im.makeDbStore(pool, { hasHistory });
+    // 試し取り込みは書かないので、先に新規にした行をDBから引けない。照合の中で持ち続けて、本番と同じ件数にする
+    const ctx = im.makeContext({ phoneEnabled, keepOverlay: o.dryRun });
+    if (!o.dryRun) {
+      const [r] = await pool.query('INSERT INTO stoc_master.import_runs (started_at, root_path) VALUES (NOW(), ?)', [root.slice(0, 500)]);
+      runId = r.insertId;
+    }
+    try {
+      for (const file of files) {
+        const rel = path.relative(root, file);
+        const st = im.newStats();
+        const withCid = { n: 0 };
+        try {
+          await processFile(file, root, o.batch, async (recs, hasBs) => {
+            for (const r of recs) if (r.cid) withCid.n++;
+            const s = await importBatch(pool, recs, ctx, store, { dryRun: o.dryRun, hasBs, hasSiteHost, hasHistory, source: rel });
+            im.addStats(st, s);
+          }, st);
+        } catch (e) {
+          errors.push(`${rel}: ${e.message}`);
+          console.error(`  エラー ${rel}: ${e.message}`);
+        }
+        total.files++;
+        im.addStats(total, st);
+        console.error(`[${total.files}/${files.length}] ${rel} 読込${st.rows} CIDあり${withCid.n} ${im.formatStats(st)}`);
+      }
+      heldAll.push(...ctx.heldSamples);
+      console.error(`合計: ファイル${total.files} 読込${total.rows} ${im.formatStats(total)} エラー${errors.length}`);
+      if (heldAll.length) {
+        console.error(`複数一致で保留した行(先頭${heldAll.length}件。新しく追加せず、既存の店も更新していません。電話番号と屋号を見て手で判断してください):`);
+        for (const h of heldAll) console.error(`  ${h.file} | ${h.prefecture} | ${h.name} | ${h.phone} | 候補${h.count}件`);
+      }
+      // 画面(取り込みのジョブ画面)が読み取る1行
+      console.error('取り込み結果JSON: ' + JSON.stringify({
+        dryRun: o.dryRun, phoneMatching: phoneEnabled, files: total.files, rows: total.rows, cid: total.cid, phone: total.phone,
+        phoneUrlFilled: total.phoneUrlFilled, phoneUrlDiffered: total.phoneUrlDiffered, exact: total.exact, held: total.held,
+        inserted: total.inserted, skipped: total.skipped, errors: errors.length,
+      }));
+      if (!o.dryRun) {
+        await linkStep(pool);
+        if (o.carryForms) await carryFormsStep(pool);
+      }
+    } finally {
+      if (runId !== null) {
+        const base = [total.files, total.rows, total.inserted, im.updatedOf(total), total.skipped, errors.length ? errors.join('\n').slice(0, 60000) : null];
+        if (hasRunCols) {
+          await pool.query(
+            'UPDATE stoc_master.import_runs SET finished_at = NOW(), files = ?, rows_read = ?, inserted = ?, updated = ?, skipped = ?, errors = ?, cid_matched = ?, phone_matched = ?, phone_url_filled = ?, phone_url_differed = ?, held = ? WHERE id = ?',
+            [...base, total.cid, total.phone, total.phoneUrlFilled, total.phoneUrlDiffered, total.held, runId]);
+        } else {
+          await pool.query(
+            'UPDATE stoc_master.import_runs SET finished_at = NOW(), files = ?, rows_read = ?, inserted = ?, updated = ?, skipped = ?, errors = ? WHERE id = ?',
+            [...base, runId]);
+        }
+      }
     }
   } finally {
-    if (pool) {
-      await pool.query(
-        'UPDATE stoc_master.import_runs SET finished_at = NOW(), files = ?, rows_read = ?, inserted = ?, updated = ?, skipped = ?, errors = ? WHERE id = ?',
-        [total.files, total.rows, total.inserted, total.updated, total.skipped, errors.length ? errors.join('\n').slice(0, 60000) : null, runId]);
-      await pool.end();
-    }
+    await pool.end();
   }
 }
 
@@ -394,4 +526,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { upsertBatch, planHistory, parseArgs, walk, globToRegExp, processFile, upsertSql, websiteReplaceCond, pickWebsiteUrl, linkStep, carryFormsStep, makePool };
+module.exports = { upsertBatch, planHistory, parseArgs, walk, globToRegExp, processFile, upsertSql, websiteReplaceCond, pickWebsiteUrl, linkStep, carryFormsStep, makePool, makeReadOnlyPool, importBatch, applyFills, planPhoneHistory };

@@ -4,17 +4,23 @@
   <p class="adm-help">収集ツールでできた <code>gmp_〇〇.csv</code>(またはそれをまとめた .zip)を選ぶと、倉庫に取り込みます。取り込みの最後に、営業管理に同じ店があれば自動でひも付けます。</p>
   <form method="post" action="<%= BASE %>/import" enctype="multipart/form-data" id="upform">
     <input type="hidden" name="_csrf" value="<%= csrf %>">
-    <label class="adm-check"><input type="checkbox" name="dry_run" value="1"> ドライラン(取り込まずに確認だけ)</label>
-    <p class="adm-help">チェックすると倉庫には書き込まず、ファイルごとの件数だけ表示します。最初はこれで試すと安心です。</p>
-    <input class="adm-input" type="file" name="files" multiple accept=".csv,.zip" required>
+    <input type="file" class="adm-input" name="files" multiple accept=".csv,.zip" required>
     <p class="adm-help">1ファイル <%= maxMb %>MBまで・<%= maxFiles %>個まで。大きいときは分けてください。</p>
-    <button class="adm-btn" type="submit" id="upbtn">アップロードして取り込む</button>
+    <input type="hidden" name="dry_run" id="dryrun" value="">
+    <button class="adm-btn" type="submit" id="upbtn" data-dry="">アップロードして取り込む</button>
+    <button class="adm-btn" type="submit" id="trybtn" data-dry="1">試し取り込み(倉庫には書き込まない)</button>
+    <p class="adm-help">「試し取り込み」は、倉庫には何も書き込まず、同じ照合をして件数だけ表示します(CIDで一致・電話番号で一致・複数一致で保留・新規・スキップ)。最初はこれで試すと安心です。</p>
     <p class="adm-help" id="upmsg" hidden>送信中です。完了するまでこのページを閉じないでください…</p>
   </form>
 </section>
 <script>
+// 押したボタンで「試し取り込み」かどうかを決める(送信中にボタンを無効にしても値が消えないよう、隠し欄に入れる)
+Array.prototype.forEach.call(document.querySelectorAll('#upbtn, #trybtn'), function (b) {
+  b.addEventListener('click', function () { document.getElementById('dryrun').value = b.dataset.dry; });
+});
 document.getElementById('upform').addEventListener('submit', function () {
   document.getElementById('upbtn').disabled = true;
+  document.getElementById('trybtn').disabled = true;
   document.getElementById('upmsg').hidden = false;
 });
 </script>
