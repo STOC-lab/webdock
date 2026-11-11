@@ -9,7 +9,7 @@ const P = require('../src/pages');
 const S = require('../src/stocBatch');
 const O = require('../src/outreachSingle');
 const EX = require('../src/exclusions');
-const { registerPages, validateLead } = require('../src/pageRoutes');
+const { registerPages, validateLead, buildKarteScan } = require('../src/pageRoutes');
 const { registerAdminWarehouse, buildB2bScanArgs } = require('../src/adminWarehouse');
 const { loadTemplates } = require('../src/outreach');
 const { parseArgs, parseDelimited, loadResultsByStore } = require('../cli/batch-scan');
@@ -268,10 +268,10 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
   ok(oe && oe.stocCheck, 'loadOptOutSet: 読めなければ中止');
 
   /* ---------- 入力の検査 ---------- */
-  eq(validateLead({ name: ' 山田 ', email: 'a@example.co.jp' }).ok, true, '入力: 必須だけでOK');
-  eq(Object.keys(validateLead({}).errors), ['name', 'email'], '入力: 名前とメールは必須');
+  eq(validateLead({ name: ' 山田 ', email: 'a@example.co.jp', maker: 'has' }).ok, true, '入力: 必須だけでOK');
+  eq(Object.keys(validateLead({}).errors), ['name', 'email', 'maker'], '入力: 名前・メール・制作会社の質問は必須');
   for (const e of ['a', 'a@', '@b.jp', 'a b@c.jp', 'a@b', 'a@@b.jp', '<x>@b.jp']) ok(validateLead({ name: 'n', email: e }).errors.email, '入力: 不正なメール ' + e);
-  eq(validateLead({ name: 'n', email: 'a@b.jp', phone: '079-123-4567' }).ok, true, '入力: 電話(ハイフン)');
+  eq(validateLead({ name: 'n', email: 'a@b.jp', maker: 'none', phone: '079-123-4567' }).ok, true, '入力: 電話(ハイフン)');
   eq(validateLead({ name: 'n', email: 'ａ＠b.jp', phone: '０７９１２３４５６７' }).values.phone, '0791234567', '入力: 全角は半角にそろえる');
   ok(validateLead({ name: 'n', email: 'a@b.jp', phone: '12' }).errors.phone, '入力: 短い電話は不可');
   ok(validateLead({ name: 'n', email: 'a@b.jp', phone: 'abc12345678' }).errors.phone, '入力: 文字入りの電話は不可');
@@ -332,7 +332,7 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
 
     // 申込
     const ftv = attr(html, 'ft'), vtv = attr(html, 'vt');
-    const submit = (o = {}) => ctx.req('/r/AbCdEfGh12/request', { method: 'POST', headers: URLENC, body: form({ name: '山田 太郎', email: 'yamada@example.co.jp', phone: '079-123-4567', message: '見積りも相談したいです', ft: ftv, vt: vtv, website: '', ...o }) });
+    const submit = (o = {}) => ctx.req('/r/AbCdEfGh12/request', { method: 'POST', headers: URLENC, body: form({ name: '山田 太郎', email: 'yamada@example.co.jp', phone: '079-123-4567', message: '見積りも相談したいです', maker: 'has', ft: ftv, vt: vtv, website: '', ...o }) });
     // ハニーポット
     ctx.fp.log.length = 0;
     const hp = await submit({ website: 'http://spam.example' });
@@ -360,14 +360,11 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     // 成功
     const okRes = await submit();
     eq(okRes.status, 303, '申込: 303');
-    eq(okRes.headers.get('location'), '/r/AbCdEfGh12/thanks', '申込: お礼のページへ');
-    const th = await ctx.req('/r/AbCdEfGh12/thanks');
-    eq(th.status, 200, 'お礼ページ');
-    ok((await th.text()).includes('お申し込みを受け付けました'), 'お礼の文言');
+    ok(/^\/r\/AbCdEfGh12\/karte\?t=[0-9a-f]{24}$/.test(okRes.headers.get('location')), '申込: その場でカルテへ(署名つきURL)');
     const log = ctx.fp.log;
     ok(sqls(ctx.fp, /^UPDATE stoc_master\.webdock_pages SET lead_at = NOW\(\)/).length === 1, '申込: lead_at を記録');
     const leadContact = JSON.parse(sqls(ctx.fp, /SET lead_at = NOW\(\)/)[0].params[0]);
-    eq(leadContact, { name: '山田 太郎', email: 'yamada@example.co.jp', phone: '079-123-4567', message: '見積りも相談したいです' }, '申込: 内容を控える');
+    eq(leadContact, { name: '山田 太郎', email: 'yamada@example.co.jp', phone: '079-123-4567', message: '見積りも相談したいです', maker: 'has', wantCall: false }, '申込: 内容を控える(制作会社・電話希望つき)');
     const ri = sqls(ctx.fp, /^INSERT INTO stoc_sales\.report_inquiries/);
     eq(ri.length, 1, '申込: report_inquiries に1行');
     eq(ri[0].sql, 'INSERT INTO stoc_sales.report_inquiries (store_id,report_id,name,phone,preferred_time,inquiry_type,ip_address,email) VALUES (?,?,?,?,?,?,?,?)', '申込: ReportInquiryController と同じ列');
@@ -399,7 +396,7 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     const denied = Object.assign(new Error('INSERT command denied to user for table report_inquiries'), { code: 'ER_TABLEACCESS_DENIED_ERROR', errno: 1142 });
     const ctx = await boot({ handlers: [[/^INSERT INTO stoc_sales\.report_inquiries/, () => { throw denied; }]] });
     const html = await (await ctx.req('/r/AbCdEfGh12')).text();
-    const res = await ctx.req('/r/AbCdEfGh12/request', { method: 'POST', headers: URLENC, body: form({ name: 'A', email: 'a@b.jp', ft: attr(html, 'ft'), vt: attr(html, 'vt') }) });
+    const res = await ctx.req('/r/AbCdEfGh12/request', { method: 'POST', headers: URLENC, body: form({ name: 'A', email: 'a@b.jp', maker: 'has', ft: attr(html, 'ft'), vt: attr(html, 'vt') }) });
     eq(res.status, 303, '権限不足でも申込は受け付ける');
     ok(ctx.fp.log.some((l) => l.op === 'rollback'), '権限不足: ロールバック');
     eq(sqls(ctx.fp, /SET lead_stoc_at = NOW\(\)/).length, 0, '権限不足: STOC登録済みの印を付けない');
@@ -408,6 +405,85 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     ctx.server.close();
   }
 
+
+  // 専用ページのフォーム → その場でカルテ(依頼: 制作会社の質問・電話/Zoom希望・優先メール・STOCだけの案内)
+  {
+    const ctx = await boot();
+    const html = await (await ctx.req('/r/AbCdEfGh12')).text();
+    ok(/name="maker" value="has"/.test(html) && /name="maker" value="none"/.test(html) && /name="maker" value="unknown"/.test(html) && html.includes('今のサイトを管理している制作会社は?'), 'フォーム: 制作会社の質問(3択)');
+    ok(html.includes('name="want_call" value="1"') && html.includes('結果の説明を電話・Zoomで聞きたい(15分・無料)'), 'フォーム: 電話・Zoom希望のチェック');
+    ok(/ご担当者名 <span class="pg-req">必須<\/span>/.test(html) && /メールアドレス <span class="pg-req">必須<\/span>/.test(html) && /電話番号 <span class="pg-opt">任意<\/span>/.test(html), 'フォーム: 必須は担当者名とメールだけ・電話は任意');
+    // ボット対策の欄は画面に出さない(画面の外へ・同じ style.css で隠している)
+    ok(/<div class="pg-hp" aria-hidden="true">/.test(html) && /<input type="text" name="website" value="" tabindex="-1" autocomplete="off">/.test(html), 'ハニーポット: 隠し欄のマークアップ');
+    const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+    ok(/\.pg-hp\{[^}]*position:absolute[^}]*left:-10000px[^}]*overflow:hidden/.test(css), 'ハニーポット: CSS で画面の外に出す');
+    ok(!/\.pg-hp\{[^}]*(visibility:visible|display:block)/.test(css), 'ハニーポット: 表示に戻すルールはない');
+    const sub = (o) => ctx.req('/r/AbCdEfGh12/request', { method: 'POST', headers: URLENC, body: form({ name: '山田', email: 'y@example.co.jp', ft: attr(html, 'ft'), vt: attr(html, 'vt'), website: '', ...o }) });
+    // 制作会社が未回答なら弾く
+    const miss = await sub({});
+    eq(miss.status, 400, '制作会社が未回答: 400');
+    ok((await miss.text()).includes('いずれかをお選びください'), '制作会社が未回答: 文言');
+    eq(ctx.notifyLog.length, 0, '制作会社が未回答: 通知しない');
+    // 会社名・都道府県なしで申込めて、電話・Zoom希望と「いない」が通知に渡る
+    const r1 = await sub({ maker: 'none', want_call: '1' });
+    eq(r1.status, 303, '申込(会社名・都道府県なし): 受付');
+    const loc = r1.headers.get('location');
+    ok(ctx.notifyLog[0].priority === true && ctx.notifyLog[0].wantCall === true && ctx.notifyLog[0].makerLabel === 'いない・連絡がつかない', '通知: 優先・電話Zoom希望・制作会社の答えを渡す');
+    eq(JSON.parse(sqls(ctx.fp, /SET lead_at = NOW\(\)/)[0].params[0]).wantCall, true, '申込: 電話・Zoom希望を lead_contact に控える');
+    const memo = sqls(ctx.fp, /^INSERT INTO stoc_sales\.sales_logs/)[0].params[5];
+    ok(memo.includes('制作会社: いない・連絡がつかない(優先)') && memo.includes('電話・Zoom希望: あり'), '申込: 履歴メモに制作会社・電話Zoom希望');
+    ok(sqls(ctx.fp, /report_inquiries/).length === 1, '申込: 見込み客の記録は今までどおり1件');
+    // その場でカルテ
+    const kr = await ctx.req(loc);
+    eq(kr.status, 200, 'カルテ: 表示');
+    const kh = await kr.text();
+    ok(kh.includes('ホームページ健康診断カルテ') && kh.includes('HTTPSへの自動転送') && kh.includes('セキュリティ用ヘッダー設定'), 'カルテ: 保存済みの診断結果の全項目');
+    ok(kh.includes('<p class="grade-score">') && /grade-block grade-[A-E]/.test(kh), 'カルテ: 点数と判定を計算して出す');
+    ok(kh.includes('たとえるなら') && kh.includes('このままにしておくと'), 'カルテ: たとえ話・このままにしておくと');
+    ok(kh.includes('0120-830-046') && kh.includes('オンライン(Zoom)') && kh.includes('MEO対策付きのホームページ制作'), 'カルテ: 相談の案内は STOC(電話 0120-830-046・オンライン)');
+    ok(!kh.includes('ティ・オー・シー') && !kh.includes('TOC') && !kh.includes('UTM') && !kh.includes('PC PATROL') && !kh.includes('訪問'), 'カルテ: TOC・UTM・訪問の案内は出ない');
+    ok(!kh.includes('森澤') && !kh.includes('森沢'), 'カルテ: 担当者の名前は出ない');
+    eq(kr.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive', 'カルテ: noindex');
+    // 署名がなければカルテは見せず、ページへ戻す
+    const nk = await ctx.req('/r/AbCdEfGh12/karte', { redirect: 'manual' });
+    eq([nk.status, nk.headers.get('location')], [303, '/r/AbCdEfGh12#request'], 'カルテ: 署名なしはフォームへ');
+    const bk = await ctx.req('/r/AbCdEfGh12/karte?t=' + '0'.repeat(24), { redirect: 'manual' });
+    eq(bk.status, 303, 'カルテ: 署名違いはフォームへ');
+    // 「いる」「わからない」は優先にしない
+    ctx.fp.log.length = 0;
+    ctx.store.get = async () => PAGE();
+    await sub({ maker: 'unknown' });
+    ok(ctx.notifyLog[1].priority === false && ctx.notifyLog[1].wantCall === false, '通知: いない以外は優先にしない・電話Zoomなし');
+    ctx.server.close();
+  }
+  // 診断結果がないページは、従来のお礼の画面
+  {
+    const ctx = await boot({ pages: { AbCdEfGh12: PAGE({ findings_json: '[]' }) } });
+    const html = await (await ctx.req('/r/AbCdEfGh12')).text();
+    const r = await ctx.req('/r/AbCdEfGh12/request', { method: 'POST', headers: URLENC, body: form({ name: '山田', email: 'y@example.co.jp', maker: 'has', ft: attr(html, 'ft'), vt: attr(html, 'vt'), website: '' }) });
+    eq(r.headers.get('location'), '/r/AbCdEfGh12/thanks', '診断結果なし: お礼の画面へ');
+    ctx.server.close();
+  }
+  // カルテ: 想定外の status の項目は捨てる(全部想定外なら null = お礼の画面へ)
+  {
+    const mkp = (arr) => ({ id: 1, domain: 'example.co.jp', findings_json: JSON.stringify(arr) });
+    const sc = buildKarteScan(mkp([
+      { key: 'a', status: 'ok' }, { key: 'b', status: 'weird' }, { key: 'c', status: 'bad' }, { key: 'd' }, { key: 'e', status: 'unknown' }, { key: 'f', status: 'warn' }]));
+    eq(sc.result.results.map((r) => r.key), ['c', 'f', 'e', 'a'], 'カルテ: 想定外の status は捨てて重い順に並ぶ');
+    eq(sc.result.counts, { bad: 1, warn: 1, unknown: 1, ok: 1 }, 'カルテ: 想定外の status は集計に入らない');
+    eq(buildKarteScan(mkp([{ key: 'x', status: 'weird' }, { key: 'y' }])), null, 'カルテ: 全部想定外なら null(お礼の画面へ)');
+  }
+  // 通知メール: 件名の【優先】・電話/Zoom希望の明記
+  {
+    const { buildPageLeadMail } = require('../src/notify');
+    const base = { company: '株式会社サンプル', domain: 'example.co.jp', name: '山田', email: 'y@example.co.jp', phone: '', message: '', pageUrl: 'https://x/r/AbCdEfGh12', stocOk: true };
+    const a = buildPageLeadMail({ ...base, makerLabel: 'いない・連絡がつかない', priority: true, wantCall: true });
+    const b = buildPageLeadMail({ ...base, makerLabel: 'いる', priority: false, wantCall: false });
+    ok(a.subject.startsWith('【優先】【WEBドック】'), '通知メール: 制作会社がいないなら件名の先頭に【優先】');
+    ok(!b.subject.startsWith('【優先】') && b.subject.startsWith('【WEBドック】'), '通知メール: それ以外は【優先】なし(従来の件名)');
+    ok(a.text.includes('電話・Zoomで聞きたい(15分・無料)') && a.text.includes('サイトの制作会社: いない・連絡がつかない'), '通知メール: 電話・Zoom希望と制作会社を明記');
+    ok(!b.text.includes('電話・Zoom') && b.text.includes('サイトの制作会社: いる'), '通知メール: 希望なしなら書かない');
+  }
   // 画面の操作(スクロール・タップ)の通知
   {
     const ctx = await boot();
@@ -586,9 +662,13 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     const ht = await (await ctx.req(`/r/${tT}`)).text();
     const hf = await (await ctx.req(`/r/${tF}`)).text();
     ok(ht.includes('セキュリティ用ヘッダー設定') && !ht.includes('OTHER要約テキスト'), 'titles: 他の項目は題名だけ(要約なし)');
-    ok(ht.includes(NOTE) && ht.indexOf(NOTE) < ht.indexOf('name="ft"'), 'titles: 注記がCTA(フォーム)の手前にある');
-    ok(hf.includes('OTHER要約テキスト') && !hf.includes(NOTE), 'full: 題名+要約(従来どおり)、注記なし');
-    ok(hf.includes('優先順位') && hf.includes('確認依頼文'), 'full: CTAに優先順位・確認依頼文の説明');
+    ok(ht.includes('item-locked') && ht.includes('class="item-summary blur"') && !ht.includes(NOTE), 'titles: 他の項目はぼかし表示(中身は入れない)・旧注記なし');
+    ok(!hf.includes('item-locked') && hf.includes('OTHER要約テキスト') && !hf.includes(NOTE), 'full: 題名+要約(従来どおり)、ぼかしなし');
+    for (const [n, h] of [['titles', ht], ['full', hf]]) {
+      ok(h.includes('入力すると、その場で詳しいカルテが表示されます'), `${n}: フォームの案内は「その場でカルテ」`);
+      ok(!h.includes('簡易レポートでお送りします') && (h.match(/カルテが表示されます/g) || []).length === 1, `${n}: 同じ趣旨の文が2回続かない`);
+      ok(!h.includes('name="company"') && !h.includes('name="prefecture"'), `${n}: 会社名・都道府県の欄は出さない`);
+    }
     for (const [n, h] of [['titles', ht], ['full', hf]]) {
       ok(h.includes('MAIN要約テキスト') && h.includes('HTTPSへの自動転送') && h.includes('サイト全体が暗号化'), `${n}: 主な指摘は常に全文`);
       ok(h.includes('問題が見つからなかった項目: <strong>1件</strong>'), `${n}: 問題が見つからなかった項目の件数`);
@@ -603,7 +683,7 @@ const attr = (html, name) => { const m = new RegExp(`name="${name}" value="([^"]
     // 申込: sales_logs のメモにだけ版を付ける
     const page1 = await ctx.req(`/r/${tF}`);
     const h1 = await page1.text();
-    const body = form({ name: '山田', email: 'y@example.co.jp', phone: '', message: '', ft: attr(h1, 'ft'), vt: attr(h1, 'vt'), website: '' });
+    const body = form({ name: '山田', email: 'y@example.co.jp', phone: '', message: '', maker: 'has', ft: attr(h1, 'ft'), vt: attr(h1, 'vt'), website: '' });
     eq((await ctx.req(`/r/${tF}/request`, { method: 'POST', headers: URLENC, body })).status, 303, '申込: 受付');
     const lg = sqls(ctx.fp, /^INSERT INTO \S*\.sales_logs/)[0];
     ok(lg && lg.params[5].endsWith('(表示:full)'), '申込: sales_logs のメモ末尾に(表示:full)');

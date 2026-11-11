@@ -17,7 +17,8 @@ const isNoColumn = (e) => !!e && (e.errno === 1054 || e.code === 'ER_BAD_FIELD_E
 
 const WH = 'stoc_master.webdock_pages';
 const MARK = '【WEBドック】';
-const LEAD_DUP_MS = 10 * 60 * 1000; // 同じページからの申込をこの間隔内に重ねて押したら1件にする
+const MAKER_MEMO = { has: 'いる', none: 'いない・連絡がつかない(優先)', unknown: 'わからない' }; // 履歴メモ用
+const LEAD_DUP_MS =10 * 60 * 1000; // 同じページからの申込をこの間隔内に重ねて押したら1件にする
 
 // 書き込む列(権限の確認・GRANT・実際のSQLで同じものを使う)
 const VIEW_UPDATE_COLS = ['last_activity_at', 'view_duration_seconds', 'max_scroll_percentage', 'reached_cta', 'cta_clicked', 'cta_action', 'cta_action_at'];
@@ -236,7 +237,8 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
    */
   async function submitLead(page, form, { ip, ua, viewId = 0, variant } = {}) {
     if (page.lead_at && now().getTime() - new Date(page.lead_at).getTime() < LEAD_DUP_MS) return { duplicate: true, stoc: !!page.lead_stoc_at };
-    const contact = { name: form.name, email: form.email, phone: form.phone || '', message: form.message || '' };
+    const contact = { name: form.name, email: form.email, phone: form.phone || '', message: form.message || '',
+      ...(form.maker ? { maker: form.maker } : {}), ...(form.maker ? { wantCall: !!form.wantCall } : {}) };
     await pool.query(`UPDATE ${WH} SET lead_at = NOW(), lead_stoc_at = NULL, lead_contact = ? WHERE id = ?`, [JSON.stringify(contact), page.id]);
     await recordVariant(page, variant);
     const shown = variant || page.variant || '';
@@ -257,7 +259,9 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
       const [st] = await conn.query(`SELECT status FROM ${db}.stores WHERE id = ? LIMIT 1`, [page.stoc_store_id]);
       const status = (st && st[0] && st[0].status) || '未対応';
       const memo = [`${MARK}御社専用ページから「詳しい簡易レポートを希望する」`, `担当者: ${form.name}`, `メール: ${form.email}`, `電話: ${form.phone || '(未入力)'}`,
-        `ひとこと: ${form.message || '(なし)'}`, `対象サイト: ${page.domain}`, `バッチ: ${page.stoc_batch_code || '-'}`].join(' / ') + (shown ? `(表示:${shown})` : '');
+        `ひとこと: ${form.message || '(なし)'}`,
+        ...(form.maker ? [`制作会社: ${MAKER_MEMO[form.maker] || form.maker}`, `電話・Zoom希望: ${form.wantCall ? 'あり' : 'なし'}`] : []),
+        `対象サイト: ${page.domain}`, `バッチ: ${page.stoc_batch_code || '-'}`].join(' / ') + (shown ? `(表示:${shown})` : '');
       await conn.query(`INSERT INTO ${db}.sales_logs (${LOG_COLS.join(',')}) VALUES (?,?,?,?,?,?)`, [page.stoc_store_id, null, 'WEBドック', status, null, memo]);
       await conn.commit();
     } catch (e) {

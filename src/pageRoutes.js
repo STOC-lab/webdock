@@ -3,7 +3,8 @@
  * 御社専用ページ(公開・ログイン不要)
  *   GET  /r/:token            専用ページ(閲覧を記録)
  *   POST /r/:token/request    「詳しい簡易レポートを希望する」
- *   GET  /r/:token/thanks     申込完了
+ *   GET  /r/:token/karte      申込後の詳しいカルテ(署名つきURLのみ)
+ *   GET  /r/:token/thanks     申込完了(診断結果がないページ・ボット対策の戻り先)
  *   POST /r/:token/seen       画面の操作が届いた印(スクロール・タップ。メールの自動巡回との見分け)
  *   GET  /r/:token/optout     「今後の案内は不要」の確認
  *   POST /r/:token/optout     配信不要を記録
@@ -18,12 +19,30 @@ const P = require('./pages');
 const { jstDateJa } = require('./outreach');
 
 const VIEWS = path.join(__dirname, '..', 'views', 'page');
+const KARTE_VIEW = path.join(__dirname, '..', 'views', 'karte.ejs');
+const { COMPANY_INFO } = require('./regions');
 // 申込の入力上限
 const LIM = { name: 100, email: 255, phone: 20, message: 500 };
 const EMAIL_RE = /^[^\s@<>"',;:()\[\]\\]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
 // 指摘(finding_key)に対応する診断項目。ページの「その他の確認項目」から主な指摘を除くのに使う
 const FINDING_TO_CHECK = { php_info: 'php', php_eol: 'php', php_unpatched: 'php', no_https: 'https_redirect', mixed: 'mixed', https_redirect: 'https_redirect', cert_expired: 'cert', cert_soon: 'cert', js_libs: 'js_libs', cms: 'cms', headers: 'headers', tls_version: 'tls_version' };
 const STATUS_ORDER = { bad: 0, warn: 1 };
+// 「今のサイトを管理している制作会社は?」の選択肢(none = 優先して連絡)
+const MAKER_VALUES = ['has', 'none', 'unknown'];
+const MAKER_LABELS = { has: 'いる', none: 'いない・連絡がつかない', unknown: 'わからない' };
+const KARTE_SEVERITY = { bad: 0, warn: 1, unknown: 2, ok: 3 };
+const KARTE_STATUSES = Object.keys(KARTE_SEVERITY); // これ以外の status は捨てる
+
+/** 専用ページに保存した診断結果から、カルテ(views/karte.ejs)に渡す scan を組み立てる。項目がなければ null */
+function buildKarteScan(page) {
+  const results = P.parseFindings(page.findings_json).filter((r) => r && r.key && KARTE_STATUSES.includes(r.status))
+    .map((r, i) => ({ r, i })).sort((a, b) => (KARTE_SEVERITY[a.r.status] - KARTE_SEVERITY[b.r.status]) || a.i - b.i).map((x) => x.r);
+  if (!results.length) return null;
+  const counts = {};
+  for (const r of results) counts[r.status] = (counts[r.status] || 0) + 1;
+  const { score, grade } = require('./checks').scoreOf(results);
+  return { id: page.id, domain: page.domain, score, grade, result: { results, counts, score, grade } };
+}
 
 /** 軽いレート制限(IP単位・メモリ上)。windowMs の間に max 回まで */
 function limiter(windowMs, max) {
@@ -41,11 +60,13 @@ function limiter(windowMs, max) {
 function validateLead(body) {
   const b = body || {};
   const str = (v, n, nfkc = false) => [...(nfkc ? String(v === undefined || v === null ? '' : v).normalize('NFKC') : String(v === undefined || v === null ? '' : v)).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim()].slice(0, n).join('');
-  const values = { name: str(b.name, LIM.name), email: str(b.email, LIM.email, true), phone: str(b.phone, LIM.phone, true), message: str(b.message, LIM.message) };
+  const maker = MAKER_VALUES.includes(String(b.maker || '')) ? String(b.maker) : '';
+  const values = { name: str(b.name, LIM.name), email: str(b.email, LIM.email, true), phone: str(b.phone, LIM.phone, true), message: str(b.message, LIM.message), maker, wantCall: String(b.want_call || '') === '1' };
   const errors = {};
   if (!values.name) errors.name = 'ご担当者名をご入力ください。';
   if (!values.email) errors.email = 'メールアドレスをご入力ください。';
   else if (!EMAIL_RE.test(values.email)) errors.email = 'メールアドレスの形式をご確認ください。';
+  if (!maker) errors.maker = '「今のサイトを管理している制作会社」について、いずれかをお選びください。';
   if (values.phone) {
     const digits = values.phone.replace(/[^0-9]/g, '');
     if (!/^[0-9+()\-\s]+$/.test(values.phone) || digits.length < 9 || digits.length > 11) errors.phone = '電話番号の形式をご確認ください(ご入力は任意です)。';
@@ -115,6 +136,7 @@ function registerPages(app, deps = {}) {
     next();
   });
 
+  const karteToken = (token) => crypto.createHmac('sha256', secret).update('page-karte:' + token).digest('hex').slice(0, 24);
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
   const render = (res, view, data, status = 200) => ejs.renderFile(path.join(VIEWS, view + '.ejs'), { ...base, nonce: res.locals.nonce, ...data })
     .then((html) => res.status(status).type('html').send(html));
@@ -135,7 +157,7 @@ function registerPages(app, deps = {}) {
     pageTitle: `${page.company_name} 御中 | 御社サイトの確認結果`,
     ...viewModel(page, { env }),
     reqToken: C.makeFormToken(secret, 'request', page.token, now()),
-    form: { name: '', email: '', phone: '', message: '' }, errors: {}, error: null, viewToken: C.makeViewToken(secret, page.token, 0),
+    form: { name: '', email: '', phone: '', message: '', maker: '', wantCall: false }, errors: {}, error: null, viewToken: C.makeViewToken(secret, page.token, 0),
     ...extra,
   });
 
@@ -168,10 +190,26 @@ function registerPages(app, deps = {}) {
     const r = await store.submitLead(page, v.values, { ip, ua: req.headers['user-agent'], viewId, variant: C.variantOf(page.token, env) });
     if (!r.duplicate) {
       try {
-        await notify({ company: page.company_name, domain: page.domain, ...v.values, pageUrl: C.pageUrl(page.token, env), stocStoreId: page.stoc_store_id, batchCode: page.stoc_batch_code, stocOk: r.stoc, stocError: r.error });
+        await notify({ company: page.company_name, domain: page.domain, ...v.values, makerLabel: MAKER_LABELS[v.values.maker], priority: v.values.maker === 'none',
+          pageUrl: C.pageUrl(page.token, env), stocStoreId: page.stoc_store_id, batchCode: page.stoc_batch_code, stocOk: r.stoc, stocError: r.error });
       } catch (e) { console.error('[pages] 通知に失敗:', e.message); }
     }
-    return res.redirect(303, `/r/${page.token}/thanks`);
+    // トップの無料診断と同じく、その場で詳しいカルテを見せる(診断結果が保存されていないページだけ、従来のお礼の画面)
+    return res.redirect(303, buildKarteScan(page) ? `/r/${page.token}/karte?t=${karteToken(page.token)}` : `/r/${page.token}/thanks`);
+  }));
+
+  // 申込のあとに開くカルテ。署名つきURL(t)を持っている人だけ(フォームを送った人)。保存済みの診断結果から作る
+  router.get('/:token/karte', wrap(async (req, res) => {
+    const page = await load(req, res, getLimit);
+    if (!page) return;
+    const t = String(req.query.t || '');
+    const want = karteToken(page.token);
+    if (t.length !== want.length || !crypto.timingSafeEqual(Buffer.from(t), Buffer.from(want))) return res.redirect(303, `/r/${page.token}#request`);
+    const scan = buildKarteScan(page);
+    if (!scan) return res.redirect(303, `/r/${page.token}/thanks`);
+    // 専用ページからのカルテは、相談の案内を STOC(オンライン)だけにする(TOC・訪問の案内は出さない)
+    const html = await ejs.renderFile(KARTE_VIEW, { ...base, nonce: res.locals.nonce, scan, company: 'STOC', companyInfo: COMPANY_INFO.STOC });
+    return res.status(200).type('html').send(html);
   }));
 
   router.get('/:token/thanks', wrap(async (req, res) => {
@@ -221,4 +259,4 @@ function registerPages(app, deps = {}) {
   return { router };
 }
 
-module.exports = { registerPages, validateLead, viewModel, limiter, senderInfo, EMAIL_RE, LIM, FINDING_TO_CHECK };
+module.exports = { registerPages, validateLead, buildKarteScan, MAKER_LABELS, viewModel, limiter, senderInfo, EMAIL_RE, LIM, FINDING_TO_CHECK };
