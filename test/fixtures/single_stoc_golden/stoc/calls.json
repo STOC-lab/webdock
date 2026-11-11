@@ -1,0 +1,156 @@
+{
+  "fetchStores": [
+    [
+      1,
+      2,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ]
+  ],
+  "register": [
+    {
+      "code": "sender_20261110_100203_1a2b",
+      "fileName": "send_sender_20261110_100203_1a2b.csv",
+      "memo": "WEBドック B2B診断 2026-11-10",
+      "userId": 7,
+      "filter": {
+        "prefecture": "兵庫県",
+        "main_category": "製造,建設",
+        "exclude_large": true,
+        "small_only": false,
+        "form_found": true,
+        "limit": 0,
+        "batch_no": 1,
+        "batch_total": 1
+      },
+      "items": [
+        {
+          "stocId": 1,
+          "store": {
+            "id": 1,
+            "name": "株式会社テスト1",
+            "status": "未対応",
+            "phone": "079-000-0001",
+            "phone_mobile": "",
+            "phone_free": "",
+            "address": "兵庫県姫路市北条1-1",
+            "prefecture": "兵庫県",
+            "category": "製造",
+            "website_url": "https://www.k1.co.jp/",
+            "gbp_url": "https://maps.example/1",
+            "gbp_rating": "4.2",
+            "gbp_review_count": 15,
+            "score": 31
+          },
+          "formUrl": "https://www.k1.co.jp/contact/",
+          "key": "no_https",
+          "sentence": "確認したところ、サイト全体が暗号化(https)に対応していない状態でした。フォームに入力された内容が暗号化されないまま送られる場合があります。",
+          "websiteUrl": "https://www.k1.co.jp/",
+          "reportUrl": ""
+        },
+        {
+          "stocId": 2,
+          "store": {
+            "id": 2,
+            "name": "株式会社テスト2",
+            "status": "未対応",
+            "phone": "",
+            "phone_mobile": "090-1111-2222",
+            "phone_free": "",
+            "address": "兵庫県姫路市北条2-1",
+            "prefecture": "兵庫県",
+            "category": "製造",
+            "website_url": "https://www.k2.co.jp/",
+            "gbp_url": "https://maps.example/2",
+            "gbp_rating": "3.0",
+            "gbp_review_count": null,
+            "score": 32
+          },
+          "formUrl": "https://www.k2.co.jp/contact/",
+          "key": "cert_soon",
+          "sentence": "確認したところ、サイトの電子証明書の有効期限が近づいている状態でした。期限が切れると、閲覧者のブラウザに警告画面が表示されます。",
+          "websiteUrl": "https://www.k2.co.jp/",
+          "reportUrl": ""
+        },
+        {
+          "stocId": 10,
+          "store": {
+            "id": 10,
+            "name": "株式会社テスト10",
+            "status": "未対応",
+            "phone": "079-000-0010",
+            "phone_mobile": "",
+            "phone_free": "",
+            "address": "兵庫県姫路市北条10-1",
+            "prefecture": "兵庫県",
+            "category": "製造",
+            "website_url": "https://www.k10.co.jp/",
+            "gbp_url": "https://maps.example/10",
+            "gbp_rating": null,
+            "gbp_review_count": 3,
+            "score": 40
+          },
+          "formUrl": "https://www.k10.co.jp/contact/",
+          "key": "php_eol",
+          "sentence": "確認したところ、サイトの応答に表示されているPHP(サイトを動かす部品)の版が7.4.33で、公式サポートが終了した版でした。10月に公表された深刻な脆弱性について、この版には公式の修正がないため、提供元への確認をおすすめします。",
+          "websiteUrl": "https://www.k10.co.jp/",
+          "reportUrl": ""
+        },
+        {
+          "stocId": 14,
+          "store": {
+            "id": 14,
+            "name": "有限会社 整備14",
+            "status": "未対応",
+            "phone": "079-000-0014",
+            "phone_mobile": "",
+            "phone_free": "",
+            "address": "岡山県岡山市北区1-2-3 ビル5F",
+            "prefecture": "兵庫県",
+            "category": "製造",
+            "website_url": "https://www.k14.co.jp/",
+            "gbp_url": "https://maps.example/14",
+            "gbp_rating": null,
+            "gbp_review_count": null,
+            "score": 44
+          },
+          "formUrl": "https://www.k14.co.jp/contact/",
+          "key": "js_libs",
+          "sentence": "確認したところ、更新状況の確認が必要な古い版の部品(JavaScriptライブラリ)が使われている状態でした。",
+          "websiteUrl": "https://www.k14.co.jp/",
+          "reportUrl": ""
+        },
+        {
+          "stocId": 15,
+          "store": {
+            "id": 15,
+            "name": "株式会社, \"引用\"付き",
+            "status": "未対応",
+            "phone": "",
+            "phone_mobile": "",
+            "phone_free": "0120-000-015",
+            "address": "兵庫県姫路市北条15-1",
+            "prefecture": "兵庫県",
+            "category": "製造",
+            "website_url": "https://www.k15.co.jp/",
+            "gbp_url": "https://maps.example/15",
+            "gbp_rating": null,
+            "gbp_review_count": null,
+            "score": 45
+          },
+          "formUrl": "https://www.k15.co.jp/contact/",
+          "key": "https_redirect",
+          "sentence": "確認したところ、http:// で開くと暗号化された https:// のページへ切り替わらず、そのまま表示される状態でした。",
+          "websiteUrl": "https://www.k15.co.jp/",
+          "reportUrl": ""
+        }
+      ]
+    }
+  ],
+  "pagesCreate": []
+}
