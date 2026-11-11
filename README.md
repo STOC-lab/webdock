@@ -230,6 +230,10 @@ node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category
 - **倉庫から直接送る準備(移行010)**: `mysql < sql/warehouse_migrate_010.sql` で、倉庫の送信履歴 `stoc_master.webdock_sends`・バッチ `webdock_send_batches` と、`webdock_pages` の `origin`(stoc/warehouse。既存の行は stoc)・営業管理への登録の記録列を追加(何度実行しても安全)。この移行だけでは動きは変わらない。
 - **営業管理経由の出力の比較テスト**: `npm run test:golden` が、`buildSingleFiles` の出力一式(送信CSV・確認用・本文・まとめ・result.json)とSTOC登録・ページ作成に渡す値を `test/fixtures/single_stoc_golden/` と1文字ずつ比べる(文面は同じフォルダの templates の写しを使う)。営業管理経由の出力を意図して変えたときだけ `UPDATE_GOLDEN=1 npm run test:golden` で作り直す。
 - **STOC営業管理との照合の部品**は `src/stocMatch.js`(電話番号の総当たり・店名+住所)。取り出しCSV(`cli/warehouse-promote.js`)はここから同じ関数を使う。`{ withIds: true }` で作った索引は一致したSTOCの店IDとステータスも持つ(`matchShop`)。テストは `npm run test:stocmatch`。
+- **倉庫から直接送る(`--direct`。営業管理に入れない)**: `node cli/batch-scan.js --source warehouse --template b2b --single-out <dir> --direct --prefecture 大阪府,京都府 [--min-days-since-sent-wh 60] [--dry-run] [--limit N]`(管理画面の「診断して文面も作る」→ 送り方「倉庫から直接」でも同じ)。専用ページ付き(`origin=warehouse`)。バッチコードは `whd_YYYYMMDD_HHmmss_xxxx`、送ったことは倉庫の `webdock_sends` / `webdock_send_batches` だけに `pending` で記録し、**営業管理(stoc_sales)には書き込まない**(読むだけ)。事前に `sql/warehouse_migrate_010.sql` を適用。`--dry-run` は倉庫にも何も書かない試し。計画は `docs/plan-wh-direct.md`。
+  - **対象外の県**: 兵庫・岡山・徳島・香川・愛媛・高知は営業管理経由に限る(管理画面では選べず、CLI では診断前にエラー)。
+  - **診断前の除外の順**: 営業お断り・閉業 → クレーム(営業管理と紐付いた店)→ 倉庫の送信履歴で N 日以内(既定60日。`pending` も送信済みに数える)→ 倉庫の専用ページで配信停止 → 除外ドメイン・チェーン → 営業管理の店と照合して、失注・契約・クレーム・WEBドック送信済み・配信不要の店(照合は電話・店名+住所・倉庫の行の営業管理の店ID)→ フリーダイヤル・ナビダイヤルだけで一致した店は「要確認」として送らず、`要確認_freedial.csv` に出す。理由ごとの件数は `まとめ.txt` に出る。
+  - テストは `npm run test:direct`(偽の接続。営業管理への書き込みSQLが出ないことも確かめる)。送信結果の取り込みは今後の機能。
 
 **STOC営業管理との対応**(`src/pages.js`。MEOレポートの `/report/<token>` と同じ表・列に書くので、STOCの画面に同じように出る)
 

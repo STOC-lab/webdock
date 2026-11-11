@@ -17,6 +17,7 @@ const PC = require('./pageCore');
 const SENDER_HEADER = ['送信先URL', '会社名', '', 'レポートURL', '業種', '評価・口コミ', 'STOCバッチコード', '電話番号', '住所'];
 const CHECK_HEADER = ['store_id', 'stoc_store_id', '会社名', 'ドメイン', '業種区分', '指摘', '一文', '送信先URL', '電話番号', '住所', 'バッチコード'];
 const CHECK_HEADER_PAGE = [...CHECK_HEADER, '専用ページURL'];
+const REVIEW_HEADER = ['store_id', '店名', '住所', '電話番号', '一致したフリーダイヤル等', 'その番号を持つ営業管理の店数', '営業管理の店ID'];
 const FORM_LIMIT_HINT = 500; // 送信先フォームの文字数上限の目安
 
 const csvField = (v) => {
@@ -53,8 +54,9 @@ function pageSentence(sentence, domain) {
  * 診断結果の行(オブジェクト)から送信候補を選ぶ。
  * 行: { store_id, stoc_store_id, 店名, URL, 業種, 業種区分, 問い合わせURL, 画像認証, 営業お断り, 指摘種別, 送信推奨 }
  * 戻り: { candidates:[{rec,key,stocId}], excluded:{理由:件数} }
+ * direct=true(倉庫から直接送る): 営業管理の店ID(stoc_store_id)は要らない。キーは倉庫の店ID(store_id)。candidates に shopId を持つ。
  */
-function pickCandidates(rows) {
+function pickCandidates(rows, { direct = false } = {}) {
   const excluded = {};
   const bump = (k) => { excluded[k] = (excluded[k] || 0) + 1; };
   const candidates = [];
@@ -71,22 +73,27 @@ function pickCandidates(rows) {
     if (String(r['画像認証'] || '').trim() === 'あり') { bump('画像認証あり'); continue; }
     if (String(r['営業お断り'] || '').trim() === 'あり') { bump('営業お断りの記載あり'); continue; }
     const stocId = /^\d+$/.test(String(r['stoc_store_id'] || '').trim()) ? Number(r['stoc_store_id']) : 0;
-    if (!stocId) { bump('営業管理に未登録'); continue; }
+    const shopId = direct && /^\d+$/.test(String(r['store_id'] || '').trim()) ? Number(r['store_id']) : 0;
+    if (direct) { if (!shopId) { bump('倉庫の店IDなし'); continue; } } else if (!stocId) { bump('営業管理に未登録'); continue; }
     if (seenUrl.has(formUrl)) { bump('送信先URL重複'); continue; }
     seenUrl.add(formUrl);
-    candidates.push({ rec: r, key, stocId, formUrl });
+    candidates.push({ rec: r, key, stocId, formUrl, ...(direct ? { shopId } : {}) });
   }
   return { candidates, excluded };
 }
 
-/** 候補 + STOC店舗 → 送信項目。STOC側で見つからない・失注/契約の店は除外 */
-function buildItems(candidates, storeMap, templates, excluded, { withPage = false } = {}) {
+/**
+ * 候補 + STOC店舗 → 送信項目。STOC側で見つからない・失注/契約の店は除外。
+ * direct=true: storeMap は倉庫の店(キーは倉庫の店ID)。失注・契約は診断の前(除外条件)で外してあるので、ここでは見ない。
+ *   matchedByShop(倉庫の店ID文字列 → 一致した営業管理の店ID)があれば、項目の stocId に入れる(参考。履歴の matched_stoc_store_id になる)
+ */
+function buildItems(candidates, storeMap, templates, excluded, { withPage = false, direct = false, matchedByShop } = {}) {
   const f = templates.findingsB2b || {};
   const items = [];
   for (const c of candidates) {
-    const store = storeMap.get(c.stocId);
-    if (!store) { excluded['営業管理に未登録'] = (excluded['営業管理に未登録'] || 0) + 1; continue; }
-    if (store.status === '失注' || store.status === '契約') { excluded['営業管理で失注・契約'] = (excluded['営業管理で失注・契約'] || 0) + 1; continue; }
+    const store = storeMap.get(direct ? c.shopId : c.stocId);
+    if (!store) { const why = direct ? '倉庫に店がない' : '営業管理に未登録'; excluded[why] = (excluded[why] || 0) + 1; continue; }
+    if (!direct && (store.status === '失注' || store.status === '契約')) { excluded['営業管理で失注・契約'] = (excluded['営業管理で失注・契約'] || 0) + 1; continue; }
     let baseSentence = (f[FINDING_KEY[c.key] || c.key] || {})['一文'];
     if (baseSentence && baseSentence.includes('{ver}')) {
       // PHPの指摘は、表示されていた版(診断CSVの「PHP版」列)を一文に入れる。読めなければ送らない
@@ -99,7 +106,7 @@ function buildItems(candidates, storeMap, templates, excluded, { withPage = fals
     const domain = domainOfUrl(c.rec['URL']);
     const sentence = withPage ? pageSentence(baseSentence, domain) : baseSentence;
     items.push({
-      ...c, store, sentence, industry, audience: audienceOf(industry),
+      ...c, ...(direct ? { stocId: (matchedByShop && matchedByShop.get(String(c.shopId))) || 0 } : {}), store, sentence, industry, audience: audienceOf(industry),
       company: store.name || c.rec['店名'] || '',
       domain,
       websiteUrl: store.website_url || c.rec['URL'] || '',
@@ -131,12 +138,24 @@ function bodyLengths(body, items, { withPage = false } = {}) {
   return { typical: len(sub(top, aud)), longest: len(sub(longest, aud)) };
 }
 
-function summaryText({ batches, items, excluded, body, dryRun, now, scanned, preExcluded = {}, withPage = false }) {
+const DIRECT_NOTE = '営業管理には登録していません。送信結果の取り込みは今後の機能で対応します';
+
+function summaryText({ batches, items, excluded, body, dryRun, now, scanned, preExcluded = {}, withPage = false, direct = false, reviewCount = 0 }) {
   const L = [];
   const sorted = Object.entries(excluded).sort((a, b) => b[1] - a[1]);
   L.push('【B2B送信 まとめ(単一本文)】', '');
-  L.push(dryRun ? '*** STOC未登録(--dry-run-stoc) ***  バッチコードは仮です。このまま送信しても結果はSTOCへ戻りません。' : 'STOC営業管理にバッチを登録済みです(結果はバッチコードでSTOCへ戻ります)。');
-  if (withPage) {
+  if (direct) {
+    L.push(dryRun
+      ? `*** 倉庫から直接(--dry-run) ***  倉庫の送信履歴にも専用ページにも何も書いていません。バッチコードは仮です。${DIRECT_NOTE}。`
+      : `倉庫から直接送るバッチです。${DIRECT_NOTE}。倉庫の送信履歴(stoc_master.webdock_sends)には、結果の取り込みまで「送信前(pending)」として記録しました。`);
+  } else {
+    L.push(dryRun ? '*** STOC未登録(--dry-run-stoc) ***  バッチコードは仮です。このまま送信しても結果はSTOCへ戻りません。' : 'STOC営業管理にバッチを登録済みです(結果はバッチコードでSTOCへ戻ります)。');
+  }
+  if (direct) {
+    L.push(dryRun
+      ? '*** 御社専用ページ版です。--dry-run のためページは作っていません。CSVの4列目のURLは仮で、開いてもページはありません。***'
+      : `御社専用ページ版: ${items.length}社分のページを作りました(stoc_master.webdock_pages。origin=warehouse)。CSVの4列目[param1]がページのURLです。閲覧・申込・配信停止は管理画面の「専用ページ」に出ます(営業管理の見込み客には届きません)。`);
+  } else if (withPage) {
     L.push(dryRun
       ? '*** 御社専用ページ版(--with-page)です。--dry-run-stoc のためページは作っていません。CSVの4列目のURLは仮で、開いてもページはありません。***'
       : `御社専用ページ版(--with-page): ${items.length}社分のページを作りました(stoc_master.webdock_pages)。CSVの4列目[param1]がページのURLです。閲覧・申込は管理画面の「専用ページ」と、STOC営業管理の見込み客(/report-leads)に出ます。`);
@@ -157,6 +176,7 @@ function summaryText({ batches, items, excluded, body, dryRun, now, scanned, pre
   L.push('', '送らない理由(診断した会社のうち)');
   for (const [r, n] of sorted) L.push(`  ・${r}: ${n}社`);
   if (!sorted.length) L.push('  (なし)');
+  if (direct) L.push('', `フリーダイヤル・ナビダイヤル(0120/0800/0570)だけで営業管理の店と一致した店(要確認・送っていません): ${reviewCount}社${reviewCount ? ' → 要確認_freedial.csv' : ''}`);
   const bl = bodyLengths(body, items, { withPage });
   L.push('', `本文の文字数(会社名・${withPage ? 'ページURL' : 'ドメイン'}・業種・指摘の一文を典型的な値に置き換えた場合): 最頻の一文 ${bl.typical}文字 / 最長の一文 ${bl.longest}文字`);
   if (bl.longest > FORM_LIMIT_HINT) L.push(`  注意: 最長の場合 ${FORM_LIMIT_HINT}文字を超えます。送信先フォームの上限(約${FORM_LIMIT_HINT}文字のものが多い)に注意してください。`);
@@ -164,7 +184,8 @@ function summaryText({ batches, items, excluded, body, dryRun, now, scanned, pre
   if (withPage) {
     L.push('・本文は全社共通です(本文.txt。御社専用ページ版)。送信ツールの3列目[name]に「御社サイト(ドメイン)を確認したところ、…」の一文、[param1]に専用ページのURL、[param2]に閲覧者の文言が入ります。');
     L.push('・CSVは9列(送信先URL,会社名,指摘の一文,レポートURL=専用ページのURL,業種=閲覧者,評価・口コミ,STOCバッチコード,電話番号,住所)。4列目のURLと7列目のバッチコードは変えないでください。');
-    L.push('・STOCの明細の report_url にも専用ページのURLを入れています。');
+    if (direct) L.push(`・${DIRECT_NOTE}(バッチコード whd_… は倉庫の送信履歴だけにあります)。`);
+    else L.push('・STOCの明細の report_url にも専用ページのURLを入れています。');
   } else {
     L.push('・本文は全社共通です(本文.txt)。送信ツールの3列目[name]に指摘の一文、[param1]にドメイン、[param2]に閲覧者の文言が入ります。');
     L.push('・CSVは9列(送信先URL,会社名,指摘の一文,レポートURL=ドメイン,業種=閲覧者,評価・口コミ,STOCバッチコード,電話番号,住所)。7列目のバッチコードは変えないでください。');
@@ -181,25 +202,35 @@ function summaryText({ batches, items, excluded, body, dryRun, now, scanned, pre
  * - dryRun=true: register を呼ばず、バッチコードは DRYRUN, DRYRUN-2 ...
  * 戻り: { batches:[{code,count,file}], items, excluded, files }
  * 途中のバッチで登録が失敗したら、登録済みバッチのコードを含めて例外にする(登録済み分はSTOCに残る)。
+ *
+ * direct=true(倉庫から直接送る。営業管理には何も書かない):
+ *   opts.wh = { fetchShops(倉庫の店ID[]) → Map(店ID → 店), createBatch(opts) → 倉庫の送信履歴へ } を使い、stoc は使わない。専用ページは必ず付ける(withPage を強制)。
+ *   opts.matchedByShop = 照合で一致した営業管理の店(参考。履歴に残す)、opts.reviewRows = フリーダイヤルのみ一致の店(要確認_freedial.csv に出す。送らない)
+ *   バッチコードは whd_…。登録に失敗したら作った専用ページを消す。
  */
 async function buildSingleFiles(opts) {
-  const { rows, outDir, templates, now = new Date(), stoc, dryRun = false, filter = {}, preExcluded = {}, withPage = false, pages, resultsByStore, env = process.env } = opts;
+  const { rows, outDir, templates, now = new Date(), stoc, dryRun = false, filter = {}, preExcluded = {}, pages, resultsByStore, env = process.env,
+    direct = false, wh, matchedByShop, reviewRows = [] } = opts;
+  const withPage = direct || !!opts.withPage;
+  if (direct && !wh) throw new Error('倉庫から直接送るには倉庫の店と送信履歴の読み書き(wh)が必要です');
   if (withPage && !dryRun && !pages) throw new Error('専用ページ版(--with-page)にはページの作成先(pages)が必要です');
   fs.mkdirSync(outDir, { recursive: true });
   for (const n of fs.readdirSync(outDir)) {
-    if (/^send_.+\.csv$/.test(n) || ['確認用.csv', '本文.txt', 'まとめ.txt', 'result.json'].includes(n)) fs.unlinkSync(path.join(outDir, n));
+    if (/^send_.+\.csv$/.test(n) || ['確認用.csv', '本文.txt', 'まとめ.txt', 'result.json', '要確認_freedial.csv'].includes(n)) fs.unlinkSync(path.join(outDir, n));
   }
   const body = renderBody(templates, { withPage });
-  const { candidates, excluded } = pickCandidates(rows);
-  const storeMap = candidates.length ? await stoc.fetchStores(candidates.map((c) => c.stocId)) : new Map();
-  const items = buildItems(candidates, storeMap, templates, excluded, { withPage });
+  const { candidates, excluded } = pickCandidates(rows, { direct });
+  const storeMap = candidates.length
+    ? await (direct ? wh.fetchShops(candidates.map((c) => c.shopId)) : stoc.fetchStores(candidates.map((c) => c.stocId)))
+    : new Map();
+  const items = buildItems(candidates, storeMap, templates, excluded, { withPage, direct, matchedByShop });
   const files = [];
   const put = (name, text) => { fs.writeFileSync(path.join(outDir, name), text); files.push(name); };
   const batches = [];
   const memo = `WEBドック B2B診断 ${opts.memoDate || ''}`.trim();
   const parts = S.splitBatches(items, S.BATCH_MAX);
   for (let i = 0; i < parts.length; i++) {
-    const code = dryRun ? (i === 0 ? 'DRYRUN' : `DRYRUN-${i + 1}`) : S.newBatchCode(now);
+    const code = dryRun ? (i === 0 ? 'DRYRUN' : `DRYRUN-${i + 1}`) : (direct ? require('./warehouseSends').newBatchCode(now) : S.newBatchCode(now));
     const file = `send_${code}.csv`;
     let tokens = [];
     if (withPage) {
@@ -207,22 +238,31 @@ async function buildSingleFiles(opts) {
       if (dryRun) tokens = parts[i].map(() => PC.newToken());
       else {
         tokens = await pages.create(parts[i].map((it) => ({
-          shopId: it.rec['store_id'], stocStoreId: it.stocId, batchCode: code, domain: it.domain, company: it.company, findingKey: it.key,
+          shopId: it.rec['store_id'], stocStoreId: direct ? null : it.stocId, batchCode: code, domain: it.domain, company: it.company, findingKey: it.key,
           sentence: it.sentence, findings: resultsByStore ? resultsByStore.get(String(it.rec['store_id'])) : null, audience: it.audience,
+          ...(direct ? { origin: 'warehouse' } : {}),
         })));
       }
       parts[i].forEach((it, k) => { it.pageToken = tokens[k]; it.pageUrl = PC.pageUrl(tokens[k], env); });
     }
     if (!dryRun) {
       try {
-        await stoc.register({
-          code, fileName: file, memo, userId: opts.userId, filter: { ...filter, batch_no: i + 1, batch_total: parts.length, ...(withPage ? { with_page: true } : {}) },
-          items: parts[i].map((it) => ({ stocId: it.stocId, store: it.store, formUrl: it.formUrl, key: it.key, sentence: it.sentence, websiteUrl: it.websiteUrl, reportUrl: it.pageUrl || '' })),
-        });
+        if (direct) {
+          // 倉庫の送信履歴だけに書く(営業管理には書かない)
+          await wh.createBatch({
+            code, fileName: file, outDir: path.basename(outDir), filter: { ...filter, batch_no: i + 1, batch_total: parts.length, with_page: true, direct: true },
+            items: parts[i].map((it) => ({ shopId: it.shopId, key: it.key, sentence: it.sentence, pageToken: it.pageToken, formUrl: it.formUrl, matchedStocStoreId: it.stocId || null })),
+          });
+        } else {
+          await stoc.register({
+            code, fileName: file, memo, userId: opts.userId, filter: { ...filter, batch_no: i + 1, batch_total: parts.length, ...(withPage ? { with_page: true } : {}) },
+            items: parts[i].map((it) => ({ stocId: it.stocId, store: it.store, formUrl: it.formUrl, key: it.key, sentence: it.sentence, websiteUrl: it.websiteUrl, reportUrl: it.pageUrl || '' })),
+          });
+        }
       } catch (e) {
         if (withPage && tokens.length) { try { await pages.remove(tokens); } catch (e2) { e.message += `\n(作成した専用ページの削除にも失敗しました: ${e2.message})`; } }
         const done = batches.map((b) => b.code);
-        if (done.length) e.message += `\n(この前に登録済みのバッチ: ${done.join(', ')}。STOC営業管理に残っています)`;
+        if (done.length) e.message += `\n(この前に登録済みのバッチ: ${done.join(', ')}。${direct ? '倉庫の送信履歴' : 'STOC営業管理'}に残っています)`;
         throw e;
       }
     }
@@ -231,11 +271,17 @@ async function buildSingleFiles(opts) {
     batches.push({ code, count: parts[i].length, file });
   }
   put('確認用.csv', '﻿' + csvLine(withPage ? CHECK_HEADER_PAGE : CHECK_HEADER) + items.map((it) => csvLine([
-    it.rec['store_id'], it.stocId, it.company, it.domain, it.industry, GROUP_LABEL[it.key], it.sentence, it.formUrl,
+    it.rec['store_id'], it.stocId || '', it.company, it.domain, it.industry, GROUP_LABEL[it.key], it.sentence, it.formUrl,
     S.contactPhone(it.store), it.store.address || '', it.batchCode, ...(withPage ? [it.pageUrl] : [])])).join(''));
+  if (direct) {
+    put('要確認_freedial.csv', '﻿' + csvLine(REVIEW_HEADER) + reviewRows.map((x) => csvLine([
+      x.row.store_id, x.row.name, x.row.address, x.row.phone, (x.free || []).map((f) => f.number).join(' / '),
+      (x.free || []).map((f) => f.stores).join(' / '), (x.freeIds || []).join(' / ')])).join(''));
+  }
   put('本文.txt', body + '\n');
-  put('まとめ.txt', summaryText({ batches, items, excluded, body, dryRun, now, scanned: rows.length, preExcluded, withPage }));
-  put('result.json', JSON.stringify({ dryRun, withPage, batches, count: items.length, excluded, preExcluded }, null, 2) + '\n');
+  put('まとめ.txt', summaryText({ batches, items, excluded, body, dryRun, now, scanned: rows.length, preExcluded, withPage, direct, reviewCount: reviewRows.length }));
+  put('result.json', JSON.stringify({ dryRun, withPage, batches, count: items.length, excluded, preExcluded,
+    ...(direct ? { direct: true, note: DIRECT_NOTE, reviewCount: reviewRows.length } : {}) }, null, 2) + '\n');
   return { batches, items, excluded, files, body };
 }
 

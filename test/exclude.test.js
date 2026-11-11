@@ -177,6 +177,103 @@ const ok = (c, msg) => eq(!!c, true, msg);
     void res;
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 
+  // ===== 倉庫から直接送るときの除外(PR-2) =====
+  const WS = require('../src/warehouseSends');
+  const fakeQ = (handler) => { const log = []; return { log, async query(sql, params) { log.push({ sql, params }); return handler(sql, params); } }; };
+
+  // ③ 倉庫の送信履歴: pending と success を数え、N日の境目は created_at >= NOW() - INTERVAL N DAY(failed・skipped は数えない)
+  {
+    const pool = fakeQ(() => [[{ shop_id: 11 }, { shop_id: '12' }, { shop_id: null }]]);
+    const s = await WS.loadWarehouseResendShopSet(pool, 60);
+    eq([...s], [11, 12], '倉庫の送信履歴: 店IDの集合');
+    const q = pool.log[0];
+    ok(q.sql.includes('FROM stoc_master.webdock_sends') && q.sql.includes("send_status IN ('pending','success')") && !/failed|skipped/.test(q.sql), '送信履歴: pending と success だけ数える(送信結果の取り込み前は pending も送信済み)');
+    ok(q.sql.includes('created_at >= NOW() - INTERVAL ? DAY') && JSON.stringify(q.params) === '[60]', '送信履歴: N日の境目は created_at >= NOW() - INTERVAL N DAY');
+    eq(WS.DEFAULT_MIN_DAYS_WH, 60, '送信履歴で外す日数の既定は60日');
+    eq(WS.COUNTED_SEND_STATUS, ['pending', 'success'], '数える状態');
+    let msg = null;
+    for (const bad of [-1, 3651, 1.5, NaN, '60']) { try { await WS.loadWarehouseResendShopSet(pool, bad); } catch (e) { msg = e.message; } ok(msg, `日数 ${bad} は不正`); msg = null; }
+    let err = null;
+    try { await WS.loadWarehouseResendShopSet(fakeQ(() => { throw Object.assign(new Error("Table 'webdock_sends' doesn't exist"), { errno: 1146 }); }), 60); } catch (e) { err = e; }
+    ok(err && err.stocCheck && /migrate_010/.test(err.message), '送信履歴を読めなければ(表がない)中止。二重送信を防ぐため黙ってスキップしない');
+    err = null;
+    try { await WS.loadWarehouseResendShopSet(fakeQ(() => { throw new Error('boom'); }), 60); } catch (e) { err = e; }
+    ok(err && err.stocCheck, '送信履歴の読み取りエラーも中止');
+  }
+  // ④ 倉庫の配信停止は shop_id で見る(期間は問わない)
+  {
+    const pool = fakeQ(() => [[{ shop_id: 5 }]]);
+    eq([...(await WS.loadOptOutShopSet(pool))], [5], '倉庫の配信停止: 店IDの集合');
+    ok(pool.log[0].sql.includes('FROM stoc_master.webdock_pages WHERE opt_out_at IS NOT NULL AND shop_id IS NOT NULL') && !/INTERVAL/.test(pool.log[0].sql), '配信停止: opt_out_at を shop_id で見る・期間は問わない');
+  }
+  // ③④⑤ の順序と件数(倉庫の店IDで外す)
+  {
+    const rows2 = [
+      { store_id: '1', url: 'https://a.jp', stocStoreId: '' }, // 送信履歴
+      { store_id: '2', url: 'https://b.jp', stocStoreId: '' }, // 配信停止
+      { store_id: '3', url: 'https://c.jp', stocStoreId: '' }, // 履歴と配信停止の両方 → 履歴が先
+      { store_id: '4', url: 'https://www.autozam.jp', stocStoreId: '' }, // 除外ドメイン
+      { store_id: '5', url: 'https://ok.jp', stocStoreId: '' },
+    ];
+    const r2 = EX.applyPreScanExclusions(rows2, { whResendShopSet: new Set([1, 3]), whOptOutShopSet: new Set([2, 3]), excludeList: list });
+    eq(r2.rows.map((x) => x.store_id), ['5'], '直接: 残る行');
+    eq(r2.counts, { '倉庫の送信履歴で送信済み(日数以内)': 2, '倉庫の専用ページで配信停止': 1, '除外ドメイン指定': 1 }, '直接: ③送信履歴 → ④配信停止 → ⑤除外ドメインの順・件数');
+    eq(EX.applyPreScanExclusions(rows2, {}).rows.length, 5, 'ctx に新しい集合がなければ何も外さない(営業管理経由は今までどおり)');
+  }
+  // クレーム履歴(営業管理は読むだけ)
+  {
+    const pool = fakeQ((sql) => (/sales_logs/.test(sql) ? [[{ store_id: 7 }]] : [[{ store_id: 8 }]]));
+    const set = await EX.loadClaimIdSet(pool, 'stoc_sales', [7, 8, 9], { storeFlags: true });
+    eq([...set].sort(), [7, 8], 'クレーム: 売上ログと店のフラグ');
+    ok(pool.log.every((l) => /^SELECT /.test(l.sql)) && pool.log[0].sql.includes("call_result = 'クレーム'") && pool.log[1].sql.includes('cleared_at IS NULL'), 'クレーム: SELECT だけ・解除済みのフラグは見ない');
+    const p2 = fakeQ(() => [[]]);
+    await EX.loadClaimIdSet(p2, 'stoc_sales', [1], { storeFlags: false });
+    eq(p2.log.length, 1, 'store_flags がない旧版は sales_logs だけ');
+    let err = null;
+    try { await EX.loadClaimIdSet(fakeQ(() => { throw new Error('denied'); }), 'stoc_sales', [1]); } catch (e) { err = e; }
+    ok(err && err.stocCheck, 'クレーム履歴を読めなければ中止');
+  }
+  // ⑥〜⑧ 営業管理の店との照合
+  {
+    const SM = require('../src/stocMatch');
+    const stocRows = [
+      { id: 100, name: 'ガスト芦屋店', address: '兵庫県芦屋市楠町7-18', phone: '0797-11-2222', phone_mobile: '', phone_free: '', phone_other: '', status: '未対応' },
+      { id: 101, name: '失注工業', address: '大阪府大阪市中央区1-2-3', phone: '06-1111-0001', phone_mobile: '', phone_free: '', phone_other: '', status: '失注' },
+      { id: 102, name: 'クレーム製作所', address: '大阪府堺市1-2-3', phone: '072-222-0002', phone_mobile: '', phone_free: '', phone_other: '', status: '未対応' },
+      { id: 103, name: '送信済み鉄工', address: '京都府京都市1-2-3', phone: '075-333-0003', phone_mobile: '', phone_free: '', phone_other: '', status: '未対応' },
+      { id: 104, name: '停止建設', address: '京都府宇治市1-2-3', phone: '0774-44-0004', phone_mobile: '', phone_free: '', phone_other: '', status: '未対応' },
+      { id: 105, name: '本部A', address: '東京都千代田区1-1-1', phone: '03-0000-0005', phone_mobile: '', phone_free: '0120-555-555', phone_other: '', status: '未対応' },
+      { id: 106, name: '契約商会', address: '奈良県奈良市1-2-3', phone: '0742-66-0006', phone_mobile: '', phone_free: '', phone_other: '', status: '契約' },
+    ];
+    const index = { phone: SM.buildPhoneIndex(stocRows, { withIds: true }), addr: SM.addNameAddrIndex(new Map(), stocRows, { withIds: true }) };
+    const status = new Map(stocRows.map((r) => [r.id, r.status]));
+    const W = (id, o) => ({ store_id: String(id), name: `倉庫${id}`, address: '', phone: '', stocStoreId: '', url: `https://w${id}.jp`, ...o });
+    const rows3 = [
+      W(1, { phone: '079-711-xxxx' }), // 一致なし
+      W(2, { phone: '06-1111-0001' }), // 失注
+      W(3, { phone: '072-222-0002' }), // クレーム
+      W(4, { phone: '075-333-0003' }), // WEBドック送信済み
+      W(5, { phone: '0774-44-0004' }), // 配信不要
+      W(6, { phone: '0120-555-555' }), // フリーダイヤルのみ一致 → 要確認
+      W(7, { stocStoreId: '106' }), // 倉庫の行がすでに営業管理の店に紐付いている(契約)
+      W(8, { name: 'ガスト芦屋店', address: '兵庫県芦屋市楠町7-18' }), // 店名+住所で一致(未対応・問題なし)→ 通る
+      W(9, { phone: '0742-66-0006' }), // 契約
+      W(10, { phone: '0797-11-2222' }), // 一致(未対応)→ 通り、一致した店IDを控える
+    ];
+    const matches = EX.matchAll(rows3, index);
+    eq(matches.get(rows3[5]).kind, 'review', 'フリーダイヤルのみ一致は review');
+    eq(matches.get(rows3[6]).ids, [106], '紐付け済みの店IDも使う');
+    eq(matches.get(rows3[7]).by, 'nameaddr', '店名+住所で一致');
+    const out = EX.applyMatchExclusions(rows3, matches, { status, claimSet: new Set([102]), resendSet: new Set([103]), optOutSet: new Set([104]) });
+    eq(out.rows.map((x) => x.store_id), ['1', '8', '10'], '残るのは一致なし・問題のない一致だけ');
+    eq(out.counts, {
+      '営業管理と一致した店が失注・契約': 3, '営業管理と一致した店がクレーム': 1, '営業管理と一致した店がWEBドック送信済み・送信予定': 1,
+      '営業管理と一致した店が配信不要の申し出': 1, 'フリーダイヤルのみ一致(要確認・送らない)': 1,
+    }, '理由ごとの件数(失注・契約には紐付け済みの契約も入る)');
+    eq(out.review.map((x) => [x.row.store_id, x.free.map((f) => f.number), x.freeIds]), [['6', ['0120555555'], [105]]], '要確認: フリーダイヤルと、その番号を持つ営業管理の店');
+    eq([...out.matchedByShop.entries()], [['8', 100], ['10', 100]], '通った店のうち一致したものは営業管理の店IDを控える(参考)');
+  }
+
   console.log(`exclude: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

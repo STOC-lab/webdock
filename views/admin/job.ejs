@@ -3,6 +3,7 @@
   <h1>#<%= job.id %> <%= job.title %></h1>
   <p>状態: <span class="adm-badge adm-<%= job.status %>" id="status"><%= job.status === 'running' ? '実行中…' : job.status === 'success' ? '成功' : '失敗' %></span>
     <span class="adm-help" id="times">開始 <%= fmtTime(job.startedAt) %><%= job.endedAt ? ' ／ 終了 ' + fmtTime(job.endedAt) : '' %></span></p>
+  <% if (job.meta && job.meta.direct) { %><p class="adm-help">送り方: 倉庫から直接(営業管理には登録しません)</p><% } %>
   <div id="dl"><% if (job.downloadUrl) { %>
     <a class="adm-btn adm-link" href="<%= job.downloadUrl %>">CSVをダウンロード(<%= job.exportFile %>)</a>
     <% if (/^phone_list_/.test(job.exportFile || '')) { %><div class="adm-help">電話営業リスト(UTF-8)です。倉庫に「出力済み」の印は付けていません。途中経過は同じ名前に .jsonl を付けた記録ファイルに残ります。</div>
@@ -10,14 +11,22 @@
   <% } %></div>
   <% if (typeof singleView !== 'undefined' && singleView) { %>
   <h3>送信用ファイル(全社共通の本文・1つの宛先CSV)</h3>
+  <% if (singleView.direct) { %>
+  <div class="adm-help">送り方: <strong>倉庫から直接</strong>(御社専用ページ付き。送信用CSVの4列目が専用ページのURL。閲覧・申込は <a href="<%= BASE %>/pages">専用ページの一覧</a> に出ます。営業管理の見込み客には届きません)<% if (singleView.dryRun) { %>。試しのためページは作っていません<% } %></div>
+  <% if (singleView.dryRun) { %><div class="adm-warn">試し(--dry-run)です。倉庫の送信履歴にも専用ページにも何も書いていません。バッチコードは仮です。営業管理には登録していません。</div>
+  <% } else { %><div class="adm-help">営業管理には登録していません。送信結果の取り込みは今後の機能で対応します。倉庫の送信履歴に記録したバッチコード:</div>
+  <% } %>
+  <% } else { %>
   <% if (singleView.withPage) { %><div class="adm-help">モード: <strong>御社専用ページ付き</strong>(送信用CSVの4列目が専用ページのURL。閲覧・申込は <a href="<%= BASE %>/pages">専用ページの一覧</a> と営業管理の見込み客に出ます)<% if (singleView.dryRun) { %>。試しのためページは作っていません<% } %></div><% } %>
   <% if (singleView.dryRun) { %><div class="adm-warn">STOC未登録(試し)です。バッチコードは仮で、このまま送信しても結果はSTOCへ戻りません。</div>
   <% } else { %><div class="adm-help">STOC営業管理に登録したバッチコード(送信結果はこのコードでSTOCへ戻ります):</div>
+  <% } %>
   <% } %>
   <ul class="adm-list"><% singleView.batches.forEach(function (b) { %>
     <li><strong><%= b.code %></strong>(<%= b.count %>社) ・ <a href="<%= b.url %>">送信ツール用CSV(<%= b.file %>)</a></li>
   <% }) %></ul>
   <p><% if (singleView.check) { %><a href="<%= singleView.check.url %>">確認用.csv</a><% } %>
+    <% if (singleView.freedial) { %> ・ <a href="<%= singleView.freedial.url %>">要確認_freedial.csv</a>(フリーダイヤルだけで一致した店<%= singleView.reviewCount %>社。送っていません)<% } %>
     <% if (singleView.summary) { %> ・ <a href="<%= singleView.summary.url %>">まとめ.txt</a><% } %>
     <% if (singleView.body) { %> ・ <a href="<%= singleView.body.url %>">本文.txt</a><% } %></p>
   <% if (singleView.summary) { %><textarea class="adm-input" readonly rows="<%= Math.min(24, singleView.summary.text.split('\n').length + 1) %>" style="width:100%"><%= singleView.summary.text %></textarea><% } %>

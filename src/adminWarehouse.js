@@ -22,6 +22,7 @@ const ejs = require('ejs');
 const multer = require('multer');
 const AdmZip = require('adm-zip');
 const { PREFECTURES } = require('./regions');
+const WS = require('./warehouseSends');
 const { createJobRunner } = require('./adminJobs');
 const replaceCand = require('./replaceCandidates');
 
@@ -43,8 +44,9 @@ const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,80}\.csv$/;
 const GROUP_DIR = /^b2b_\d{8}-\d{6}$/;
 const GROUP_FILE = /^(?:group_[a-z_]+_(?:\d+件(?:_確認用)?\.csv|本文\.txt|本文_短縮\.txt|件名\.txt)|まとめ\.txt)$/;
 // 単一本文方式のフォルダ内: send_<STOCバッチコード>.csv / 確認用.csv / 本文.txt / まとめ.txt / result.json (バッチコードは sender_YYYYmmdd_HHMMSS_xxxx か DRYRUN, DRYRUN-2…)
-const SINGLE_FILE = /^(?:send_(?:sender_\d{8}_\d{6}_[0-9a-f]{4}|DRYRUN(?:-\d{1,2})?)\.csv|確認用\.csv|本文\.txt|まとめ\.txt|result\.json)$/;
-const SENDER_CODE = /^(?:sender_\d{8}_\d{6}_[0-9a-f]{4}|DRYRUN(?:-\d{1,2})?)$/;
+// sender_… は営業管理経由、whd_… は倉庫から直接(src/warehouseSends.js)。要確認_freedial.csv は直接送信のフリーダイヤルのみ一致の店
+const SINGLE_FILE = /^(?:send_(?:(?:sender|whd)_\d{8}_\d{6}_[0-9a-f]{4}|DRYRUN(?:-\d{1,2})?)\.csv|確認用\.csv|要確認_freedial\.csv|本文\.txt|まとめ\.txt|result\.json)$/;
+const SENDER_CODE = /^(?:(?:sender|whd)_\d{8}_\d{6}_[0-9a-f]{4}|DRYRUN(?:-\d{1,2})?)$/;
 const GROUP_TEXT_MAX = 64 * 1024; // 画面に出す本文の上限
 const DEFAULT_MAIN_CATEGORY = '製造,加工,建設,工事,工務店,板金,鉄工,製作所,塗装,設備,機械,金属,工場,整備';
 const VIEWS = path.join(__dirname, '..', 'views', 'admin');
@@ -201,11 +203,23 @@ function buildPromoteArgs(body, { mode, exportDir, now }) {
 /**
  * 「診断して文面も作る」: 取り出し画面(工場・建設用)の絞り込みを batch-scan.js(--source warehouse --template b2b)に渡す引数にする。
  * 結果は b2b_scan_<日時>.csv(UTF-8・BOM付き)。倉庫には「出力済み」の印を付けない。
+ * 送り方(body.send_mode): 営業管理経由(既定) / direct=倉庫から直接(営業管理に入れない・専用ページ付き。兵庫・岡山・徳島・香川・愛媛・高知は選べない。
+ *   body.direct_days = 倉庫の送信履歴で外す日数、既定60)。
  */
 function buildB2bScanArgs(body, { exportDir, now }) {
   const prefs = toList(body.pref).filter((p, i, a) => a.indexOf(p) === i);
   if (!prefs.length) return { error: '都道府県を1つ以上選んでください。' };
   if (prefs.some((p) => !PREFECTURES.includes(p))) return { error: '都道府県の指定が正しくありません。' };
+  const direct = body.send_mode === 'direct';
+  let days = WS.DEFAULT_MIN_DAYS_WH;
+  if (direct) {
+    const pe = WS.directPrefectureError(prefs);
+    if (pe) return { error: pe };
+    if (body.direct_days !== undefined && String(body.direct_days).trim() !== '') {
+      days = Number(String(body.direct_days).trim());
+      if (!Number.isInteger(days) || days < 0 || days > 3650) return { error: '倉庫の送信履歴で外す日数は0以上3650以下の整数で入力してください。' };
+    }
+  }
   const size = ['exclude_large', 'small_only', 'none'].includes(body.size) ? body.size : 'none';
   let limit = 5000;
   if (body.limit !== undefined && String(body.limit).trim() !== '') {
@@ -218,7 +232,7 @@ function buildB2bScanArgs(body, { exportDir, now }) {
     return { error: '業種キーワードの入力が正しくありません(カンマ区切り・1語20文字まで)。' };
   }
   const args = ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', prefs.join(','), '--main-category', cats.join(',')];
-  const withPage = !!body.with_page;
+  const withPage = direct || !!body.with_page; // 倉庫から直接は専用ページを必ず付ける
   if (body.form_found) args.push('--form-found');
   if (size === 'exclude_large') args.push('--exclude-large');
   else if (size === 'small_only') args.push('--small-only');
@@ -226,7 +240,8 @@ function buildB2bScanArgs(body, { exportDir, now }) {
   const singleDir = `b2b_${stamp(now)}`;
   args.push('--limit', String(limit), '--concurrency', '5', '--out', path.join(exportDir, exportFile), '--single-out', path.join(exportDir, singleDir));
   if (withPage) args.push('--with-page');
-  return { args, exportFile, singleDir, withPage, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)) };
+  if (direct) args.push('--direct', '--min-days-since-sent-wh', String(days));
+  return { args, exportFile, singleDir, withPage, preset: 'b2b', estimateHours: Math.max(1, Math.round(limit / 2000)), ...(direct ? { direct: true, days } : {}) };
 }
 
 /**
@@ -566,7 +581,8 @@ function registerAdminWarehouse(app, deps = {}) {
       .map((b) => ({ code: b.code, count: Number(b.count) || 0, file: `send_${b.code}.csv`, url: url(`send_${b.code}.csv`) }));
     const link = (n) => (g.names.includes(n) ? { name: n, url: url(n) } : null);
     return {
-      dirName, dryRun: !!r.dryRun, withPage: !!r.withPage, count: Number(r.count) || 0, batches,
+      dirName, dryRun: !!r.dryRun, withPage: !!r.withPage, direct: !!r.direct, count: Number(r.count) || 0, batches,
+      freedial: link('要確認_freedial.csv'), reviewCount: Number(r.reviewCount) || 0,
       body: g.names.includes('本文.txt') ? { ...link('本文.txt'), text: readText(g.dir, '本文.txt') } : null,
       check: link('確認用.csv'),
       summary: g.names.includes('まとめ.txt') ? { ...link('まとめ.txt'), text: readText(g.dir, 'まとめ.txt') } : null,
@@ -735,9 +751,16 @@ function registerAdminWarehouse(app, deps = {}) {
       return exportPage(req, res, { error: '「送信成功済みの店」は「診断して文面も作る」だけです(CSVの書き出しはありません)。', form: req.body }, 400);
     }
     if (req.body.action === 'scan') {
+      // 「送信成功済みの店」は営業管理の店が対象なので、倉庫から直接は選べない
+      if (req.body.preset === 'stocsent' && req.body.send_mode === 'direct') {
+        return exportPage(req, res, { error: '「送信成功済みの店」では「倉庫から直接」は選べません(営業管理経由だけです)。', form: req.body }, 400);
+      }
       const sb = req.body.preset === 'stocsent' ? buildStocSentScanArgs(req.body, { exportDir, now: now() }) : buildB2bScanArgs(req.body, { exportDir, now: now() });
       if (sb.error) return exportPage(req, res, { error: sb.error, form: req.body }, 400);
-      const sr = jobs.start({ title: sb.withPage ? '診断して文面も作る(御社専用ページ付き)' : '診断して文面も作る', args: sb.args, meta: { exportFile: sb.exportFile, singleDir: sb.singleDir, withPage: sb.withPage } });
+      const sr = jobs.start({
+        title: sb.direct ? '診断して文面も作る(倉庫から直接・御社専用ページ付き)' : (sb.withPage ? '診断して文面も作る(御社専用ページ付き)' : '診断して文面も作る'),
+        args: sb.args, meta: { exportFile: sb.exportFile, singleDir: sb.singleDir, withPage: sb.withPage, ...(sb.direct ? { direct: true } : {}) },
+      });
       if (!sr.ok) return exportPage(req, res, { error: sr.message, runningId: sr.runningId, form: req.body }, 409);
       return res.redirect(303, `${BASE}/jobs/${sr.id}`);
     }

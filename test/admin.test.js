@@ -133,6 +133,21 @@ function multipart(fields, files) {
   ok(buildB2bScanArgs({ pref: ['東京都'], limit: '1;x' }, { exportDir, now: NOW }).error, '診断: 不正な上限');
   ok(buildB2bScanArgs({ pref: ['東京都'] }, { exportDir, now: NOW }).args.includes('製造,加工,建設,工事,工務店,板金,鉄工,製作所,塗装,設備,機械,金属,工場,整備'), '診断: 既定の業種');
 
+  // 倉庫から直接(送り方 direct): 引数・日数・対象外の6県
+  {
+    const d = buildB2bScanArgs({ pref: ['大阪府', '京都府'], main_category: '製造', send_mode: 'direct' }, { exportDir, now: NOW });
+    eq(d.args.slice(-4), ['--with-page', '--direct', '--min-days-since-sent-wh', '60'], '直接: 専用ページ付き・既定60日');
+    eq([d.direct, d.withPage, d.days], [true, true, 60], '直接: 戻り値');
+    eq(buildB2bScanArgs({ pref: ['大阪府'], send_mode: 'direct', direct_days: '0' }, { exportDir, now: NOW }).days, 0, '直接: 0日も指定できる');
+    ok(buildB2bScanArgs({ pref: ['大阪府'], send_mode: 'direct', with_page: '' }, { exportDir, now: NOW }).withPage, '直接: with_page を外しても専用ページは必ず付く');
+    for (const p of ['兵庫県', '岡山県', '徳島県', '香川県', '愛媛県', '高知県']) {
+      ok(buildB2bScanArgs({ pref: ['大阪府', p], send_mode: 'direct' }, { exportDir, now: NOW }).error, `直接: ${p}は拒否`);
+      ok(!buildB2bScanArgs({ pref: [p] }, { exportDir, now: NOW }).error, `営業管理経由: ${p}は今までどおり選べる`);
+    }
+    for (const bad of ['-1', '3651', '1.5', 'abc', '30;x']) ok(buildB2bScanArgs({ pref: ['大阪府'], send_mode: 'direct', direct_days: bad }, { exportDir, now: NOW }).error, `直接: 日数 ${bad} は不正`);
+    eq(buildB2bScanArgs({ pref: ['大阪府'], send_mode: 'stoc', direct_days: 'abc' }, { exportDir, now: NOW }).args, buildB2bScanArgs({ pref: ['大阪府'] }, { exportDir, now: NOW }).args, '営業管理経由では日数を見ない・引数は今までどおり');
+  }
+
   // IPの判定: 外から直接つないだ相手のヘッダは信用しない
   const fakeReq = (peer, h) => ({ socket: { remoteAddress: peer }, headers: h });
   eq(clientIp(fakeReq('198.51.100.7', { 'x-forwarded-for': '203.0.113.10', 'x-real-ip': '203.0.113.10' })), '198.51.100.7', '非loopbackの偽ヘッダは無視');
@@ -286,8 +301,36 @@ function multipart(fields, files) {
       ok(jp.includes(ps.meta.exportFile) && jp.includes('電話営業リスト(UTF-8)'), '電話営業リスト: 作業画面にダウンロードリンク');
     }
 
+    // 送り方「倉庫から直接」(PR-2): 画面の選択肢・サーバー側の拒否・job の meta
+    {
+      const page = await (await ctx.req(BASE + '/export', { headers: { cookie } })).text();
+      ok(/name="send_mode" value="stoc" checked/.test(page) && /name="send_mode" value="direct"/.test(page), '送り方の選択肢(営業管理経由が既定)');
+      ok(/name="direct_days"[^>]*value="60"/.test(page), '直接送信の日数の既定は60');
+      ok(page.includes('const DIRECT_NG') || page.includes('var DIRECT_NG = ["兵庫県","岡山県","徳島県","香川県","愛媛県","高知県"]'), '画面: 対象外の6県を無効化する');
+      const before = ctx.jobs.started.length;
+      const post = (o) => ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ preset: 'b2b', action: 'scan', _csrf: csrf, ...o }) });
+      const ng = await post({ pref: ['大阪府', '兵庫県'], send_mode: 'direct' });
+      eq([ng.status, ctx.jobs.started.length], [400, before], '直接: 兵庫県が含まれたらサーバー側で拒否(jobは始まらない)');
+      ok((await ng.text()).includes('兵庫県'), '直接: 拒否の理由に県名');
+      const sent = await post({ pref: ['大阪府'], preset: 'stocsent', send_mode: 'direct', limit_stoc: '10' });
+      eq([sent.status, ctx.jobs.started.length], [400, before], '送信成功済みの店は「直接」を選べない(サーバー側)');
+      const dd = await post({ pref: ['大阪府', '京都府'], send_mode: 'direct', direct_days: '30' });
+      eq(dd.status, 303, '直接: 開始');
+      const spec = ctx.jobs.started[ctx.jobs.started.length - 1];
+      ok(spec.args.includes('--direct') && spec.args[spec.args.indexOf('--min-days-since-sent-wh') + 1] === '30' && spec.args.includes('--with-page'), '直接: 引数に --direct・日数・専用ページ');
+      eq([spec.meta.direct, spec.meta.withPage], [true, true], '直接: job の meta に direct: true');
+      ok(/倉庫から直接/.test(spec.title), '直接: job のタイトル');
+      const dj = await (await ctx.req(BASE + '/jobs/' + ctx.jobs.started.length, { headers: { cookie } })).text();
+      ok(dj.includes('倉庫から直接(営業管理には登録しません)'), '直接: 作業画面に「営業管理には登録しません」');
+      const nd = await post({ pref: ['大阪府'], send_mode: 'direct', direct_days: '-1' });
+      eq(nd.status, 400, '直接: 日数が不正');
+      const st = await post({ pref: ['兵庫県'] });
+      eq(st.status, 303, '営業管理経由(既定)は兵庫県も選べる');
+      ok(!ctx.jobs.started[ctx.jobs.started.length - 1].args.includes('--direct') && !ctx.jobs.started[ctx.jobs.started.length - 1].meta.direct, '営業管理経由の引数・metaは今までどおり');
+    }
+
     // グループ別ファイル(診断して文面も作る)
-    const scanPost = await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ pref: ['兵庫県'], preset: 'b2b', action: 'scan', _csrf: csrf }) });
+    const scanPost =await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ pref: ['兵庫県'], preset: 'b2b', action: 'scan', _csrf: csrf }) });
     eq(scanPost.status, 303, '診断開始');
     const scanSpec = ctx.jobs.started[ctx.jobs.started.length - 1];
     const scanJobId = ctx.jobs.started.length;
