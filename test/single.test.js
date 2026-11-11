@@ -88,10 +88,10 @@ const rec = (id, key, o = {}) => ({
 
   // ---- 本文 ----
   const body = O.renderBody(T);
-  ok(body.startsWith('[company]\n\n突然のご連絡失礼いたします。株式会社エストックの森澤と申します。\n[param2]がご覧になる御社サイト「[param1]」を'), '本文冒頭(タグはそのまま・姓だけ)');
+  ok(body.startsWith('[company]\n\n突然のご連絡失礼いたします。株式会社エストックの森沢と申します。\n[param2]がご覧になる御社サイト「[param1]」を'), '本文冒頭(タグはそのまま・姓だけ)');
   ok(body.includes('\n\n[name]\n\n被害を示すものではありませんが'), '本文: [name] 位置');
   ok(body.includes('「レポート希望」とご返信ください(morisawa@stoc.co.jp)。\n※侵入や負荷をかける検査は行っておりません。'), '本文: 返信先');
-  ok(body.endsWith('株式会社エストック 森澤 梓\nTEL:0120-830-046/兵庫県姫路市北条梅原町229'), '本文: 署名');
+  ok(body.endsWith('株式会社エストック 森沢 杏沙\nTEL:0120-830-046/兵庫県姫路市北条梅原町229'), '本文: 署名');
   ok(!/\{[^}]*\}/.test(body), '本文: 未展開の{}なし');
   for (const tag of ['[company]', '[name]', '[param1]', '[param2]']) eq(body.split(tag).length - 1, 1, 'タグは1回: ' + tag);
   const T2 = { ...T, config: { ...T.config, 担当者名: '山田 太郎', 電話: '03-0000-0000' } };

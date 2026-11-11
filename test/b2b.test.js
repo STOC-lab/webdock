@@ -69,7 +69,7 @@ const mk = (o, ev) => KEYS.map((k) => ({ key: k, status: (o && o[k]) || 'ok', ev
   ok(m.body.includes('協力会社様・発注者様・求職者様がご覧になる'), '閲覧者(建設)');
   ok(m.body.includes('2026年10月25日に確認'), '確認日');
   ok(m.body.includes('morisawa@stoc.co.jp 宛に') && !m.body.includes('kit@'), '返信先');
-  ok(m.body.includes('TEL:0120-830-046/兵庫県姫路市北条梅原町229') && m.body.includes('森澤 梓'), '署名');
+  ok(m.body.includes('TEL:0120-830-046/兵庫県姫路市北条梅原町229') && m.body.includes('森沢 杏沙'), '署名');
   ok(!/https?:\/\//.test(m.body.replace('http:// で開いた', '').replace('https://', '')) , '本文にURLなし');
   ok(m.length > 300 && m.length < 700, '標準の長さ ' + m.length);
   ok([...m.shortBody].length < m.length, '短縮は標準より短い');
