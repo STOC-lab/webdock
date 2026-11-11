@@ -111,7 +111,7 @@ function multipart(fields, files) {
   const exportDir = '/x/exports';
   const NOW = new Date(2026, 9, 25, 10, 15, 0);
   const meo = buildPromoteArgs({ pref: ['東京都', '大阪府'], preset: 'meo', form_found: '1', size: 'none', limit: '3000' }, { mode: 'make', exportDir, now: NOW });
-  eq(meo.args, ['cli/warehouse-promote.js', '--prefecture', '東京都,大阪府', '--form-found', '--limit', '3000', '--out', '/x/exports/meo_20261025-101500.csv', '--mark'], 'MEO用 make');
+  eq(meo.args, ['cli/warehouse-promote.js', '--prefecture', '東京都,大阪府', '--rules', 'MEO用', '--form-found', '--limit', '3000', '--out', '/x/exports/meo_20261025-101500.csv', '--mark'], 'MEO用 make');
   const b2b = buildPromoteArgs({ pref: '兵庫県', preset: 'b2b', main_category: '', size: 'exclude_large', form_found: '1' }, { mode: 'make', exportDir, now: NOW });
   eq(b2b.args.slice(0, 7), ['cli/warehouse-promote.js', '--prefecture', '兵庫県', '--main-category', '製造,加工,建設,工事,工務店,板金,鉄工,製作所,塗装,設備,機械,金属,工場,整備', '--no-rules', '--form-found'], '工場用の先頭');
   eq(b2b.args.slice(7), ['--exclude-large', '--limit', '5000', '--out', '/x/exports/kojo_20261025-101500.csv', '--mark'], '工場用の後ろ');
@@ -225,7 +225,7 @@ function multipart(fields, files) {
     eq(ctx.jobs.started.length, 0, '拒否時は作業を始めない');
     const okPost = await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ ...body, _csrf: csrf }) });
     eq(okPost.status, 303, 'CSRF正しければ作業開始'); eq(okPost.headers.get('location'), BASE + '/jobs/1', 'ジョブ画面へ');
-    eq(ctx.jobs.started[0].args, ['cli/warehouse-promote.js', '--prefecture', '兵庫県', '--limit', '5000', '--report-only'], '件数確認の引数');
+    eq(ctx.jobs.started[0].args, ['cli/warehouse-promote.js', '--prefecture', '兵庫県', '--rules', 'MEO用', '--limit', '5000', '--report-only'], '件数確認の引数');
     ok(!ctx.jobs.started[0].args.includes('--mark'), '件数確認に--markなし');
     const make = await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ pref: ['兵庫県'], preset: 'b2b', size: 'exclude_large', action: 'make', form_found: '1', _csrf: csrf }) });
     eq(make.status, 303, 'CSV作成開始');

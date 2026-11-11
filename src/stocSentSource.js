@@ -31,7 +31,7 @@ const list = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) 
  * クレームは件数を数えるため除外せず is_claim 列で返す(JS側で除外)。失注・契約・日の浅さもJS側(件数を数えるため)。
  */
 function buildSelectQuery(a = {}, { db = S.stocDbName(), storeFlags = false } = {}) {
-  const where = ["s.inquiry_form_result = '成功'", "s.website_url IS NOT NULL AND s.website_url <> ''"];
+  const where = ["s.inquiry_form_result = '成功'", "s.website_url IS NOT NULL AND s.website_url <> ''", 's.merged_into IS NULL'];
   const params = [];
   const prefs = list(a.prefecture);
   if (prefs.length) { where.push('s.prefecture IN (?)'); params.push(prefs); }
@@ -117,7 +117,7 @@ function chainHostsOf(urls, min = EX.CHAIN_MIN) {
 
 /** 営業管理の全店のウェブサイトURLからチェーン・共通ドメインを数える(全都道府県。50万行ほどを1回読む) */
 async function loadStocChainHosts(pool, db = S.stocDbName()) {
-  const [rows] = await pool.query(`SELECT website_url FROM ${db}.stores WHERE website_url IS NOT NULL AND website_url <> ''`);
+  const [rows] = await pool.query(`SELECT website_url FROM ${db}.stores WHERE website_url IS NOT NULL AND website_url <> '' AND merged_into IS NULL`);
   return chainHostsOf(rows.map((r) => r.website_url));
 }
 

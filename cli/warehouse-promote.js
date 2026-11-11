@@ -11,6 +11,12 @@
  * --exclude-large は size_class='large'(従業員が多い会社)を外す(未調査・不明は残す)。--small-only は size_class='small' だけ。
  * 除外ルール(rules/<名前>.json、cli/warehouse-rules.js で作成)は書き出し時にJSで適用する(倉庫には全件残る)。
  * --limit は ルール除外・電話番号重複除去のあとの件数。--report-only はCSVを書かず件数だけ表示。
+ * 電話番号の照合(既定ON。--no-phone-check で従来どおり cid だけ): 電話番号なしの除外のあと、STOC営業管理(merged_into が空の店)の
+ *   電話4列(代表・携帯・フリーダイヤル・その他)と総当たりで照合する(数字だけで比較・6桁未満は照合しない)。
+ *   固定・携帯で一致 → 登録済みとして外す。フリーダイヤル・ナビダイヤル(0120/0800/0570)だけで一致 → 残して「要確認」にし、番号と STOC の店数を付けた一覧を
+ *   別ファイル(--review-out <file>。--out があれば <out>_review.csv)に書く。
+ *   電話が一致しなくても、店名(空白・記号・法人格を除き、完全一致か4文字以上の包含)と建物名を除く住所がSTOCの既存の店と一致すれば登録済みとして外す
+ *   (住所が市区町村までで番地の数字がないものはこの判定に使わない)。--no-phone-check ではこの判定も外れる。
  * 電話番号が空(NULL・空・ハイフン/空白だけ)の行は、常に除外する(固定条件。倉庫には残し、promoted_at も付けない)。
  * 対象: stoc_store_id IS NULL(営業アプリに未登録)かつ promoted_at IS NULL(未出力)
  */
@@ -24,7 +30,7 @@ const { makePool } = require('./warehouse-import');
 const HEADERS = ['屋号', '業種', '郵便番号', '住所', '電話番号', '評価', '口コミ数', 'Googleマイビジネス登録有無', '登録URL', 'GMAP', '写真枚数'];
 
 function parseArgs(argv) {
-  const o = { out: null, prefecture: [], category: [], mainCategory: [], hasWebsite: false, excludeClosed: true, formFound: false, limit: 5000, mark: false, rules: undefined, dedupePhone: undefined, reportOnly: false, excludeLarge: false, smallOnly: false };
+  const o = { out: null, prefecture: [], category: [], mainCategory: [], hasWebsite: false, excludeClosed: true, formFound: false, limit: 5000, mark: false, rules: undefined, dedupePhone: undefined, reportOnly: false, excludeLarge: false, smallOnly: false, phoneCheck: true, reviewOut: null };
   const list = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -43,6 +49,8 @@ function parseArgs(argv) {
     else if (a === '--dedupe-phone') o.dedupePhone = true;
     else if (a === '--no-dedupe-phone') o.dedupePhone = false;
     else if (a === '--report-only') o.reportOnly = true;
+    else if (a === '--no-phone-check') o.phoneCheck = false;
+    else if (a === '--review-out') o.reviewOut = argv[++i];
     else if (a === '--exclude-large') o.excludeLarge = true;
     else if (a === '--small-only') o.smallOnly = true;
     else throw new Error('不明なオプション: ' + a);
@@ -110,6 +118,109 @@ function loadRules(name) {
 }
 
 const normPhone = (p) => String(p || '').replace(/\D/g, '');
+
+/* ---------- STOC営業管理との電話番号の総当たり照合 ---------- */
+const PHONE_MIN_DIGITS = 6;
+/** ハイフン・空白・全角を除いた数字だけ(全角数字は半角にそろえる) */
+const phoneDigits = (v) => String(v === null || v === undefined ? '' : v).normalize('NFKC').replace(/\D/g, '');
+/** フリーダイヤル(0120/0800)とナビダイヤル(0570)か。チェーン・本部の共通番号のことがあるので別扱いにする(050 は普通の番号) */
+const isFreeDial = (d) => /^(0120|0800|0570)/.test(d);
+/** 倉庫の phone 欄は「,」「/」「、」で複数入っていることがある */
+const phoneNumbersOf = (v) => String(v === null || v === undefined ? '' : v).split(/[,/、]/).map(phoneDigits).filter((d) => d.length >= PHONE_MIN_DIGITS);
+
+/**
+ * STOC営業管理の電話の索引(正規化した数字 → { n: その番号を持つ店数, last })。
+ * 代表・携帯・フリーダイヤル・その他の4列を区別せず1つの索引に入れる(列が違っても同じ番号なら一致)。
+ * rows は id 昇順で、同じ店が続けて来る前提(同じ店が同じ番号を2列に持っていても1店と数える)。
+ */
+function buildPhoneIndex(rows) {
+  const idx = new Map();
+  for (const s of rows) {
+    for (const c of ['phone', 'phone_mobile', 'phone_free', 'phone_other']) {
+      const d = phoneDigits(s[c]);
+      if (d.length < PHONE_MIN_DIGITS) continue;
+      const e = idx.get(d);
+      if (!e) idx.set(d, { n: 1, last: s.id });
+      else if (e.last !== s.id) { e.n++; e.last = s.id; }
+    }
+  }
+  return idx;
+}
+
+/**
+ * 倉庫の電話1件を索引と照合する。戻り: { kind: 'registered' | 'review' | null, free?: [{ number, stores }] }
+ *   registered: 固定・携帯(0120/0800以外)の番号がSTOCのどれかの列と一致 → 登録済みとみなす
+ *   review: 一致したのがフリーダイヤルだけ → 登録済みとみなさない(要確認)。free に番号と STOC の店数を付ける
+ */
+function matchPhone(index, phone) {
+  const free = [];
+  for (const d of phoneNumbersOf(phone)) {
+    const e = index.get(d);
+    if (!e) continue;
+    if (!isFreeDial(d)) return { kind: 'registered' };
+    free.push({ number: d, stores: e.n });
+  }
+  return free.length ? { kind: 'review', free } : { kind: null };
+}
+
+/* ---------- 店名+住所の照合(電話が一致しないときの登録済み判定) ---------- */
+/** 店名: 全角・半角をそろえ、空白・記号・法人格を除く */
+const normShopName = (s) => String(s === null || s === undefined ? '' : s).normalize('NFKC').toLowerCase()
+  .replace(/株式会社|有限会社|合同会社|一般社団法人|医療法人|\(株\)|\(有\)/g, '')
+  .replace(/[\s\u3000\-\u2010-\u2015\u2212\u30fc\uff0d・･.,、。()（）[\]【】「」'"]/g, '');
+/** 住所: 全角・半角をそろえ、最初の空白から後ろ(建物名)を捨て、丁目・番地・号・各種ハイフンを「-」にそろえる */
+const normShopAddr = (s) => String(s === null || s === undefined ? '' : s).normalize('NFKC').toLowerCase()
+  .replace(/[\s\u3000]+.*$/, '').replace(/[\-\u2010-\u2015\u2212\u30fcー丁目番地号]/g, '-').replace(/-+/g, '-').replace(/-$/, '');
+/** 住所が短い(市区町村までで、番地の数字がない・短すぎる)ものは判定に使わない */
+const addrUsable = (a) => a.length >= 8 && /[0-9]/.test(a);
+/** 店名が完全一致、または4文字以上で一方がもう一方を含む */
+const nameLike = (a, b) => !!a && !!b && (a === b || (Math.min(a.length, b.length) >= 4 && (a.includes(b) || b.includes(a))));
+
+/** STOCの店を「正規化した住所 → 正規化した店名の配列」の索引に足す */
+function addNameAddrIndex(idx, rows) {
+  for (const s of rows) {
+    const a = normShopAddr(s.address);
+    const n = normShopName(s.name);
+    if (!n || !addrUsable(a)) continue;
+    const l = idx.get(a);
+    if (l) l.push(n); else idx.set(a, [n]);
+  }
+  return idx;
+}
+
+/** 倉庫の店名・住所が、STOCの既存の店と一致するか(住所が短いものは常に false) */
+function matchNameAddr(idx, name, address) {
+  const a = normShopAddr(address);
+  if (!addrUsable(a)) return false;
+  const l = idx.get(a);
+  if (!l) return false;
+  const n = normShopName(name);
+  return l.some((x) => nameLike(n, x));
+}
+
+/** 営業管理(merged_into が空の店だけ)の電話索引と店名+住所の索引を作る。id 範囲で読む。戻り: { phone, addr } */
+async function loadStocIndex(pool, db = require('../src/stocBatch').stocDbName()) {
+  const PG = 100000;
+  const phone = new Map();
+  const addr = new Map();
+  let last = 0;
+  for (;;) {
+    const [rows] = await pool.query(
+      `SELECT id, name, address, phone, phone_mobile, phone_free, phone_other FROM ${db}.stores WHERE merged_into IS NULL AND id > ? ORDER BY id LIMIT ?`, [last, PG]);
+    if (!rows || !rows.length) break;
+    for (const [k, v] of buildPhoneIndex(rows)) {
+      const e = phone.get(k);
+      if (!e) phone.set(k, v);
+      else { e.n += v.n; e.last = v.last; } // ページ境目で同じ店が分かれることはない(id で区切る)ので単純に足す
+    }
+    addNameAddrIndex(addr, rows);
+    last = rows[rows.length - 1].id;
+    if (rows.length < PG) break;
+  }
+  return { phone, addr };
+}
+const loadStocPhoneIndex = async (pool, db) => (await loadStocIndex(pool, db)).phone;
+
 /** 電話なし(NULL・空・ハイフン/空白だけ)。出力から必ず外す固定条件(--rules/--no-rules に関係しない) */
 const isNoPhone = (p) => p === null || p === undefined || /^[\s\u3000\-\u2010-\u2015\u2212\u30fc\uff0d\uff70]*$/.test(String(p));
 const PAGE = 5000;
@@ -122,7 +233,8 @@ async function selectRows(pool, o, rules, log) {
   const { sql, params } = buildQuery(o);
   const check = rules ? compileRules(rules) : null;
   const dedupe = o.dedupePhone === undefined ? !!(rules && (rules.dedupeColumns || []).includes('電話番号')) : o.dedupePhone;
-  const st = { withForm: 0, scanned: 0, excluded: 0, noPhone: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null, sizeExcluded: null, noSalesExcluded: null };
+  const st = { withForm: 0, scanned: 0, excluded: 0, noPhone: 0, byKeyword: new Map(), dupRemoved: 0, written: 0, dedupe, rules: rules ? rules.name : null, sizeExcluded: null, noSalesExcluded: null, phoneCheck: !!o.phoneCheck, phoneRegistered: 0, nameAddrRegistered: 0, phoneReview: 0, reviewRows: [] };
+  const stocIdx = o.phoneCheck ? await loadStocIndex(pool) : null;
   if (o.excludeLarge || o.smallOnly) {
     try {
       const c = buildSizeExcludedCountQuery(o);
@@ -144,6 +256,14 @@ async function selectRows(pool, o, rules, log) {
     for (const r of rows) {
       st.scanned++;
       if (isNoPhone(r.phone)) { st.noPhone++; continue; }
+      let review = null;
+      if (stocIdx) {
+        const m = matchPhone(stocIdx.phone, r.phone);
+        if (m.kind === 'registered') { st.phoneRegistered++; continue; }
+        // 電話が一致しなくても、店名と住所(建物名を除く)がSTOCの既存の店と一致すれば登録済みとして外す
+        if (matchNameAddr(stocIdx.addr, r.name, r.address_raw || r.address)) { st.nameAddrRegistered++; continue; }
+        if (m.kind === 'review') review = m.free;
+      }
       if (check) {
         const hit = check(r);
         if (hit) {
@@ -161,6 +281,7 @@ async function selectRows(pool, o, rules, log) {
         }
       }
       if (r.form_status === 'url_found') st.withForm++;
+      if (review) { st.phoneReview++; st.reviewRows.push({ row: r, free: review }); }
       out.push(r);
       if (out.length >= o.limit) break;
     }
@@ -176,11 +297,25 @@ function printStats(st, log = console.error) {
   if (st.sizeExcluded !== null && st.sizeExcluded !== undefined) log(`会社規模で除外: ${st.sizeExcluded}(ルール除外の前の件数)`);
   if (st.noSalesExcluded !== null && st.noSalesExcluded !== undefined) log(`営業お断りで除外: ${st.noSalesExcluded}(ルール除外の前の件数)`);
   log(`電話番号なしで除外: ${st.noPhone}件`);
+  if (st.phoneCheck) {
+    log(`電話番号の照合でSTOC登録済みとして除外: ${st.phoneRegistered}件(固定・携帯がSTOCの代表・携帯・フリーダイヤル・その他のどれかと一致)`);
+    log(`店名+住所の照合でSTOC登録済みとして除外: ${st.nameAddrRegistered}件(電話は不一致。店名が完全一致か4文字以上の包含で、建物名を除く住所が一致。住所が市区町村までのものは使わない)`);
+  } else log('電話番号・店名+住所の照合: OFF(--no-phone-check。cid だけで登録済みを判定)');
   log(`ルールで除外: ${st.excluded}`);
   const top = [...st.byKeyword.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
   for (const [k, n] of top) log(`  ${k} : ${n}`);
   log(`電話番号の重複で除外: ${st.dupRemoved}`);
   log(`書き出し対象: ${st.written}(うちフォームあり ${st.withForm})`);
+  if (st.phoneCheck) log(`要確認(フリーダイヤル・ナビダイヤルのみ一致。書き出しには残す): ${st.phoneReview}件`);
+}
+
+/** 要確認(フリーダイヤルのみ一致)の一覧CSV(UTF-8・BOM付き)。番号と、その番号が STOC の何店に入っているかを付ける */
+function reviewCsv(reviewRows) {
+  let t = '﻿' + csvLine(['倉庫ID', '屋号', '住所', '電話番号', '一致したフリーダイヤル', 'STOCでその番号を持つ店数', 'ウェブサイト']);
+  for (const { row: r, free } of reviewRows) {
+    t += csvLine([r.id, r.name, r.address_raw, r.phone, free.map((f) => f.number).join(' '), Math.max(...free.map((f) => f.stores)), r.website_url]);
+  }
+  return t;
 }
 
 function csvField(v) {
@@ -208,6 +343,12 @@ async function main() {
     }
     const { rows, stats } = await selectRows(pool, o, rules);
     printStats(stats);
+    const reviewFile = o.reviewOut || (o.out ? o.out.replace(/(\.csv)?$/i, '_review.csv') : null);
+    if (stats.phoneCheck && stats.reviewRows.length && reviewFile) {
+      fs.mkdirSync(path.dirname(path.resolve(reviewFile)), { recursive: true });
+      fs.writeFileSync(reviewFile, reviewCsv(stats.reviewRows));
+      console.error(`要確認の一覧を書きました -> ${reviewFile}`);
+    }
     if (o.reportOnly) { console.log(`[report-only] ${rows.length}件が書き出し対象です(ファイルは作成していません)`); return; }
     let text = csvLine(HEADERS);
     for (const r of rows) text += rowToCsv(r);
@@ -229,4 +370,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('エラー: ' + e.message); process.exit(1); });
 }
 
-module.exports = { parseArgs, buildQuery, buildSizeExcludedCountQuery, buildNoSalesExcludedCountQuery, printStats, loadRules, selectRows, rowToCsv, isNoPhone, HEADERS };
+module.exports = { parseArgs, buildQuery, buildSizeExcludedCountQuery, buildNoSalesExcludedCountQuery, printStats, loadRules, selectRows, rowToCsv, isNoPhone, HEADERS, phoneDigits, isFreeDial, buildPhoneIndex, matchPhone, loadStocPhoneIndex, loadStocIndex, addNameAddrIndex, matchNameAddr, normShopName, normShopAddr, reviewCsv };

@@ -270,7 +270,7 @@ const noRobots = async () => '';
   const { buildWarehouseTargetQuery, resultToShopUpdate, parseArgs } = require('../cli/find-forms');
   const base = { recheckDays: 90, errorRetryDays: 7, prefecture: '大阪府', limit: 500, retryNeedsBrowser: false };
   let q = buildWarehouseTargetQuery(base);
-  eq(q.params, [['大阪府'], 7, 90, 500], 'wh query params');
+  eq(q.params, [['大阪府'], 7, 90, 90, 500], 'wh query params');
   ok(/FROM stoc_master\.shops/.test(q.sql) && /prefecture IN \(\?\)/.test(q.sql), 'wh query from shops + prefecture');
   ok(/form_status IN \('error'\) AND/.test(q.sql) && !/needs_browser/.test(q.sql), 'needs_browser not retried by default');
   ok(/ORDER BY review_count IS NULL, review_count DESC, id/.test(q.sql), 'wh order');
@@ -278,7 +278,7 @@ const noRobots = async () => '';
   ok(/'error','needs_browser'/.test(q.sql), 'retry-needs-browser flag');
   eq(q.params[0], ['大阪府', '京都府'], 'wh query prefecture list');
   q = buildWarehouseTargetQuery({ ...base, prefecture: null });
-  ok(!/prefecture IN/.test(q.sql) && q.params.length === 3, 'wh query without prefecture');
+  ok(!/prefecture IN/.test(q.sql) && q.params.length === 4, 'wh query without prefecture');
   eq(parseArgs([]).source, 'stores', 'default source stores');
   eq(parseArgs(['--source', 'warehouse', '--retry-needs-browser']).retryNeedsBrowser, true, 'parse warehouse flags');
   let threw = false; try { parseArgs(['--source', 'x']); } catch { threw = true; }

@@ -181,6 +181,8 @@ function buildPromoteArgs(body, { mode, exportDir, now }) {
       return { error: '業種キーワードの入力が正しくありません(カンマ区切り・1語20文字まで)。' };
     }
     args.push('--main-category', cats.join(','), '--no-rules');
+  } else {
+    args.push('--rules', 'MEO用');
   }
   if (body.form_found) args.push('--form-found');
   if (size === 'exclude_large') args.push('--exclude-large');
@@ -358,6 +360,37 @@ function createDefaultQueryStats() {
   };
 }
 
+// ---- 夜間フォーム探し(設定の読み書きと集計) ----
+function createDefaultNightStore() {
+  let pool = null;
+  const night = require('./nightGuard');
+  const get = () => {
+    if (!pool) {
+      pool = require('mysql2/promise').createPool({
+        host: process.env.WH_DB_HOST || '127.0.0.1', port: Number(process.env.WH_DB_PORT || 3306),
+        user: process.env.WH_DB_USER, password: process.env.WH_DB_PASS, charset: 'utf8mb4', connectionLimit: 2,
+      });
+    }
+    return pool;
+  };
+  return {
+    async schedule() { const rows = await night.makeSettingsStore(get()).read(); return { ...night.scheduleFromRows(rows, process.env), tableReady: rows !== null }; },
+    async save(map) { await night.makeSettingsStore(get()).write(map); },
+    async stats(sched, now) { return night.queryNightStats(get(), sched, now); },
+  };
+}
+
+/** 画面の入力(時 0-23・開始日時)を検証して、書き込む値にする。不正なら { error } */
+function parseNightForm(body) {
+  const night = require('./nightGuard');
+  const start = night.parseHour(body.start);
+  const end = night.parseHour(body.end);
+  if (start === null || end === null) return { error: '開始・終了の時刻は 0〜23 の整数で入力してください。' };
+  const fromRaw = String(body.from || '').trim();
+  if (fromRaw && !night.parseFrom(fromRaw)) return { error: '「この日時から動かす」は 2026-11-09 22:00 の形で入力してください(空なら制限なし)。' };
+  return { values: { night_start: String(start), night_end: String(end), night_enabled: body.enabled ? '1' : '0', night_from: fromRaw } };
+}
+
 // ---- 本体 ----
 function registerAdminWarehouse(app, deps = {}) {
   const password = deps.password !== undefined ? deps.password : process.env.WAREHOUSE_ADMIN_PASS || '';
@@ -377,6 +410,7 @@ function registerAdminWarehouse(app, deps = {}) {
   const exportDir = path.resolve(deps.exportDir || process.env.WAREHOUSE_EXPORT_DIR || path.join(__dirname, '..', 'data', 'exports'));
   const jobs = deps.jobs || createJobRunner();
   const queryStats = deps.queryStats || createDefaultQueryStats();
+  const nightStore = deps.nightStore || createDefaultNightStore();
   let pagePool = null;
   const listPages = deps.listPages || (async (q) => {
     if (!pagePool) pagePool = require('./stocBatch').createStocPool();
@@ -788,6 +822,29 @@ function registerAdminWarehouse(app, deps = {}) {
     await page(req, res, 'pages', { nav: 'pages', error, filter, rows: data.rows, counts: data.counts, variants: data.variants || [], pageBase: baseUrl });
   }));
 
+  // ===== 夜間フォーム探し =====
+  async function nightPage(req, res, extra = {}, status = 200) {
+    let sched = null, stats = null, error = extra.error || null;
+    try {
+      sched = await nightStore.schedule();
+      stats = await nightStore.stats(sched, now());
+    } catch (e) {
+      console.error('[admin] night stats error:', e && e.message);
+      if (!error) error = '夜間フォーム探しの件数を読み込めませんでした。sql/warehouse_migrate_009.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。';
+    }
+    await page(req, res, 'night', { nav: 'night', sched, stats, ...extra, error }, status);
+  }
+  router.get('/night', wrap((req, res) => nightPage(req, res)));
+  router.post('/night/settings', wrap(async (req, res) => {
+    const r = parseNightForm(req.body || {});
+    if (r.error) return nightPage(req, res, { error: r.error, form: req.body || {} }, 400);
+    try { await nightStore.save(r.values); } catch (e) {
+      console.error('[admin] night settings save error:', e && e.message);
+      return nightPage(req, res, { error: '設定を保存できませんでした。sql/warehouse_migrate_009.sql を適用したか確認してください。', form: req.body || {} }, 500);
+    }
+    await nightPage(req, res, { notice: '夜間の時間帯を保存しました(動いているプロセスには30秒ほどで反映されます)。' });
+  }));
+
   // ===== 営業管理とつなぐ =====
   router.get('/link', wrap((req, res) => page(req, res, 'link', { nav: 'link' })));
   router.post('/link', wrap(async (req, res) => {
@@ -867,4 +924,5 @@ function registerAdminWarehouse(app, deps = {}) {
   return { enabled: true, uploadDir, exportDir, jobs };
 }
 
-module.exports = { registerAdminWarehouse, clientIp, buildScoreScanArgs, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+module.exports = {
+  parseNightForm, registerAdminWarehouse, clientIp, buildScoreScanArgs, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
