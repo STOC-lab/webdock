@@ -274,6 +274,70 @@ const ok = (c, msg) => eq(!!c, true, msg);
     eq([...out.matchedByShop.entries()], [['8', 100], ['10', 100]], '通った店のうち一致したものは営業管理の店IDを控える(参考)');
   }
 
+  // ===== 営業管理経由の送信でも、倉庫から直接送った店・倉庫で配信停止した店を外す(PR-3) =====
+  {
+    // 倉庫の店ID(shop_id)→ shops.stoc_store_id に引き直した、営業管理の店IDの集合
+    const p1 = fakeQ(() => [[{ id: 100 }, { id: '101' }]]);
+    eq([...(await WS.loadWarehouseResendStocSet(p1, 60))], [100, 101], '直接送信済み: 営業管理の店IDの集合');
+    const q1 = p1.log[0];
+    ok(q1.sql.includes('FROM stoc_master.webdock_sends w JOIN stoc_master.shops s ON s.id = w.shop_id') && q1.sql.includes('s.stoc_store_id IS NOT NULL')
+      && q1.sql.includes("w.send_status IN ('pending','success')") && q1.sql.includes('w.created_at >= NOW() - INTERVAL ? DAY') && JSON.stringify(q1.params) === '[60]' && /^SELECT /.test(q1.sql),
+    '直接送信済み: shop_id → shops.stoc_store_id・pending と success・N日以内・SELECTだけ');
+    const p2 = fakeQ(() => [[{ id: 7 }]]);
+    eq([...(await WS.loadWarehouseOptOutStocSet(p2))], [7], '倉庫の配信停止: 営業管理の店IDの集合');
+    ok(p2.log[0].sql.includes('FROM stoc_master.webdock_pages p JOIN stoc_master.shops s ON s.id = p.shop_id WHERE p.opt_out_at IS NOT NULL AND s.stoc_store_id IS NOT NULL') && !/INTERVAL/.test(p2.log[0].sql), '倉庫の配信停止: opt_out_at の shop_id → shops.stoc_store_id・期間は問わない');
+    // 移行010が未適用(表がない)なら警告して空 = 営業管理経由は今までどおり動く。それ以外のエラーは中止
+    const warns = [];
+    const noTable = () => { throw Object.assign(new Error('no table'), { errno: 1146 }); };
+    eq([...(await WS.loadWarehouseResendStocSet(fakeQ(noTable), 60, { warn: (m) => warns.push(m) }))], [], '表がなければ空(営業管理経由は今までどおり)');
+    eq([...(await WS.loadWarehouseOptOutStocSet(fakeQ(noTable), { warn: (m) => warns.push(m) }))], [], '配信停止も表がなければ空');
+    ok(warns.length === 2 && warns.every((w) => w.includes('warehouse_migrate_010.sql')), '警告を出す(移行010を案内)');
+    let err = null;
+    try { await WS.loadWarehouseResendStocSet(fakeQ(() => { throw new Error('denied'); }), 60); } catch (e) { err = e; }
+    ok(err && err.stocCheck, '表以外の読み取りエラーは中止(二重送信を防ぐ)');
+    let bad = null;
+    try { await WS.loadWarehouseResendStocSet(fakeQ(() => [[]]), -5); } catch (e) { bad = e; }
+    ok(bad, '日数が不正なら中止');
+
+    // 適用: 営業管理の店IDで外す。順序は 送信済み → 配信不要 → 倉庫から直接送信済み → 倉庫で配信停止 → 除外ドメイン → チェーン
+    const rows4 = [
+      { store_id: '1', url: 'https://a.jp', stocStoreId: '100' }, // 倉庫から直接送信済み
+      { store_id: '2', url: 'https://b.jp', stocStoreId: '101' }, // 倉庫で配信停止
+      { store_id: '3', url: 'https://c.jp', stocStoreId: '102' }, // 営業管理経由でも送信済み → 従来の理由が先
+      { store_id: '4', url: 'https://d.jp', stocStoreId: '100' }, // 同じ営業管理の店
+      { store_id: '5', url: 'https://www.autozam.jp', stocStoreId: '103' }, // 除外ドメイン
+      { store_id: '6', url: 'https://ok.jp', stocStoreId: '104' },
+      { store_id: '7', url: 'https://ok2.jp', stocStoreId: '' }, // 営業管理に未登録(この除外は営業管理の店IDで見るので対象外)
+    ];
+    const ctx4 = { resendSet: new Set([102]), whResendStocSet: new Set([100, 102]), whOptOutStocSet: new Set([101]), excludeList: list };
+    const r4 = EX.applyPreScanExclusions(rows4, ctx4);
+    eq(r4.rows.map((x) => x.store_id), ['6', '7'], '営業管理経由: 残る行');
+    eq(r4.counts, { '倉庫から直接送信済み(日数以内)': 2, '倉庫の専用ページで配信停止': 1, 'WEBドック送信済み・送信予定': 1, '除外ドメイン指定': 1 }, '営業管理経由: 新しい理由の件数(従来の送信済みが優先)');
+    const without = EX.applyPreScanExclusions(rows4, { resendSet: new Set([102]), excludeList: list });
+    eq(without.rows.map((x) => x.store_id), ['1', '2', '4', '6', '7'], '新しい集合がなければ従来どおり(除外が増えるだけの変更)');
+    eq(selectForScan(rows4, ctx4, 1).rows.map((x) => x.store_id), ['6'], '新しい除外のあとに limit');
+
+    // まとめ.txt: 新しい除外は理由として件数を出し、0件なら何も変わらない
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'excl3-'));
+    try {
+      const T = loadTemplates();
+      const run = async (pre) => {
+        await O.buildSingleFiles({ rows: [], outDir: dir2, templates: T, dryRun: true, now: new Date('2026-11-10T01:02:03Z'), preExcluded: pre, stoc: { fetchStores: async () => new Map(), register: async () => ({}) } });
+        return { sum: fs.readFileSync(path.join(dir2, 'まとめ.txt'), 'utf8'), json: fs.readFileSync(path.join(dir2, 'result.json'), 'utf8') };
+      };
+      const a1 = await run({ '倉庫から直接送信済み(日数以内)': 5, '倉庫の専用ページで配信停止': 2 });
+      ok(a1.sum.includes('・倉庫から直接送信済み(日数以内): 5社') && a1.sum.includes('・倉庫の専用ページで配信停止: 2社'), 'まとめ.txt: 新しい理由と件数');
+      // 新しい集合が空(または誰にも当たらない)なら counts は空 → まとめ.txt・result.json は新しい集合がないときと1文字も変わらない
+      const none = EX.applyPreScanExclusions(rows4, { resendSet: new Set([102]), excludeList: list, whResendStocSet: new Set([999]), whOptOutStocSet: new Set() }).counts;
+      const base4 = EX.applyPreScanExclusions(rows4, { resendSet: new Set([102]), excludeList: list }).counts;
+      eq(none, base4, '新しい集合が誰にも当たらなければ件数は従来と同じ');
+      const z0 = await run(base4);
+      const z1 = await run(none);
+      eq([z1.sum, z1.json], [z0.sum, z0.json], '除外が増えなければ まとめ.txt・result.json は今までと同じ');
+      ok(!z0.json.includes('倉庫から直接') && !z0.sum.includes('倉庫から直接送信済み'), '除外が0件なら新しい理由は出ない');
+    } finally { fs.rmSync(dir2, { recursive: true, force: true }); }
+  }
+
   console.log(`exclude: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

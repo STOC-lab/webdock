@@ -25,6 +25,9 @@ const REASON = {
   matchedResend: '営業管理と一致した店がWEBドック送信済み・送信予定',
   matchedOptOut: '営業管理と一致した店が配信不要の申し出',
   freedial: 'フリーダイヤルのみ一致(要確認・送らない)',
+  // 営業管理経由の送信: 倉庫から直接送った店・倉庫で配信停止した店を外す(二重送信の防止)
+  whResendStoc: '倉庫から直接送信済み(日数以内)',
+  whOptOutStoc: '倉庫の専用ページで配信停止',
 };
 // 誤って旧MEO文面で送ってしまった明細に運用者がSQLで付けるラベル。この明細はWEBドック送信済みに数えない(後でWEBドック文面を送れる)
 const MEO_WRONG_LABEL = 'MEO文面で送信(誤)';
@@ -107,9 +110,9 @@ async function loadChainHosts(pool, candidateHosts, { columnExists, warn = (m) =
 /**
  * 行(url, stocStoreId, store_id を持つ)から除外対象を外す。理由の判定順:
  *   [倉庫から直接] 倉庫の送信履歴 → 倉庫の配信停止(どちらも倉庫の店ID store_id で見る)
- *   → 送信済み → 配信不要の申し出(営業管理の店ID) → 除外ドメイン指定 → チェーン。
+ *   → 送信済み → 配信不要の申し出(営業管理の店ID) → [営業管理経由] 倉庫から直接送信済み → 倉庫で配信停止(営業管理の店IDに引き直した集合) → 除外ドメイン指定 → チェーン。
  * ctx: { chainReason?:string(チェーンの理由の表示名。省略時 REASON.chain), resendSet?:Set<number>, optOutSet?:Set<number>(専用ページで「今後の案内は不要」), excludeList?:string[], chainHosts?:Set<string>,
- *        whResendShopSet?, whOptOutShopSet?:Set<number>(倉庫の店ID) }
+ *        whResendShopSet?, whOptOutShopSet?:Set<number>(倉庫の店ID), whResendStocSet?, whOptOutStocSet?:Set<number>(営業管理の店ID。PR-3) }
  * 戻り: { rows, counts:{理由:件数} }(件数0の理由は含めない)
  */
 function applyPreScanExclusions(rows, ctx = {}) {
@@ -123,6 +126,8 @@ function applyPreScanExclusions(rows, ctx = {}) {
     const sid = /^\d+$/.test(String(r.stocStoreId || '')) ? Number(r.stocStoreId) : 0;
     if (ctx.resendSet && sid && ctx.resendSet.has(sid)) { bump(REASON.resend); continue; }
     if (ctx.optOutSet && sid && ctx.optOutSet.has(sid)) { bump(REASON.optout); continue; }
+    if (ctx.whResendStocSet && sid && ctx.whResendStocSet.has(sid)) { bump(REASON.whResendStoc); continue; }
+    if (ctx.whOptOutStocSet && sid && ctx.whOptOutStocSet.has(sid)) { bump(REASON.whOptOutStoc); continue; }
     const host = siteHostOf(r.url);
     if (host && ctx.excludeList && matchesExcludeList(host, ctx.excludeList)) { bump(REASON.listed); continue; }
     if (host && ctx.chainHosts && ctx.chainHosts.has(host)) { bump(ctx.chainReason || REASON.chain); continue; }

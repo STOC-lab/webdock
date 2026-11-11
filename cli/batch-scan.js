@@ -488,10 +488,11 @@ async function main() {
     || (fromStoc && !a.nationwide && !String(a.prefecture || '').trim()) // 全国は --nationwide を明示(うっかり全国で動かさない)
     || (fromStoc && a.nationwide && String(a.prefecture || '').trim())
     || (a.minDaysSinceSent !== undefined && !(Number.isInteger(a.minDaysSinceSent) && a.minDaysSinceSent >= 0 && a.minDaysSinceSent <= 3650))
-    // 倉庫から直接: --source warehouse --template b2b --single-out と一緒のときだけ。試し(--dry-run)・日数(--min-days-since-sent-wh)も --direct のときだけ
+    // 倉庫から直接: --source warehouse --template b2b --single-out と一緒のときだけ。試し(--dry-run)は --direct のときだけ。
+    // 倉庫の送信履歴で外す日数(--min-days-since-sent-wh)は --direct と、営業管理経由の --single-out で使う
     || (a.direct && (!fromWh || a.template !== 'b2b' || !a.singleOut || a.groupOut || a.dryRunStoc))
     || (a.dryRun && !a.direct)
-    || (a.minDaysSinceSentWh !== undefined && (!a.direct || !(Number.isInteger(a.minDaysSinceSentWh) && a.minDaysSinceSentWh >= 0 && a.minDaysSinceSentWh <= 3650)))) {
+    || (a.minDaysSinceSentWh !== undefined && (!(a.direct || a.singleOut) || !(Number.isInteger(a.minDaysSinceSentWh) && a.minDaysSinceSentWh >= 0 && a.minDaysSinceSentWh <= 3650)))) {
     console.error('使い方: node cli/batch-scan.js (--in list.tsv | --source warehouse --prefecture 兵庫県 [--main-category 製造,建設] [--exclude-large|--small-only] [--form-found])\n'
       + '        --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] [--with-page] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]\n'
       + '        営業管理の送信成功済みの店から: --source stoc-sent --template b2b --single-out dir (--prefecture 兵庫県,大阪府 | --nationwide) [--category-like a,b] [--exclude-category-like 病院] [--min-days-since-sent 14] [--limit N]\n'
@@ -573,6 +574,11 @@ async function main() {
       if (stocPool) {
         ctx.resendSet = await EX.loadResendSet(stocPool, require('../src/stocBatch').stocDbName());
         ctx.optOutSet = await require('../src/pages').loadOptOutSet(stocPool); // 専用ページで「今後の案内は不要」と申し出た店
+        // 営業管理経由でも、倉庫から直接送った店(N日以内。既定60日)と、倉庫の専用ページで配信停止した店を外す(二重送信の防止)。
+        // 倉庫の店ID(shop_id)から shops.stoc_store_id に引き直した営業管理の店IDで外す。移行010が未適用(表がない)なら警告してスキップ
+        const WS = require('../src/warehouseSends');
+        ctx.whResendStocSet = await WS.loadWarehouseResendStocSet(stocPool, a.minDaysSinceSentWh === undefined ? WS.DEFAULT_MIN_DAYS_WH : a.minDaysSinceSentWh);
+        ctx.whOptOutStocSet = await WS.loadWarehouseOptOutStocSet(stocPool);
       }
       const sel = selectForScan(loaded.rows, ctx, a.limit);
       rows = sel.rows;

@@ -98,6 +98,25 @@ async function loadOptOutShopSet(pool) {
 }
 
 /**
+ * 営業管理経由の送信用(PR-3)。倉庫から直接送った店(N日以内。pending・success)の「営業管理の店ID」(shops.stoc_store_id)の集合。
+ * 倉庫の店ID(shop_id)から shops.stoc_store_id に引き直す(営業管理に紐付いていない店は含まれない)。
+ * 表がなければ(移行010が未適用)警告して空の集合 = 営業管理経由の送信は今までどおり動く。それ以外の読み取りエラーは例外(二重送信を防ぐ)。
+ */
+async function loadWarehouseResendStocSet(pool, days, { warn } = {}) {
+  assertDays(days);
+  return readIds(pool,
+    `SELECT DISTINCT s.stoc_store_id AS id FROM ${SENDS} w JOIN ${SHOPS} s ON s.id = w.shop_id WHERE w.send_status IN (${COUNTED_SEND_STATUS.map((x) => `'${x}'`).join(',')}) AND w.created_at >= NOW() - INTERVAL ? DAY AND s.stoc_store_id IS NOT NULL`,
+    [days], 'id', { what: '倉庫の送信履歴(webdock_sends)', tolerateMissing: true, warn });
+}
+
+/** 営業管理経由の送信用(PR-3)。倉庫の専用ページで配信停止した店(期間は問わない)の「営業管理の店ID」の集合。表がなければ警告して空 */
+async function loadWarehouseOptOutStocSet(pool, { warn } = {}) {
+  return readIds(pool,
+    `SELECT DISTINCT s.stoc_store_id AS id FROM ${PAGES} p JOIN ${SHOPS} s ON s.id = p.shop_id WHERE p.opt_out_at IS NOT NULL AND s.stoc_store_id IS NOT NULL`,
+    [], 'id', { what: '配信停止の記録(webdock_pages)', tolerateMissing: true, warn });
+}
+
+/**
  * 倉庫の店の情報を、営業管理の店(STOC stores)と同じ形にそろえて引く。S.ratingInfo / S.contactPhone をそのまま使うため。
  * 戻り: Map(倉庫の店ID数値 → { name, phone, address, gbp_rating, gbp_review_count, website_url })
  */
@@ -208,6 +227,6 @@ async function checkDirectAccess(pool, { env = process.env, dryRun = false, chec
 module.exports = {
   SENDS, BATCHES, DIRECT_EXCLUDED_PREFECTURES, DEFAULT_MIN_DAYS_WH, COUNTED_SEND_STATUS, WH_BATCH_CODE_RE,
   directPrefectureError, assertDays, newBatchCode, normalizeFormUrl, formUrlKey,
-  loadWarehouseResendShopSet, loadOptOutShopSet, fetchWarehouseShops,
+  loadWarehouseResendShopSet, loadOptOutShopSet, loadWarehouseResendStocSet, loadWarehouseOptOutStocSet, fetchWarehouseShops,
   createBatch, grantStatements, checkDirectAccess,
 };
