@@ -17,6 +17,17 @@ const REASON = {
   chain: 'チェーン・共通ドメイン',
   claim: 'クレーム登録で除外',
   optout: '専用ページで配信不要の申し出',
+  // 倉庫から直接送るとき(--direct)
+  whResend: '倉庫の送信履歴で送信済み(日数以内)',
+  whOptOut: '倉庫の専用ページで配信停止',
+  matchedLost: '営業管理と一致した店が失注・契約',
+  matchedClaim: '営業管理と一致した店がクレーム',
+  matchedResend: '営業管理と一致した店がWEBドック送信済み・送信予定',
+  matchedOptOut: '営業管理と一致した店が配信不要の申し出',
+  freedial: 'フリーダイヤルのみ一致(要確認・送らない)',
+  // 営業管理経由の送信: 倉庫から直接送った店・倉庫で配信停止した店を外す(二重送信の防止)
+  whResendStoc: '倉庫から直接送信済み(日数以内)',
+  whOptOutStoc: '倉庫の専用ページで配信停止',
 };
 // 誤って旧MEO文面で送ってしまった明細に運用者がSQLで付けるラベル。この明細はWEBドック送信済みに数えない(後でWEBドック文面を送れる)
 const MEO_WRONG_LABEL = 'MEO文面で送信(誤)';
@@ -97,8 +108,11 @@ async function loadChainHosts(pool, candidateHosts, { columnExists, warn = (m) =
 /* ---------- 適用 ---------- */
 
 /**
- * 行(url, stocStoreId を持つ)から除外対象を外す。理由の判定順: 送信済み → 配信不要の申し出 → 除外ドメイン指定 → チェーン。
- * ctx: { chainReason?:string(チェーンの理由の表示名。省略時 REASON.chain), resendSet?:Set<number>, optOutSet?:Set<number>(専用ページで「今後の案内は不要」), excludeList?:string[], chainHosts?:Set<string> }
+ * 行(url, stocStoreId, store_id を持つ)から除外対象を外す。理由の判定順:
+ *   [倉庫から直接] 倉庫の送信履歴 → 倉庫の配信停止(どちらも倉庫の店ID store_id で見る)
+ *   → 送信済み → 配信不要の申し出(営業管理の店ID) → [営業管理経由] 倉庫から直接送信済み → 倉庫で配信停止(営業管理の店IDに引き直した集合) → 除外ドメイン指定 → チェーン。
+ * ctx: { chainReason?:string(チェーンの理由の表示名。省略時 REASON.chain), resendSet?:Set<number>, optOutSet?:Set<number>(専用ページで「今後の案内は不要」), excludeList?:string[], chainHosts?:Set<string>,
+ *        whResendShopSet?, whOptOutShopSet?:Set<number>(倉庫の店ID), whResendStocSet?, whOptOutStocSet?:Set<number>(営業管理の店ID。PR-3) }
  * 戻り: { rows, counts:{理由:件数} }(件数0の理由は含めない)
  */
 function applyPreScanExclusions(rows, ctx = {}) {
@@ -106,9 +120,14 @@ function applyPreScanExclusions(rows, ctx = {}) {
   const bump = (k) => { counts[k] = (counts[k] || 0) + 1; };
   const kept = [];
   for (const r of rows) {
+    const shopId = /^\d+$/.test(String(r.store_id || '')) ? Number(r.store_id) : 0;
+    if (ctx.whResendShopSet && shopId && ctx.whResendShopSet.has(shopId)) { bump(REASON.whResend); continue; }
+    if (ctx.whOptOutShopSet && shopId && ctx.whOptOutShopSet.has(shopId)) { bump(REASON.whOptOut); continue; }
     const sid = /^\d+$/.test(String(r.stocStoreId || '')) ? Number(r.stocStoreId) : 0;
     if (ctx.resendSet && sid && ctx.resendSet.has(sid)) { bump(REASON.resend); continue; }
     if (ctx.optOutSet && sid && ctx.optOutSet.has(sid)) { bump(REASON.optout); continue; }
+    if (ctx.whResendStocSet && sid && ctx.whResendStocSet.has(sid)) { bump(REASON.whResendStoc); continue; }
+    if (ctx.whOptOutStocSet && sid && ctx.whOptOutStocSet.has(sid)) { bump(REASON.whOptOutStoc); continue; }
     const host = siteHostOf(r.url);
     if (host && ctx.excludeList && matchesExcludeList(host, ctx.excludeList)) { bump(REASON.listed); continue; }
     if (host && ctx.chainHosts && ctx.chainHosts.has(host)) { bump(ctx.chainReason || REASON.chain); continue; }
@@ -117,7 +136,79 @@ function applyPreScanExclusions(rows, ctx = {}) {
   return { rows: kept, counts };
 }
 
+/* ---------- 倉庫から直接送るとき: 営業管理の店との照合による除外(営業管理は読むだけ) ---------- */
+
+/**
+ * 営業管理(STOC)でクレームの履歴がある店(営業管理の店ID)の集合。売上ログの「クレーム」と、店のフラグ「クレーム」(解除されていないもの)。
+ * 読めなければ例外(クレームの店へ送らないため、黙ってスキップしない)。storeFlags=false は store_flags のない旧版の営業管理。
+ */
+async function loadClaimIdSet(pool, db, ids, { storeFlags = false } = {}) {
+  const set = new Set();
+  const uniq = [...new Set((ids || []).map(Number).filter((n) => n > 0))];
+  const queries = [`SELECT DISTINCT store_id FROM ${db}.sales_logs WHERE store_id IN (?) AND deleted_at IS NULL AND call_result = 'クレーム'`];
+  if (storeFlags) queries.push(`SELECT DISTINCT store_id FROM ${db}.store_flags WHERE store_id IN (?) AND flag = 'クレーム' AND cleared_at IS NULL`);
+  try {
+    for (let i = 0; i < uniq.length; i += 1000) {
+      for (const sql of queries) {
+        const [rows] = await pool.query(sql, [uniq.slice(i, i + 1000)]);
+        for (const r of rows) set.add(Number(r.store_id));
+      }
+    }
+  } catch (e) {
+    throw Object.assign(new Error(`営業管理(${db})のクレーム履歴を読めませんでした(${e.message})。\nクレームの店へ送らないため処理を中止しました。`), { stocCheck: true });
+  }
+  return set;
+}
+
+/**
+ * 倉庫の行ごとに、営業管理の店と照合する(src/stocMatch.js の matchShop。索引は { withIds: true } で作ったもの)。
+ * 手がかりは 電話(固定・携帯)→ 店名+住所、それに倉庫の行がすでに持つ営業管理の店ID(stocStoreId)。
+ * 戻り: Map(行 → { kind: 'registered' | 'review' | null, by, ids: 一致した店ID(昇順), freeIds, free })
+ */
+function matchAll(rows, index) {
+  const SM = require('./stocMatch');
+  const out = new Map();
+  for (const r of rows) {
+    const m = SM.matchShop(index, { name: r.name, address_raw: r.address, phone: r.phone });
+    const linked = /^\d+$/.test(String(r.stocStoreId || '')) ? Number(r.stocStoreId) : 0;
+    const ids = new Set(m.ids);
+    if (linked) ids.add(linked);
+    out.set(r, ids.size
+      ? { kind: 'registered', by: m.kind === 'registered' ? m.by : 'link', ids: [...ids].sort((a, b) => a - b), freeIds: m.freeIds, free: m.free }
+      : m);
+  }
+  return out;
+}
+
+/**
+ * 照合の結果で外す。理由の判定順: 失注・契約 → クレーム → WEBドック送信済み・送信予定 → 配信不要の申し出。
+ * フリーダイヤル・ナビダイヤルだけで一致した店(kind: 'review')は要確認として送らない(review に集める)。
+ * ctx: { status: Map(営業管理の店ID → ステータス), claimSet, resendSet, optOutSet }(どれも営業管理の店IDの集合)
+ * 戻り: { rows, counts:{理由:件数}, review:[{ row, free, freeIds }], matchedByShop: Map(倉庫の店ID文字列 → 一致した営業管理の店ID(先頭)) }
+ */
+function applyMatchExclusions(rows, matches, ctx = {}) {
+  const counts = {};
+  const bump = (k) => { counts[k] = (counts[k] || 0) + 1; };
+  const kept = [];
+  const review = [];
+  const matchedByShop = new Map();
+  const has = (set, ids) => !!set && ids.some((id) => set.has(id));
+  for (const r of rows) {
+    const m = matches.get(r) || { kind: null, ids: [] };
+    if (m.kind === 'review') { review.push({ row: r, free: m.free, freeIds: m.freeIds }); bump(REASON.freedial); continue; }
+    if (m.kind === 'registered' && m.ids.length) {
+      if (ctx.status && m.ids.some((id) => ['失注', '契約'].includes(ctx.status.get(id)))) { bump(REASON.matchedLost); continue; }
+      if (has(ctx.claimSet, m.ids)) { bump(REASON.matchedClaim); continue; }
+      if (has(ctx.resendSet, m.ids)) { bump(REASON.matchedResend); continue; }
+      if (has(ctx.optOutSet, m.ids)) { bump(REASON.matchedOptOut); continue; }
+      matchedByShop.set(String(r.store_id), m.ids[0]);
+    }
+    kept.push(r);
+  }
+  return { rows: kept, counts, review, matchedByShop };
+}
+
 module.exports = {
   CHAIN_MIN, REASON, MEO_WRONG_LABEL, DEFAULT_LIST_FILE, parseExcludeDomains, loadExcludeDomains, matchesExcludeList,
-  resendQuery, loadResendSet, loadChainHosts, applyPreScanExclusions,
+  resendQuery, loadResendSet, loadChainHosts, applyPreScanExclusions, loadClaimIdSet, matchAll, applyMatchExclusions,
 };

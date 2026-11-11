@@ -80,6 +80,28 @@ async function checkPageAccess(pool, { env = process.env } = {}) {
   }
 }
 
+/**
+ * 倉庫から直接送るときの権限の事前確認。専用ページの表(倉庫側 webdock_pages)だけを見る。
+ * 営業管理(stoc_sales)へは書かない(店IDがないページは、閲覧・申込・配信停止を倉庫にだけ記録する)ので、営業管理への書き込み権限は要らない。
+ */
+async function checkWarehousePageAccess(pool, { env = process.env } = {}) {
+  const probes = [
+    `SELECT id, token, stoc_store_id, shop_id, origin FROM ${WH} WHERE 1 = 0`,
+    `INSERT INTO ${WH} (token, domain, company_name, origin) SELECT 'probe', 'probe', 'probe', 'warehouse' FROM DUAL WHERE 1 = 0`,
+    `UPDATE ${WH} SET view_count = view_count WHERE 1 = 0`,
+    `DELETE FROM ${WH} WHERE 1 = 0`,
+  ];
+  for (const sql of probes) {
+    try { await pool.query(sql); } catch (e) {
+      if (S.isPermissionError(e)) throw Object.assign(new Error(`御社専用ページの記録(${WH})に必要な権限が、倉庫DBユーザーにありません(${e.message})。\n処理を中止しました。root で次を実行してください:\n`
+        + `GRANT SELECT, INSERT, UPDATE, DELETE ON ${WH} TO '${env.WH_DB_USER || 'stoc_wh'}'@'localhost';`), { pageCheck: true });
+      if (e && (e.errno === 1146 || e.code === 'ER_NO_SUCH_TABLE')) throw Object.assign(new Error(pageTableMessage(e.message)), { pageCheck: true });
+      if (e && (e.errno === 1054 || e.code === 'ER_BAD_FIELD_ERROR')) throw Object.assign(new Error(`専用ページの表に必要な列がありません(${e.message})。\n先に sql/warehouse_migrate_010.sql を適用してください(mysql < sql/warehouse_migrate_010.sql)。`), { pageCheck: true });
+      throw Object.assign(new Error(`専用ページの書き込み先の確認に失敗しました: ${e.message}\n(${sql.slice(0, 80)}…)`), { pageCheck: true });
+    }
+  }
+}
+
 const jstDate = (d) => {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(d || new Date()).map((x) => [x.type, x.value]));
   return `${p.year}年${p.month}月${p.day}日`;
@@ -116,10 +138,12 @@ function createPageStore(pool, { env = process.env, now = () => new Date(), log 
       const chunk = rows.slice(i, i + 500);
       for (let attempt = 0; ; attempt++) {
         for (const r of chunk) r.token = newToken();
+        // 倉庫から直接送るページ(origin: 'warehouse')のときだけ origin 列も書く。営業管理経由(origin なし)のSQLは今までと同じ
+        const withOrigin = chunk.some((r) => r.origin);
         const values = chunk.map((r) => [r.token, r.shopId === undefined || r.shopId === '' ? null : r.shopId, r.stocStoreId || null, r.batchCode || null, r.domain, r.company,
-          r.findingKey || null, r.sentence || null, JSON.stringify(summarizeFindings(r.findings)), r.audience || null]);
+          r.findingKey || null, r.sentence || null, JSON.stringify(summarizeFindings(r.findings)), r.audience || null, ...(withOrigin ? [r.origin || 'stoc'] : [])]);
         try {
-          await pool.query(`INSERT INTO ${WH} (token,shop_id,stoc_store_id,stoc_batch_code,domain,company_name,finding_key,finding_sentence,findings_json,audience) VALUES ?`, [values]);
+          await pool.query(`INSERT INTO ${WH} (token,shop_id,stoc_store_id,stoc_batch_code,domain,company_name,finding_key,finding_sentence,findings_json,audience${withOrigin ? ',origin' : ''}) VALUES ?`, [values]);
           break;
         } catch (e) {
           if (e && (e.code === 'ER_DUP_ENTRY' || e.errno === 1062) && attempt < 2) continue;
@@ -308,6 +332,6 @@ async function loadOptOutSet(pool) {
 }
 
 module.exports = {
-  WH, MARK, LEAD_DUP_MS, VIEW_UPDATE_COLS, INQUIRY_COLS, LOG_COLS, grantStatements, pagePermissionMessage, pageTableMessage, checkPageAccess,
+  WH, MARK, LEAD_DUP_MS, VIEW_UPDATE_COLS, INQUIRY_COLS, LOG_COLS, grantStatements, pagePermissionMessage, pageTableMessage, checkPageAccess, checkWarehousePageAccess,
   summarizeFindings, parseFindings, jstDate, createPageStore, loadOptOutSet,
 };

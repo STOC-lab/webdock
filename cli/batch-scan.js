@@ -7,6 +7,9 @@
  * 倉庫から直接: node cli/batch-scan.js --source warehouse --prefecture 兵庫県 --main-category 製造,建設 [--exclude-large|--small-only]
  *              [--form-found] --template b2b --out result.csv   (WH_DB_* が必要)
  * 営業管理の送信成功済みの店から(業種不問): node cli/batch-scan.js --source stoc-sent --template b2b --single-out dir (--prefecture 兵庫県,大阪府 | --nationwide) [--category-like a,b] [--exclude-category-like 病院] [--min-days-since-sent 14] [--limit N]
+ * 倉庫から直接送る(営業管理に入れない): node cli/batch-scan.js --source warehouse --template b2b --single-out dir --direct --prefecture 大阪府,京都府 [--min-days-since-sent-wh 60] [--dry-run] [--limit N]
+ *   専用ページ付き(--with-page を含む)。バッチは倉庫の送信履歴(stoc_master.webdock_sends)に記録し、営業管理(stoc_sales)へは書かない(読むだけ)。
+ *   兵庫・岡山・徳島・香川・愛媛・高知は対象外(営業管理経由に限る)。--dry-run は倉庫にも何も書かない試し(sql/warehouse_migrate_010.sql が必要)。
  * B2B(建設・製造向け): --template b2b [--subject 1|2|3] [--max-chars N]
  * 御社専用ページ(単一本文のみ): --single-out dir --with-page  会社ごとの専用ページ(/r/<token>)を作り、CSVの4列目にそのURLを入れる(sql/warehouse_migrate_006.sql が必要)
  */
@@ -455,8 +458,21 @@ function parseArgs(argv) {
     else if (k === '--category-like') a.categoryLike = argv[++i];
     else if (k === '--exclude-category-like') a.excludeCategoryLike = argv[++i];
     else if (k === '--min-days-since-sent') a.minDaysSinceSent = parseInt(argv[++i], 10);
+    else if (k === '--direct') a.direct = true;
+    else if (k === '--min-days-since-sent-wh') a.minDaysSinceSentWh = parseInt(argv[++i], 10);
+    else if (k === '--dry-run') a.dryRun = true;
   }
+  if (a.direct) a.withPage = true; // 倉庫から直接は専用ページ付きだけ
   return a;
+}
+
+/**
+ * --direct の引数の検査(診断どころかDBに触る前に止める)。問題があればメッセージ、なければ null。
+ * 対象外の県(兵庫・岡山・徳島・香川・愛媛・高知)が含まれていたらエラー。県を指定しないと全県になり対象外の県が含まれるので、--prefecture は必須。
+ */
+function directArgsError(a) {
+  if (!String(a.prefecture || '').trim()) return '--direct には --prefecture が必要です(県を指定しないと対象外の県が含まれます)。';
+  return require('../src/warehouseSends').directPrefectureError(a.prefecture);
 }
 
 async function main() {
@@ -471,12 +487,20 @@ async function main() {
     || (fromStoc && (a.template !== 'b2b' || !a.singleOut || a.in)) // stoc-sent は b2b の単一本文(--single-out)だけ
     || (fromStoc && !a.nationwide && !String(a.prefecture || '').trim()) // 全国は --nationwide を明示(うっかり全国で動かさない)
     || (fromStoc && a.nationwide && String(a.prefecture || '').trim())
-    || (a.minDaysSinceSent !== undefined && !(Number.isInteger(a.minDaysSinceSent) && a.minDaysSinceSent >= 0 && a.minDaysSinceSent <= 3650))) {
+    || (a.minDaysSinceSent !== undefined && !(Number.isInteger(a.minDaysSinceSent) && a.minDaysSinceSent >= 0 && a.minDaysSinceSent <= 3650))
+    // 倉庫から直接: --source warehouse --template b2b --single-out と一緒のときだけ。試し(--dry-run)は --direct のときだけ。
+    // 倉庫の送信履歴で外す日数(--min-days-since-sent-wh)は --direct と、営業管理経由の --single-out で使う
+    || (a.direct && (!fromWh || a.template !== 'b2b' || !a.singleOut || a.groupOut || a.dryRunStoc))
+    || (a.dryRun && !a.direct)
+    || (a.minDaysSinceSentWh !== undefined && (!(a.direct || a.singleOut) || !(Number.isInteger(a.minDaysSinceSentWh) && a.minDaysSinceSentWh >= 0 && a.minDaysSinceSentWh <= 3650)))) {
     console.error('使い方: node cli/batch-scan.js (--in list.tsv | --source warehouse --prefecture 兵庫県 [--main-category 製造,建設] [--exclude-large|--small-only] [--form-found])\n'
       + '        --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] [--with-page] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]\n'
-      + '        営業管理の送信成功済みの店から: --source stoc-sent --template b2b --single-out dir (--prefecture 兵庫県,大阪府 | --nationwide) [--category-like a,b] [--exclude-category-like 病院] [--min-days-since-sent 14] [--limit N]');
+      + '        営業管理の送信成功済みの店から: --source stoc-sent --template b2b --single-out dir (--prefecture 兵庫県,大阪府 | --nationwide) [--category-like a,b] [--exclude-category-like 病院] [--min-days-since-sent 14] [--limit N]\n'
+      + '        倉庫から直接(営業管理に入れない): --source warehouse --template b2b --single-out dir --direct --prefecture 大阪府,京都府 [--min-days-since-sent-wh 60] [--dry-run] [--limit N]');
     process.exit(2);
   }
+  const directErr = a.direct ? directArgsError(a) : null;
+  if (directErr) { console.error('エラー: ' + directErr); process.exit(2); }
   let mergeTags;
   if (a.mergeTags !== undefined) {
     try {
@@ -493,12 +517,18 @@ async function main() {
     try { require('dotenv').config(); } catch { /* なくても動く */ }
     stocPool = require('../src/stocBatch').createStocPool();
     try {
-      await require('../src/stocBatch').checkStocAccess(stocPool, { readOnly: !!a.dryRunStoc });
-      // 専用ページ版: ページの表と、STOCの見込み客・閲覧への書き込み権限も、診断の前に確認する(試しのときはページを作らないので確認しない)
-      if (a.withPage && !a.dryRunStoc) await require('../src/pages').checkPageAccess(stocPool);
+      if (a.direct) {
+        // 倉庫から直接: 営業管理は読み取りだけ。倉庫の送信履歴・専用ページへの書き込みを確認する(--dry-run は倉庫にも書かないので読み取りだけ)
+        await require('../src/warehouseSends').checkDirectAccess(stocPool, { dryRun: !!a.dryRun, checkPages: require('../src/pages').checkWarehousePageAccess });
+      } else {
+        await require('../src/stocBatch').checkStocAccess(stocPool, { readOnly: !!a.dryRunStoc });
+        // 専用ページ版: ページの表と、STOCの見込み客・閲覧への書き込み権限も、診断の前に確認する(試しのときはページを作らないので確認しない)
+        if (a.withPage && !a.dryRunStoc) await require('../src/pages').checkPageAccess(stocPool);
+      }
     } catch (e) { await stocPool.end(); throw e; }
   }
   let rows;
+  let directInfo = null; // --direct のとき { matchedByShop, reviewRows, days }
   const preExcluded = {};
   try {
     let loaded;
@@ -516,13 +546,44 @@ async function main() {
     // 診断前の除外。--single-out のときは、すでにWEBドックで送った・送信予定の店(STOC営業管理のバッチ)も外す(二重送信防止。再送信のオプションはない)
     const ctx = { excludeList: EX.loadExcludeDomains(), chainHosts: loaded.chain.hosts };
     if (fromStoc) ctx.chainReason = require('../src/stocSentSource').REASON.chain;
-    if (stocPool) {
-      ctx.resendSet = await EX.loadResendSet(stocPool, require('../src/stocBatch').stocDbName());
-      ctx.optOutSet = await require('../src/pages').loadOptOutSet(stocPool); // 専用ページで「今後の案内は不要」と申し出た店
+    if (a.direct) {
+      // 倉庫から直接。順序: ③倉庫の送信履歴 → ④倉庫の配信停止 → ⑤除外ドメイン・チェーン → ⑥〜⑧営業管理の店と照合(営業管理は読むだけ)→ そのあと --limit
+      const WS = require('../src/warehouseSends');
+      const SM = require('../src/stocMatch');
+      const days = a.minDaysSinceSentWh === undefined ? WS.DEFAULT_MIN_DAYS_WH : a.minDaysSinceSentWh;
+      ctx.whResendShopSet = await WS.loadWarehouseResendShopSet(stocPool, days);
+      ctx.whOptOutShopSet = await WS.loadOptOutShopSet(stocPool);
+      const pre = EX.applyPreScanExclusions(loaded.rows, ctx); // この ctx には resendSet / optOutSet を入れない(営業管理の店IDでの除外は、一致した店IDで⑥〜⑦で行う)
+      Object.assign(preExcluded, pre.counts);
+      const db = stocDbName();
+      const { storeFlags } = await checkClaimAccess(stocPool);
+      const index = await SM.loadStocIndex(stocPool, db, { withIds: true });
+      const matches = EX.matchAll(pre.rows, index);
+      const matchedIds = new Set();
+      for (const m of matches.values()) for (const id of m.ids) matchedIds.add(id);
+      const mx = EX.applyMatchExclusions(pre.rows, matches, {
+        status: index.status,
+        claimSet: await EX.loadClaimIdSet(stocPool, db, [...matchedIds], { storeFlags }),
+        resendSet: await EX.loadResendSet(stocPool, db),
+        optOutSet: await require('../src/pages').loadOptOutSet(stocPool),
+      });
+      Object.assign(preExcluded, mx.counts);
+      rows = a.limit > 0 ? mx.rows.slice(0, a.limit) : mx.rows;
+      directInfo = { matchedByShop: mx.matchedByShop, reviewRows: mx.review, days };
+    } else {
+      if (stocPool) {
+        ctx.resendSet = await EX.loadResendSet(stocPool, require('../src/stocBatch').stocDbName());
+        ctx.optOutSet = await require('../src/pages').loadOptOutSet(stocPool); // 専用ページで「今後の案内は不要」と申し出た店
+        // 営業管理経由でも、倉庫から直接送った店(N日以内。既定60日)と、倉庫の専用ページで配信停止した店を外す(二重送信の防止)。
+        // 倉庫の店ID(shop_id)から shops.stoc_store_id に引き直した営業管理の店IDで外す。移行010が未適用(表がない)なら警告してスキップ
+        const WS = require('../src/warehouseSends');
+        ctx.whResendStocSet = await WS.loadWarehouseResendStocSet(stocPool, a.minDaysSinceSentWh === undefined ? WS.DEFAULT_MIN_DAYS_WH : a.minDaysSinceSentWh);
+        ctx.whOptOutStocSet = await WS.loadWarehouseOptOutStocSet(stocPool);
+      }
+      const sel = selectForScan(loaded.rows, ctx, a.limit);
+      rows = sel.rows;
+      Object.assign(preExcluded, sel.counts);
     }
-    const sel = selectForScan(loaded.rows, ctx, a.limit);
-    rows = sel.rows;
-    Object.assign(preExcluded, sel.counts);
   } catch (e) { if (stocPool) await stocPool.end(); throw e; }
   console.error('診断前に除外: ' + (Object.entries(preExcluded).map(([k, n]) => `${k} ${n}`).join(' / ') || 'なし') + ` → 診断対象 ${rows.length}社`);
   fs.mkdirSync(path.dirname(path.resolve(a.out)), { recursive: true });
@@ -552,22 +613,28 @@ async function main() {
       const { buildSingleFiles } = require('../src/outreachSingle');
       const now = new Date();
       const uid = process.env.STOC_EXPORT_USER_ID;
-      const pageStore = a.withPage && !a.dryRunStoc ? require('../src/pages').createPageStore(stocPool) : null;
+      const dry = !!a.dryRunStoc || !!a.dryRun; // --dry-run-stoc(営業管理経由) / --dry-run(倉庫から直接)
+      const pageStore = a.withPage && !dry ? require('../src/pages').createPageStore(stocPool) : null;
+      const WS = a.direct ? require('../src/warehouseSends') : null;
       const res = await buildSingleFiles({
         withPage: !!a.withPage, pages: pageStore, resultsByStore: a.withPage ? loadResultsByStore(a.out + '.jsonl') : undefined,
-        rows: recs, outDir: a.singleOut, templates: loadTemplates(), now, dryRun: !!a.dryRunStoc,
+        rows: recs, outDir: a.singleOut, templates: loadTemplates(), now, dryRun: dry,
         userId: /^\d+$/.test(uid || '') ? Number(uid) : null, memoDate: new Date(now.getTime() + 9 * 3600e3).toISOString().slice(0, 10),
         filter: { prefecture: a.prefecture || '', main_category: a.mainCategory || '', exclude_large: !!a.excludeLarge, small_only: !!a.smallOnly, form_found: !!a.formFound, limit: a.limit || 0,
-          ...(fromStoc ? { input: 'stoc-sent', nationwide: !!a.nationwide, category_like: a.categoryLike || '', exclude_category_like: a.excludeCategoryLike || '', min_days_since_sent: a.minDaysSinceSent === undefined ? 14 : a.minDaysSinceSent } : {}) },
+          ...(fromStoc ? { input: 'stoc-sent', nationwide: !!a.nationwide, category_like: a.categoryLike || '', exclude_category_like: a.excludeCategoryLike || '', min_days_since_sent: a.minDaysSinceSent === undefined ? 14 : a.minDaysSinceSent } : {}),
+          ...(a.direct ? { min_days_since_sent_wh: directInfo.days } : {}) },
         preExcluded,
-        stoc: { fetchStores: (ids) => S.fetchStocStores(stocPool, ids), register: (o) => S.registerBatch(stocPool, o) },
+        ...(a.direct ? {
+          direct: true, matchedByShop: directInfo.matchedByShop, reviewRows: directInfo.reviewRows,
+          wh: { fetchShops: (ids) => WS.fetchWarehouseShops(stocPool, ids), createBatch: (o) => WS.createBatch(stocPool, o) },
+        } : { stoc: { fetchStores: (ids) => S.fetchStocStores(stocPool, ids), register: (o) => S.registerBatch(stocPool, o) } }),
       });
-      console.error(`単一本文出力: ${a.singleOut} に ${res.files.length}ファイル / 送信対象 ${res.items.length}社 / バッチ ${res.batches.map((b) => b.code + '(' + b.count + ')').join(', ') || 'なし'}${a.dryRunStoc ? ' [STOC未登録]' : ' [STOC登録済み]'}。まとめ.txt を確認してください。`);
+      console.error(`単一本文出力: ${a.singleOut} に ${res.files.length}ファイル / 送信対象 ${res.items.length}社 / バッチ ${res.batches.map((b) => b.code + '(' + b.count + ')').join(', ') || 'なし'}${a.direct ? (dry ? ' [倉庫から直接・試し(何も書いていない)]' : ' [倉庫の送信履歴に記録済み・営業管理には登録していない]') : (a.dryRunStoc ? ' [STOC未登録]' : ' [STOC登録済み]')}。まとめ.txt を確認してください。`);
     } finally { await stocPool.end(); }
   }
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
-module.exports = { loadResultsByStore, selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, PHP_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
+module.exports = { directArgsError, loadResultsByStore, selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, PHP_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
 if (require.main === module) main().catch((e) => { console.error(e && (e.claimCheck || e.stocCheck || e.pageCheck) ? 'エラー: ' + e.message : e); process.exit(1); });

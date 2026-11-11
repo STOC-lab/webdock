@@ -7,6 +7,8 @@
   var hasForm = form && Object.keys(form).length;
   var size = f.size || 'none';
   var formFound = form && Object.keys(form).length ? !!f.form_found : true;
+  var sendMode = f.send_mode === 'direct' ? 'direct' : 'stoc';
+  var directNg = ['兵庫県', '岡山県', '徳島県', '香川県', '愛媛県', '高知県']; // 倉庫から直接は送れない県(src/warehouseSends.js と同じ)
   var pf = phoneForm || {};
   var pSel = toArr(pf.pref);
   var pSize = pf.size || 'none';
@@ -40,7 +42,13 @@
     <div id="b2bbox" class="adm-sub">
       <label>主業種のキーワード(カンマ区切り)</label>
       <textarea class="adm-input" name="main_category" rows="3"><%= f.main_category || defaultMain %></textarea>
-      <label class="adm-check"><input type="checkbox" name="with_page" value="1" <%= hasForm ? (f.with_page ? 'checked' : '') : 'checked' %>> 御社専用ページのURLを入れる(既定はON。外すこともできます)</label>
+      <p class="adm-help">送り方:</p>
+      <label class="adm-radio"><input type="radio" name="send_mode" value="stoc" <%= sendMode === 'stoc' ? 'checked' : '' %>> 営業管理経由(今までどおり・既定)<span class="adm-help">営業管理にバッチを登録し、送信結果は営業管理へ戻ります。</span></label>
+      <label class="adm-radio"><input type="radio" name="send_mode" value="direct" <%= sendMode === 'direct' ? 'checked' : '' %>> 倉庫から直接(営業管理に入れない・専用ページ付き)<span class="adm-help">送ったことは倉庫の送信履歴だけに残します。<%= directNg.join('・') %> は選べません(営業管理経由だけ)。営業管理の店と一致した店でクレーム・失注・契約・送信済み・配信停止のものと、フリーダイヤルだけで一致した店(要確認)は送りません。送信結果の取り込みは今後の機能です。</span></label>
+      <div id="directbox" class="adm-sub">
+        <label>倉庫の送信履歴で <input class="adm-input adm-short" type="number" name="direct_days" min="0" max="3650" value="<%= f.direct_days !== undefined && f.direct_days !== '' ? f.direct_days : 60 %>"> 日以内に送った店は外す(既定60日)</label>
+      </div>
+      <label class="adm-check" id="withpagebox"><input type="checkbox" name="with_page" value="1" <%= hasForm ? (f.with_page ? 'checked' : '') : 'checked' %>> 御社専用ページのURLを入れる(既定はON。外すこともできます。「倉庫から直接」では常に入ります)</label>
       <p class="adm-help">「診断して文面も作る」のとき、会社ごとの専用ページ(/r/…)を作り、送信用CSVの4列目にそのURLを入れます(本文もページ版に変わります)。ページの閲覧と「簡易レポート希望」のボタンは、営業管理の見込み客に届きます。事前に <code>sql/warehouse_migrate_006.sql</code> の適用とDB権限(GRANT)が必要です(足りなければ診断を始める前に中止して、必要なGRANTを表示します)。</p>
     </div>
 
@@ -126,16 +134,29 @@
     document.getElementById('scanhelp').style.display = b || st ? '' : 'none';
     document.getElementById('makebtn').style.display = st ? 'none' : '';
     document.querySelector('button[value=report]').style.display = st ? 'none' : '';
+    // 送り方「倉庫から直接」(工場・建設用だけ): 対象外の県を選べなくし、日数の欄を出し、専用ページは常に付ける
+    var direct = b && form.send_mode.value === 'direct';
+    document.getElementById('directbox').style.display = direct ? '' : 'none';
+    var wp = document.querySelector('#withpagebox input');
+    if (wp) { wp.disabled = direct; if (direct) wp.checked = true; }
+    Array.prototype.forEach.call(form.querySelectorAll('input[name=pref]'), function (c) {
+      if (DIRECT_NG.indexOf(c.value) < 0) return;
+      c.disabled = direct;
+      if (direct) c.checked = false;
+    });
   }
+  var DIRECT_NG = <%- JSON.stringify(directNg) %>;
+  Array.prototype.forEach.call(form.send_mode, function (r) { r.addEventListener('change', sync); });
   Array.prototype.forEach.call(form.preset, function (r) {
     r.addEventListener('change', function () {
+      if (r.value === 'stocsent') form.send_mode.value = 'stoc'; // 送信成功済みの店は倉庫から直接は選べない
       sync();
       // 工場・建設用は「大きい会社を外す」、MEO用は「絞らない」を初期値にする
       if (r.value !== 'stocsent') form.size.value = r.value === 'b2b' ? 'exclude_large' : 'none';
     });
   });
   sync();
-  function all(v) { Array.prototype.forEach.call(form.querySelectorAll('input[name=pref]'), function (c) { c.checked = v; }); }
+  function all(v) { Array.prototype.forEach.call(form.querySelectorAll('input[name=pref]'), function (c) { if (!c.disabled) c.checked = v; }); }
   document.getElementById('selall').onclick = function () { all(true); };
   document.getElementById('selnone').onclick = function () { all(false); };
   document.getElementById('scanbtn').addEventListener('click', function (e) {
