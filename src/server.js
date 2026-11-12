@@ -303,7 +303,7 @@ if (process.env.WH_DB_USER) {
 }
 
 // 倉庫の管理画面(WAREHOUSE_ADMIN_PASS と ADMIN_ALLOW_IPS の両方が設定されたときだけ有効。未設定なら /admin は404)
-registerAdminWarehouse(app);
+registerAdminWarehouse(app, { autoRefresh: true });
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 

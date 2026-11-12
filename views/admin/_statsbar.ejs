@@ -1,0 +1,11 @@
+<%# 集計の時点と「今すぐ更新」。変数: statsInfo { at, running, failed, hasValue, back } %>
+<form method="post" action="<%= BASE %>/stats/refresh" class="adm-form">
+  <input type="hidden" name="_csrf" value="<%= csrf %>">
+  <input type="hidden" name="back" value="<%= statsInfo.back %>">
+  <p class="adm-help">
+    <% if (statsInfo.at) { %><strong><%= fmtAt(statsInfo.at) %> 時点の集計</strong>です(裏で数分おきに集計しています)。<% } %>
+    <% if (statsInfo.running) { %>いま集計中です。終わるまで数十秒かかることがあります。<% } %>
+    <% if (statsInfo.failed && statsInfo.hasValue) { %>直近の更新に失敗したため、前回の結果を表示しています。<% } %>
+    <button class="adm-btn adm-btn2" type="submit" <%= statsInfo.running ? 'disabled' : '' %>>今すぐ更新</button>
+  </p>
+</form>

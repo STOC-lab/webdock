@@ -46,7 +46,7 @@ async function boot(opts = {}) {
   let statsCalls = 0;
   const r = registerAdminWarehouse(app, {
     password: PASS, allowIps: '203.0.113.10', secret: 'test-secret', jobs, uploadDir, exportDir,
-    queryStats: async () => { statsCalls++; return { total: 3, rows: [{ prefecture: '兵庫県', total: 3, web: 2, linked: 1, form: 1, sizeChecked: 0, small: 0, large: 0 }], sizeAvailable: true }; },
+    statsStore: null, nightStore: { schedule: async () => ({ start: 22, end: 6, enabled: true, from: null, tableReady: true }), save: async () => {}, stats: async () => ({ since: '2026-01-01 22:00:00', totals: {}, rows: [], reasons: [] }) }, queryStats: async () => { statsCalls++; return { total: 3, rows: [{ prefecture: '兵庫県', total: 3, web: 2, linked: 1, form: 1, sizeChecked: 0, small: 0, large: 0 }], sizeAvailable: true }; },
     ...opts,
   });
   const server = await new Promise((res) => { const s = app.listen(0, '127.0.0.1', () => res(s)); });
@@ -227,9 +227,23 @@ function multipart(fields, files) {
     const old = cookie.replace(/=(\d+)\./, '=1000000000000.');
     eq((await ctx.req(BASE + '/', { headers: { cookie: old } })).status, 302, '期限切れ/改ざん');
 
-    // 状況のキャッシュ
+    // 状況は保存した集計を読むだけ(画面を開いても集計しない)
     await ctx.req(BASE + '/', { headers: { cookie } });
-    eq(ctx.calls(), 1, '件数は60秒キャッシュ');
+    await ctx.req(BASE + '/', { headers: { cookie } });
+    eq(ctx.calls(), 0, '画面を開いても集計は走らない');
+    const html0 = await (await ctx.req(BASE + '/', { headers: { cookie } })).text();
+    ok(html0.includes('まだ集計がありません'), '集計前の案内');
+    ok(!html0.includes('1分ごとに更新'), '1分ごとに更新の文言は無い');
+    const csrf0 = (/name="_csrf" value="([0-9a-f]+)"/.exec(html0) || [])[1];
+    eq((await ctx.req(BASE + '/stats/refresh', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ back: 'status' }) })).status, 403, '今すぐ更新: CSRFなしは拒否');
+    const rf = await ctx.req(BASE + '/stats/refresh', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ back: 'status', _csrf: csrf0 }) });
+    eq([rf.status, rf.headers.get('location')], [303, BASE + '/'], '今すぐ更新はすぐ画面へ戻る');
+    while (ctx.r.statsRefresher.isRunning()) await new Promise((r) => setTimeout(r, 5));
+    eq(ctx.calls(), 1, '今すぐ更新で集計が1回走る');
+    const html1 = await (await ctx.req(BASE + '/', { headers: { cookie } })).text();
+    ok(html1.includes('時点の集計') && html1.includes('兵庫県') && html1.includes('今すぐ更新'), '保存した結果と時点・ボタンを表示');
+    await ctx.req(BASE + '/', { headers: { cookie } });
+    eq(ctx.calls(), 1, '開き直しても集計は増えない');
 
     // CSRF
     const csrf = await csrfOf(ctx, cookie);
@@ -457,6 +471,57 @@ function multipart(fields, files) {
     void ip;
   } finally {
     ctx.server.close();
+  }
+
+  // ログイン後に最初に開く「状況」は、集計を待たずに表示される(集計が終わらなくても即表示)
+  for (const withSaved of [true, false]) {
+    let release; const gate = new Promise((r) => { release = r; });
+    let started = 0;
+    const saved = { total: 9, rows: [{ prefecture: '保存県', total: 9, web: 1, linked: 1, form: 1, sizeChecked: 0, small: 0, large: 0 }], sizeAvailable: true };
+    const rows = withSaved ? { status: { value: saved, at: new Date(2026, 10, 12, 9, 5).getTime() } } : {};
+    const statsStore = { async readAll() { return rows; }, async write() { return true; } };
+    const c = await boot({
+      autoRefresh: true, statsStore, now: () => new Date(2026, 10, 12, 9, 30), // 保存時刻(9:05)から25分後に固定
+      queryStats: async () => { started++; await gate; return saved; },
+    });
+    try {
+      const { cookie } = await login(c);
+      const t0 = Date.now();
+      const first = await c.req(BASE + '/', { headers: { cookie } }); // ログイン直後の 303 の行き先
+      const html = await first.text();
+      ok(Date.now() - t0 < 2000, '集計が終わらなくても状況がすぐ表示される(withSaved=' + withSaved + ')');
+      eq(first.status, 200, '状況は200');
+      ok(c.r.statsRefresher.isRunning() && started === 1, '集計は裏で1回だけ走っている');
+      if (withSaved) ok(html.includes('保存県') && html.includes('9時05分 時点の集計'), '再起動直後: 保存済みの前回の結果と時点を表示する');
+      else ok(html.includes('集計中です'), '結果がまだ無ければ「集計中です」を表示する');
+      await c.req(BASE + '/', { headers: { cookie } });
+      eq(started, 1, '画面を開き直しても集計は増えない');
+    } finally {
+      release();
+      while (c.r.statsRefresher.isRunning()) await new Promise((r) => setTimeout(r, 5));
+      c.r.statsRefresher.stop();
+      c.server.close();
+    }
+  }
+
+  // 集計が失敗したとき: 前回の結果が無ければ「前回の結果を表示」とは出さず、あれば出す
+  {
+    let fail = true;
+    const saved = { total: 2, rows: [{ prefecture: '前回県', total: 2, web: 0, linked: 0, form: 0, sizeChecked: 0, small: 0, large: 0 }], sizeAvailable: true };
+    const c = await boot({ queryStats: async () => { if (fail) throw new Error('db down'); return saved; } });
+    const origErr = console.error; console.error = () => {};
+    try {
+      const { cookie } = await login(c);
+      const csrf = await csrfOf(c, cookie);
+      const refresh = async () => { await c.req(BASE + '/stats/refresh', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ back: 'status', _csrf: csrf }) }); while (c.r.statsRefresher.isRunning()) await new Promise((r) => setTimeout(r, 5)); };
+      await refresh();
+      const h1 = await (await c.req(BASE + '/', { headers: { cookie } })).text();
+      ok(h1.includes('読み込めませんでした') && !h1.includes('前回の結果を表示しています'), '初回の集計が失敗: 失敗を表示し、「前回の結果」とは出さない');
+      fail = false; await refresh();
+      fail = true; await refresh();
+      const h2 = await (await c.req(BASE + '/', { headers: { cookie } })).text();
+      ok(h2.includes('前回県') && h2.includes('前回の結果を表示しています'), '2回目以降の失敗: 前回の結果を残して表示する');
+    } finally { console.error = origErr; c.server.close(); }
   }
 
   // Secure: プロキシ越しのhttps(X-Forwarded-Proto)のとき

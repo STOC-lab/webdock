@@ -263,9 +263,9 @@ const errResult = (note) => okResult({ status: 'error', note });
     const saved = [];
     const sched = { start: 22, end: 6, enabled: true, from: '2026-11-09 22:00', source: 'db', tableReady: true };
     const app = express();
-    registerAdminWarehouse(app, {
+    const reg = registerAdminWarehouse(app, {
       password: 'correct-horse-battery', allowIps: '203.0.113.10', secret: 's', jobs: { start() {}, get() {}, list: () => [], running: () => null },
-      queryStats: async () => ({ total: 0, rows: [], sizeAvailable: true }),
+      queryStats: async () => ({ total: 0, rows: [], sizeAvailable: true }), statsStore: null,
       nightStore: { schedule: async () => sched, save: async (m) => { saved.push(m); }, stats: async () => ({ since: '2026-11-08 22:00:00', totals: { found: 5, none: 3, needs: 2, err: 4, tonight: 7, remaining: 100 }, rows: [{ prefecture: '鳥取県', found: 5, none: 3, needs: 2, err: 4, tonight: 7, remaining: 100 }], reasons: [{ note: 'HTTP 403', n: 4 }] }) },
     });
     const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
@@ -275,9 +275,17 @@ const errResult = (note) => okResult({ status: 'error', note });
     const lr = await fetch(base + '/login', { method: 'POST', redirect: 'manual', headers: { ...H, ...URLENC }, body: 'password=correct-horse-battery' });
     const cookie = (lr.headers.get('set-cookie') || '').split(';')[0];
     const get = (p) => fetch(base + p, { headers: { ...H, cookie }, redirect: 'manual' });
+    const nightRes0 = await get('/night');
+    const html0 = await nightRes0.text();
+    eq(nightRes0.status, 200, '夜間フォーム探しの画面');
+    ok(html0.includes('22時〜6時') && html0.includes('まだ集計がありません'), '集計前: 設定は出て、進み具合は「まだ集計がありません」(画面を開いても集計しない)');
+    const csrf0 = (/name="_csrf" value="([^"]+)"/.exec(html0) || [])[1];
+    const rf = await fetch(base + '/stats/refresh', { method: 'POST', redirect: 'manual', headers: { ...H, ...URLENC, cookie }, body: 'back=night&_csrf=' + csrf0 });
+    eq([rf.status, rf.headers.get('location')], [303, '/admin/warehouse/night'], '今すぐ更新は夜間の画面へ戻る');
+    while (reg.statsRefresher.isRunning()) await new Promise((r) => setTimeout(r, 5));
     const nightRes = await get('/night');
     const html = await nightRes.text();
-    eq(nightRes.status, 200, '夜間フォーム探しの画面');
+    ok(html.includes('時点の集計') && html.includes('今すぐ更新'), '「○時○分時点の集計」と今すぐ更新ボタン');
     ok(html.includes('22時〜6時') && html.includes('鳥取県') && html.includes('HTTP 403') && html.includes('今夜'), '設定・県別の件数・エラー理由・今夜の処理を表示');
     ok(html.includes('>5<') || html.includes('5</td>'), 'あり件数');
     const csrf = (/name="_csrf" value="([^"]+)"/.exec(html) || [])[1];

@@ -558,6 +558,10 @@ location /admin/ {
 - 初回だけ: `npm install`、`mkdir -p /var/data/gmp/uploads`(アプリを動かすユーザーが書き込める権限)、`pm2 restart webdock --update-env`、`nginx -t && systemctl reload nginx`。
 - 取り込みは、`gmp_*.csv` または .zip をアップロード → 自動で `warehouse-import` を実行(最後に営業管理とのひも付けも自動)。「試し取り込み(倉庫には書き込まない)」ボタンは `--dry-run` で、倉庫には書き込まず同じ照合の件数だけ出します。「営業管理とつなぐ」ボタンは、営業管理へCSVを入れた後にフォームURL・メールを引き継ぐ処理です。
 - テスト: `npm run test:admin`(DB不要)
+- **「状況」「夜間フォーム探し」の件数は、裏で集計した結果を表示します**(画面を開いても重い集計は走りません)。アプリ起動中は5分おき(夜間フォーム探しの時間帯は10分おき)に、集計を1つずつ実行して保存します。集計は同時に1つだけで、実行中なら新しく始めません。画面には「○月○日 ○時○分時点の集計」と「今すぐ更新」ボタンが出ます。間隔は `.env` の `ADMIN_STATS_MINUTES`(既定5)・`ADMIN_STATS_NIGHT_MINUTES`(既定10)で変えられます(1〜1440分)。
+- **集計の排他はプロセス内だけです。PM2 は1プロセス(`instances: 1`)が前提**です。`instances` を増やすと、各プロセスが別々に集計するので、そのときは `GET_LOCK` などで DB 側の排他が必要です。再起動した直後は、保存済みの表から前回の結果を読み込んですぐ表示し、裏で最初の集計を始めます。
+- 集計結果の保存先: `mysql --default-character-set=utf8mb4 < sql/warehouse_migrate_012.sql`(何度実行しても安全。`stoc_master.admin_stats_snapshot` を作る)。**適用していなくても動きます**が、その場合は結果をプロセス内にだけ持つので、再起動すると次の集計が終わるまで「集計中」と出ます。
+- テスト: `node test/adminstats.test.js`(集計の裏実行・保存。DB不要)
 
 ### 収集ツールの元ファイル(14列)の取り込みと閉業店の扱い
 
