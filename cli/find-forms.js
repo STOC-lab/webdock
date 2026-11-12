@@ -23,6 +23,7 @@
  *                               同じホストへは他のプロセスと合わせて10秒以上あけ、7日以内に調べた結果は使い回す。一時的なエラーは2回まで再試行、
  *                               404はサイトのトップで再試行。--category / --with-size / --size-only / --no-sales-only が無いときは、
  *                               電話番号あり・業種ルール(rules/問い合わせ営業.json)を通る店を、口コミの多い順に調べる。
+ *   --order id|reviews          夜間の取り出し順。既定 id(主キー順・軽い)。reviews は口コミ数の多い順(重い。従来の動き)
  *   --ignore-window             (試験用)時間帯と開始日時の制限を外す
  *   --permanent-retry-days 90   403・ドメインなし等の再試行の間隔(倉庫モード。既定90)
  *   dry-run のCSVには --with-size のとき 従業員数・資本金・上場・規模・会社概要URL の列が付く
@@ -42,7 +43,7 @@ const LOOP_SLEEP_MS = 30 * 60 * 1000;
 
 /* ---------- 引数 ---------- */
 function parseArgs(argv) {
-  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false, source: 'stores', retryNeedsBrowser: false, category: [], withSize: false, sizeOnly: false, noSalesOnly: false, maxEmployees: 30, night: false, ignoreWindow: false, permanentRetryDays: 90 };
+  const o = { dryRun: false, limit: 100, out: 'data/forms-result.csv', loop: false, concurrency: 5, prefecture: null, recheckDays: 90, errorRetryDays: 7, limitGiven: false, source: 'stores', retryNeedsBrowser: false, category: [], withSize: false, sizeOnly: false, noSalesOnly: false, maxEmployees: 30, night: false, ignoreWindow: false, permanentRetryDays: 90, order: 'id' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -64,6 +65,7 @@ function parseArgs(argv) {
     else if (a === '--night') o.night = true;
     else if (a === '--ignore-window') o.ignoreWindow = true;
     else if (a === '--permanent-retry-days') o.permanentRetryDays = Number(next());
+    else if (a === '--order') o.order = next();
     else throw new Error('不明なオプション: ' + a);
   }
   if (o.source !== 'stores' && o.source !== 'warehouse') throw new Error('--source は stores か warehouse を指定してください');
@@ -71,6 +73,7 @@ function parseArgs(argv) {
     throw new Error('--with-size / --size-only / --category は --source warehouse のときだけ使えます');
   }
   if ((o.night || o.ignoreWindow) && o.source !== 'warehouse') throw new Error('--night / --ignore-window は --source warehouse のときだけ使えます');
+  if (o.order !== 'id' && o.order !== 'reviews') throw new Error('--order は id か reviews を指定してください');
   if (o.ignoreWindow && !o.night) throw new Error('--ignore-window は --night と一緒に指定してください');
   if (o.noSalesOnly) {
     if (o.source !== 'warehouse') throw new Error('--no-sales-only は --source warehouse のときだけ使えます');
@@ -292,9 +295,9 @@ const PRIORITY_COLUMNS = 'id, form_status, name, category, category_main, postal
  * 調査すると form_status / form_checked_at が変わって対象から外れるので、ループしても同じ行を繰り返さない。
  * needs_browser は retryNeedsBrowser のときだけ再試行する。
  * エラーの再試行: 一時的なもの等は errorRetryDays 日後、403・ドメインなし等(永続的)は permanentRetryDays(既定90)日後。
- * night: 統合済みの店を外す。priority: 電話番号ありだけにし、口コミ数の多い順に (review_count, id) で位置(cursor)を進める。
+ * night: 統合済みの店を外す。priority: 電話番号ありだけにし、既定は ID 順(id > cursor.id)。order: 'reviews' のときだけ口コミ数の多い順に (review_count, id) で位置(cursor)を進める。
  */
-function buildWarehouseTargetQuery({ recheckDays, errorRetryDays, permanentRetryDays = 90, prefecture, limit, retryNeedsBrowser, category, night: isNight = false, priority = false, cursor = null }) {
+function buildWarehouseTargetQuery({ recheckDays, errorRetryDays, permanentRetryDays = 90, prefecture, limit, retryNeedsBrowser, category, night: isNight = false, priority = false, cursor = null, order = 'id' }) {
   const params = [];
   const prefs = String(prefecture || '').split(',').map((x) => x.trim()).filter(Boolean);
   let sql = `
@@ -314,8 +317,14 @@ WHERE website_url IS NOT NULL AND website_url <> ''`;
   if (isNight) sql += MERGED_CLAUSE;
   if (priority) {
     sql += "\n  AND phone IS NOT NULL AND phone REGEXP '[0-9]'";
-    if (cursor) { sql += '\n  AND (COALESCE(review_count, -1) < ? OR (COALESCE(review_count, -1) = ? AND id > ?))'; params.push(cursor.rc, cursor.rc, cursor.id); }
-    sql += '\nORDER BY COALESCE(review_count, -1) DESC, id\nLIMIT ?';
+    if (order === 'reviews') {
+      if (cursor) { sql += '\n  AND (COALESCE(review_count, -1) < ? OR (COALESCE(review_count, -1) = ? AND id > ?))'; params.push(cursor.rc, cursor.rc, cursor.id); }
+      sql += '\nORDER BY COALESCE(review_count, -1) DESC, id\nLIMIT ?';
+    } else {
+      // ID順: 主キーで続きから読める(全件読み・filesort なし)
+      if (cursor) { sql += '\n  AND id > ?'; params.push(cursor.id); }
+      sql += '\nORDER BY id\nLIMIT ?';
+    }
   } else {
     sql += '\nORDER BY review_count IS NULL, review_count DESC, id\nLIMIT ?';
   }
@@ -575,22 +584,36 @@ function getRuleCheck() {
   return ruleCheckCache;
 }
 
-/** 優先順位つきの対象を limit 件。ルールを通らない店は読み飛ばし、state.cursor(口コミ数, id)で前へ進める */
+/**
+ * 優先順位つきの対象を limit 件。ルールを通らない店は読み飛ばし、state.cursor で前へ進める
+ * (既定の ID 順は { id }、--order reviews は { rc, id })。
+ * 1回の取り出しで実行したクエリ回数と各所要ミリ秒を、時刻つきの1行でログに出す(opts.log で差し替え可)。
+ */
 async function fetchPrioritized(pool, opts, limit, state) {
   const { isNoPhone, check } = getRuleCheck();
+  const byReviews = opts.order === 'reviews';
   const PAGE = Math.max(1000, limit * 2);
   const out = [];
-  while (out.length < limit) {
-    const { sql, params } = buildWarehouseTargetQuery({ ...opts, limit: PAGE, priority: true, cursor: state.cursor });
-    const [rows] = await pool.query(sql, params);
-    for (const r of rows) {
-      state.cursor = { rc: r.review_count === null || r.review_count === undefined ? -1 : Number(r.review_count), id: r.id };
-      if (isNoPhone(r.phone)) continue;
-      if (check && check(r)) continue;
-      out.push(r);
-      if (out.length >= limit) break;
+  const timings = [];
+  try {
+    while (out.length < limit) {
+      const { sql, params } = buildWarehouseTargetQuery({ ...opts, order: byReviews ? 'reviews' : 'id', limit: PAGE, priority: true, cursor: state.cursor });
+      const t0 = Date.now();
+      let rows;
+      try { [rows] = await pool.query(sql, params); } finally { timings.push(Date.now() - t0); }
+      for (const r of rows) {
+        state.cursor = byReviews
+          ? { rc: r.review_count === null || r.review_count === undefined ? -1 : Number(r.review_count), id: r.id }
+          : { id: r.id };
+        if (isNoPhone(r.phone)) continue;
+        if (check && check(r)) continue;
+        out.push(r);
+        if (out.length >= limit) break;
+      }
+      if (rows.length < PAGE) break;
     }
-    if (rows.length < PAGE) break;
+  } finally {
+    (opts.log || console.error)(`[${new Date().toISOString()}] 夜間の対象取り出し: order=${byReviews ? 'reviews' : 'id'} クエリ${timings.length}回 (${timings.map((t) => t + 'ms').join(', ')}) 合計${timings.reduce((a, b) => a + b, 0)}ms 取得${out.length}/${limit}件`);
   }
   return out;
 }

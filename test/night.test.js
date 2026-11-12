@@ -223,11 +223,28 @@ const errResult = (note) => okResult({ status: 'error', note });
     eq(q.params, [['鳥取県'], 7, 90, 90, 500], '既定: 一時的7日・永続的90日・なし90日');
     ok(/NOT \(COALESCE\(form_note, ''\) IN \('HTTP 403'/.test(q.sql) && /form_status = 'error' AND \(COALESCE/.test(q.sql), '永続的なエラーを分けている');
     ok(!/merged_into/.test(q.sql) && !/phone/.test(q.sql), '通常モードは統合済み・電話の条件なし');
-    q = fnd.buildWarehouseTargetQuery({ ...base, night: true, priority: true, cursor: { rc: 12, id: 345 } });
+    const normalSql = q.sql;
+    const rq = fnd.buildWarehouseTargetQuery({ ...base, night: true, priority: true, order: 'reviews', cursor: { rc: 12, id: 345 } });
+    q = rq;
     ok(/stoc_sales\.stores st WHERE st\.id = stoc_master\.shops\.stoc_store_id AND st\.merged_into IS NOT NULL/.test(q.sql), '統合済みの店を外す');
     ok(/phone REGEXP '\[0-9\]'/.test(q.sql), '電話番号あり');
     ok(/ORDER BY COALESCE\(review_count, -1\) DESC, id/.test(q.sql), '口コミの多い順');
     eq(q.params, [['鳥取県'], 7, 90, 90, 12, 12, 345, 500], 'cursor のパラメータ順');
+    // --order reviews: 従来の SQL と1文字も変わらない(従来の組み立てを文字列で固定)
+    const pre = fnd.buildWarehouseTargetQuery({ ...base, night: true, priority: true, order: 'reviews' }).sql;
+    ok(pre.endsWith("AND phone IS NOT NULL AND phone REGEXP '[0-9]'\nORDER BY COALESCE(review_count, -1) DESC, id\nLIMIT ?"), 'reviews・cursorなし: 従来どおり');
+    ok(rq.sql.endsWith("AND phone IS NOT NULL AND phone REGEXP '[0-9]'\n  AND (COALESCE(review_count, -1) < ? OR (COALESCE(review_count, -1) = ? AND id > ?))\nORDER BY COALESCE(review_count, -1) DESC, id\nLIMIT ?"), 'reviews・cursorあり: 従来どおり');
+    // 既定: ID順
+    const idNo = fnd.buildWarehouseTargetQuery({ ...base, night: true, priority: true });
+    ok(idNo.sql.endsWith("AND phone IS NOT NULL AND phone REGEXP '[0-9]'\nORDER BY id\nLIMIT ?") && !/review_count, -1/.test(idNo.sql), 'ID順・cursorなし');
+    eq(idNo.params, [['鳥取県'], 7, 90, 90, 500], 'ID順・cursorなしのパラメータ');
+    const idCur = fnd.buildWarehouseTargetQuery({ ...base, night: true, priority: true, cursor: { id: 345 } });
+    ok(idCur.sql.endsWith("AND phone IS NOT NULL AND phone REGEXP '[0-9]'\n  AND id > ?\nORDER BY id\nLIMIT ?"), 'ID順・cursorあり');
+    eq(idCur.params, [['鳥取県'], 7, 90, 90, 345, 500], 'ID順・cursorありのパラメータ');
+    // 他の経路は order に影響されない
+    eq(fnd.buildWarehouseTargetQuery({ ...base, order: 'reviews' }), fnd.buildWarehouseTargetQuery({ ...base, order: 'id' }), 'priority:false は order で変わらない');
+    ok(normalSql.endsWith('ORDER BY review_count IS NULL, review_count DESC, id\nLIMIT ?'), 'priority:false は従来の並び');
+    eq(fnd.buildWarehouseSizeTargetQuery({ prefecture: null, category: [], limit: 10, order: 'id' }), fnd.buildWarehouseSizeTargetQuery({ prefecture: null, category: [], limit: 10, order: 'reviews' }), '規模チェックは order で変わらない');
     ok(/category_main, postal/.test(q.sql) && /site_host/.test(q.sql), 'ルール判定に必要な列を読む');
     q = fnd.buildWarehouseSizeTargetQuery({ prefecture: null, category: [], limit: 10, night: true });
     ok(/merged_into IS NOT NULL/.test(q.sql) && q.params.length === 1, '規模チェックにも統合済み除外');
@@ -243,13 +260,26 @@ const errResult = (note) => okResult({ status: 'error', note });
     ];
     const calls = [];
     const pool = { query: async (sql, params) => { calls.push(params); return [rows]; } };
+    const logs = [];
     const state = { cursor: null };
-    const got = await fnd.fetchPrioritized(pool, { recheckDays: 90, errorRetryDays: 7, night: true, source: 'warehouse', category: [] }, 10, state);
+    const got = await fnd.fetchPrioritized(pool, { recheckDays: 90, errorRetryDays: 7, night: true, source: 'warehouse', category: [], order: 'reviews', log: (m) => logs.push(m) }, 10, state);
     eq(got.map((r) => r.id), [1, 3], '電話なしは読み飛ばす');
-    eq(state.cursor, { rc: -1, id: 3 }, 'cursor は最後に読んだ行(口コミ無しは -1)');
+    eq(state.cursor, { rc: -1, id: 3 }, 'reviews: cursor は最後に読んだ行(口コミ無しは -1)');
+    ok(logs.length === 1 && /^\[\d{4}-\d\d-\d\dT[\d:.]+Z\] .*クエリ1回 \(\d+ms\).*取得2\/10件/.test(logs[0]), `取り出しの時間ログが1行: ${logs[0]}`);
+    // 既定(ID順): cursor は { id }。ページが満杯なら複数回クエリし、回数ぶんの ms が出る
+    const many = Array.from({ length: 1000 }, (_, i) => ({ id: i + 1, review_count: 0, phone: '-', category: '美容院', category_main: '美容院', name: 'x' }));
+    many[999].phone = '078-222-2222';
+    let n = 0;
+    const pool2 = { query: async (sql, params) => { n++; return [n === 1 ? many : []]; } };
+    const logs2 = [];
+    const st2 = { cursor: null };
+    const got2 = await fnd.fetchPrioritized(pool2, { recheckDays: 90, errorRetryDays: 7, night: true, source: 'warehouse', category: [], log: (m) => logs2.push(m) }, 10, st2);
+    eq([got2.map((r) => r.id), st2.cursor], [[1000], { id: 1000 }], 'ID順: cursor は { id }');
+    ok(logs2.length === 1 && /order=id クエリ2回 \(\d+ms, \d+ms\)/.test(logs2[0]), `複数回のクエリ回数と各ms: ${logs2[0]}`);
   }
   eq([fnd.parseArgs(['--source', 'warehouse', '--night']).night, fnd.parseArgs(['--source', 'warehouse', '--night', '--ignore-window']).ignoreWindow, fnd.parseArgs([]).permanentRetryDays], [true, true, 90], '引数');
-  for (const bad of [['--night'], ['--source', 'warehouse', '--ignore-window'], ['--source', 'warehouse', '--permanent-retry-days', '0']]) {
+  eq([fnd.parseArgs([]).order, fnd.parseArgs(['--order', 'reviews']).order, fnd.parseArgs(['--order', 'id']).order], ['id', 'reviews', 'id'], '--order');
+  for (const bad of [['--order', 'abc'], ['--order'], ['--night'],['--source', 'warehouse', '--ignore-window'], ['--source', 'warehouse', '--permanent-retry-days', '0']]) {
     let threw = false; try { fnd.parseArgs(bad); } catch { threw = true; }
     ok(threw, `不正な引数 ${bad.join(' ')}`);
   }
