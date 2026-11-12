@@ -27,9 +27,17 @@
   <p class="adm-help">この設定には、夜間フォーム探し(form-finder-wh-night)のほか、規模チェック(size-*)と営業お断り判定(nosales-*)も従います。</p>
   <% } %>
 </section>
+<% if (!stats) { %>
+<section class="adm-card">
+  <h2>進み具合</h2>
+  <% if (statsMessage) { %><div class="alert"><%= statsMessage %></div><% } %>
+  <%- include('_statsbar') %>
+</section>
+<% } %>
 <% if (stats) { %>
 <section class="adm-card">
   <h2>進み具合</h2>
+  <%- include('_statsbar') %>
   <p class="adm-big">今夜(<%= stats.since.slice(5, 16) %> 以降)の処理: <strong><%= n(stats.totals.tonight) %></strong> 件 /
     残りの対象: <strong><%= n(stats.totals.remaining) %></strong> 件
     <span class="adm-help">(残りはURLと電話番号があって未調査の店。業種ルールで外れる店も含みます)</span></p>

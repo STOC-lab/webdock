@@ -25,13 +25,13 @@ const { PREFECTURES } = require('./regions');
 const WS = require('./warehouseSends');
 const { createJobRunner } = require('./adminJobs');
 const replaceCand = require('./replaceCandidates');
+const { createStatsRefresher, makeSnapshotStore, validators: statsValidators } = require('./adminStats');
 
 const BASE = '/admin/warehouse';
 const COOKIE = 'wh_admin';
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const LOGIN_MAX_FAILS = 10;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const STATS_TTL_MS = 60 * 1000;
 const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
 const MAX_UPLOAD_FILES = 200;
 const MAX_ZIP_ENTRY_BYTES = 600 * 1024 * 1024;
@@ -53,6 +53,17 @@ const VIEWS = path.join(__dirname, '..', 'views', 'admin');
 
 // ---- 小さな道具 ----
 const pad = (n) => String(n).padStart(2, '0');
+/** 環境変数の「分」(1〜1440の整数)。不正なら既定値 */
+function envMinutes(v, def) {
+  const n = Number(String(v === undefined ? '' : v).trim());
+  return Number.isInteger(n) && n >= 1 && n <= 1440 ? n : def;
+}
+/** 画面用: 「11月12日 14時05分」 */
+function fmtAt(ms) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours()}時${pad(d.getMinutes())}分`;
+}
 function stamp(d, sep = '-') { return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${sep}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`; }
 function fmtTime(ms) {
   if (!ms) return '';
@@ -375,6 +386,22 @@ function createDefaultQueryStats() {
   };
 }
 
+// ---- 集計結果の保存先(stoc_master.admin_stats_snapshot。表が無ければプロセス内だけ) ----
+function createDefaultStatsStore() {
+  let store = null;
+  const get = () => {
+    if (!store) {
+      const pool = require('mysql2/promise').createPool({
+        host: process.env.WH_DB_HOST || '127.0.0.1', port: Number(process.env.WH_DB_PORT || 3306),
+        user: process.env.WH_DB_USER, password: process.env.WH_DB_PASS, charset: 'utf8mb4', connectionLimit: 1,
+      });
+      store = makeSnapshotStore(pool);
+    }
+    return store;
+  };
+  return { readAll: () => get().readAll(), write: (k, v, at) => get().write(k, v, at) };
+}
+
 // ---- 夜間フォーム探し(設定の読み書きと集計) ----
 function createDefaultNightStore() {
   let pool = null;
@@ -501,26 +528,43 @@ function registerAdminWarehouse(app, deps = {}) {
   async function page(req, res, view, data = {}, status = 200) {
     const sess = sessionValue(req);
     const html = await ejs.renderFile(path.join(VIEWS, view + '.ejs'), {
-      BASE, fmtTime, fmtSize, authed: !!sess, csrf: sess ? csrfFor(sess) : '', error: null, notice: null, nav: '', ...data,
+      BASE, fmtTime, fmtAt, fmtSize, authed: !!sess, csrf: sess ? csrfFor(sess) : '', error: null, notice: null, nav: '', ...data,
     });
     res.status(status).type('html').send(html);
   }
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-  // --- 件数の簡易キャッシュ(60秒) ---
-  let statsCache = null;
-  async function getStats() {
-    const t = Date.now();
-    if (statsCache && statsCache.value && t - statsCache.at < (statsCache.value.ok ? STATS_TTL_MS : 15000)) return statsCache.value; // 集計中(value=null)は下で待つ
-    if (!statsCache || !statsCache.pending) {
-      const pending = Promise.resolve().then(() => queryStats()).then(
-        (v) => ({ ok: true, ...v, at: Date.now() }),
-        (e) => { console.error('[admin] stats error:', e && e.message); return { ok: false, message: '倉庫の件数を読み込めませんでした。倉庫のデータベース接続(WH_DB_*)を確認してください。' }; },
-      );
-      statsCache = { at: 0, value: null, pending };
-      pending.then((v) => { statsCache = { at: Date.now(), value: v }; });
+  // --- 集計の裏実行と保存結果(画面は保存結果を読むだけ。集計は同時に1つ、既定5分・夜間10分おき) ---
+  const statsRefresher = deps.statsRefresher || createStatsRefresher({
+    jobs: {
+      status: () => queryStats(),
+      night: async () => nightStore.stats(await nightStore.schedule(), now()),
+    },
+    store: deps.statsStore !== undefined ? deps.statsStore : createDefaultStatsStore(),
+    getSchedule: () => nightStore.schedule(),
+    validate: statsValidators,
+    now: () => now().getTime(),
+    dayMs: envMinutes(process.env.ADMIN_STATS_MINUTES, 5) * 60000,
+    nightMs: envMinutes(process.env.ADMIN_STATS_NIGHT_MINUTES, 10) * 60000,
+    onError: (key, e) => console.error(`[admin] stats(${key}) error:`, e && e.message),
+  });
+  // 裏実行は server.js が autoRefresh: true で明示したときだけ始める(テストなどでは勝手にDBへ接続しない)
+  if (deps.autoRefresh === true && !deps.statsRefresher) statsRefresher.start().catch((e) => console.error('[admin] stats start error:', e && e.message));
+
+  /** 画面用: 保存済みの集計。{ stats(画面の値。無ければ ok:false+message), info(「○時○分時点」用) } */
+  let loadWaitGaveUp = false;
+  async function readSnapshot(key, failMessage) {
+    // 再起動直後で、まだ表示できる結果が無いときだけ、保存済みの結果の読み込みを少し待つ(最大3秒。一度あきらめたら待たない。集計は待たない)
+    if (!statsRefresher.get(key).value && !loadWaitGaveUp) {
+      let gaveUp = false;
+      await Promise.race([statsRefresher.whenLoaded(), new Promise((r) => { const t = setTimeout(() => { gaveUp = true; r(); }, 3000); if (t.unref) t.unref(); })]);
+      if (gaveUp) loadWaitGaveUp = true;
     }
-    return statsCache.pending ? statsCache.pending : statsCache.value;
+    const s = statsRefresher.get(key);
+    const info = { at: s.at, running: s.running, failed: !!s.error, hasValue: !!s.value };
+    if (s.value) return { stats: { ok: true, ...s.value, at: s.at }, info };
+    const message = s.running ? '集計中です。しばらくしてから画面を開き直してください。' : s.error ? failMessage : 'まだ集計がありません。「今すぐ更新」を押すか、しばらくお待ちください。';
+    return { stats: { ok: false, message }, info };
   }
 
   function listExports() {
@@ -663,9 +707,14 @@ function registerAdminWarehouse(app, deps = {}) {
 
   // ===== 状況 =====
   router.get('/', wrap(async (req, res) => {
-    const stats = await getStats();
-    await page(req, res, 'dashboard', { nav: 'status', stats, jobs: jobs.list().slice(0, 10) });
+    const { stats, info } = await readSnapshot('status', '倉庫の件数を読み込めませんでした。倉庫のデータベース接続(WH_DB_*)を確認してください。');
+    await page(req, res, 'dashboard', { nav: 'status', stats, statsInfo: { ...info, back: 'status' }, jobs: jobs.list().slice(0, 10) });
   }));
+  // 「今すぐ更新」: 集計を裏で始めて、すぐ画面に戻る(実行中なら新しく始めない)
+  router.post('/stats/refresh', (req, res) => {
+    statsRefresher.refreshAll();
+    res.redirect(303, BASE + (req.body && req.body.back === 'night' ? '/night' : '/'));
+  });
 
   // ===== 取り込み(アップロード) =====
   router.get('/import', wrap((req, res) => page(req, res, 'import', { nav: 'import', maxFiles: MAX_UPLOAD_FILES, maxMb: MAX_UPLOAD_BYTES / 1024 / 1024 })));
@@ -866,15 +915,15 @@ function registerAdminWarehouse(app, deps = {}) {
 
   // ===== 夜間フォーム探し =====
   async function nightPage(req, res, extra = {}, status = 200) {
-    let sched = null, stats = null, error = extra.error || null;
+    let sched = null, error = extra.error || null;
     try {
-      sched = await nightStore.schedule();
-      stats = await nightStore.stats(sched, now());
+      sched = await nightStore.schedule(); // 設定の表を読むだけ(軽い)。進み具合は保存済みの集計を使う
     } catch (e) {
-      console.error('[admin] night stats error:', e && e.message);
-      if (!error) error = '夜間フォーム探しの件数を読み込めませんでした。sql/warehouse_migrate_009.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。';
+      console.error('[admin] night settings error:', e && e.message);
+      if (!error) error = '夜間フォーム探しの設定を読み込めませんでした。sql/warehouse_migrate_009.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。';
     }
-    await page(req, res, 'night', { nav: 'night', sched, stats, ...extra, error }, status);
+    const snap = await readSnapshot('night', '夜間フォーム探しの件数を読み込めませんでした。sql/warehouse_migrate_009.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。');
+    await page(req, res, 'night', { nav: 'night', sched, stats: snap.stats.ok ? snap.stats : null, statsMessage: snap.stats.ok ? null : snap.stats.message, statsInfo: { ...snap.info, back: 'night' }, ...extra, error }, status);
   }
   router.get('/night', wrap((req, res) => nightPage(req, res)));
   router.post('/night/settings', wrap(async (req, res) => {
@@ -964,7 +1013,7 @@ function registerAdminWarehouse(app, deps = {}) {
 
   app.use('/admin', (req, res, next) => { if (!req.path.startsWith('/warehouse')) return res.status(404).type('text/plain').send('Not Found'); next(); });
   app.use(BASE, router);
-  return { enabled: true, uploadDir, exportDir, jobs };
+  return { enabled: true, uploadDir, exportDir, jobs, statsRefresher };
 }
 
 module.exports = {
