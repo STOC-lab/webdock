@@ -13,18 +13,21 @@
 - 途中で夜間の時間帯が閉じたときの「次の夜は先頭からやり直す」動作は従来どおり(cursor を捨てる)。
 
 ## 本番での確認手順(実装後、PM2 を再起動する前に)
-1. 夜間に使っている起動引数と同じもので、SQL を作って表示する(DB には触れない)。例(引数は実際の pm2 の設定に合わせる):
+1. 夜間と同じ起動引数(`--source warehouse --night --loop --concurrency 5`)で、そのまま mysql に貼れる `EXPLAIN` 付きの SQL を出力する(mysql2 の format で `?` を埋める。DB には接続しない)。リポジトリのルートで実行する。
 
    ```
-   node -e "const f=require('./cli/find-forms'); const o=f.parseArgs(['--source','warehouse','--night','--loop','--prefecture','大阪府']); const q=f.buildWarehouseTargetQuery({...o,limit:1000,priority:true,cursor:{id:0}}); console.log(q.sql); console.log(JSON.stringify(q.params));"
+   node -e "const f=require('./cli/find-forms');const m=require('mysql2');const o=f.parseArgs(['--source','warehouse','--night','--loop','--concurrency','5']);const q=f.buildWarehouseTargetQuery({...o,limit:1000,priority:true,cursor:{id:0}});console.log('EXPLAIN '+m.format(q.sql,q.params)+';')" > /tmp/explain.sql
    ```
 
-   `--order` を付けていなければ `ORDER BY id` と `AND id > ?` が出る。
-2. その SQL の `?` に params を当てはめて(`IN (?)` の都道府県は `'大阪府'` のように)、本番の MySQL で `EXPLAIN` を実行する。
+   - 引数に `--prefecture 大阪府` などを付けて動かしているなら、`parseArgs` の配列にも同じものを足す。
+   - `--order` を付けていなければ、出力に `AND id > 0` と `ORDER BY id` が入る。`cursor:{id:0}` は2回目以降の取り出し(続きから)の形で、1回目(`cursor:null`)は `AND id > 0` が無いだけで同じ。
+2. 本番の MySQL で実行する(`EXPLAIN` は実行計画を出すだけで、データは読まない・書かない)。
 
-   ```sql
-   EXPLAIN SELECT id, form_status, ... FROM stoc_master.shops WHERE ... AND id > 0 ORDER BY id LIMIT 1000;
    ```
+   mysql -u <ユーザー> -p -t < /tmp/explain.sql
+   ```
+
+   `shops` の行の `key` と `Extra` を見る。実行後は `rm /tmp/explain.sql`。
 3. 見るところ:
    - `shops` の行の **`key` が `PRIMARY`**
    - **`Extra` に `Using filesort` がない**
