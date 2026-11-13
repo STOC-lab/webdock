@@ -23,7 +23,7 @@
  *                               同じホストへは他のプロセスと合わせて10秒以上あけ、7日以内に調べた結果は使い回す。一時的なエラーは2回まで再試行、
  *                               404はサイトのトップで再試行。--category / --with-size / --size-only / --no-sales-only が無いときは、
  *                               電話番号あり・業種ルール(rules/問い合わせ営業.json)を通る店を、口コミの多い順に調べる。
- *   --order id|reviews          夜間の取り出し順。既定 id(主キー順・軽い)。reviews は口コミ数の多い順(重い。従来の動き)
+ *   --order id|reviews          夜間の取り出し順。既定 id(ID の大きい順=新しく取り込んだ店から。主キーで読むので軽い)。reviews は口コミ数の多い順(重い。従来の動き)
  *   --ignore-window             (試験用)時間帯と開始日時の制限を外す
  *   --permanent-retry-days 90   403・ドメインなし等の再試行の間隔(倉庫モード。既定90)
  *   dry-run のCSVには --with-size のとき 従業員数・資本金・上場・規模・会社概要URL の列が付く
@@ -295,7 +295,7 @@ const PRIORITY_COLUMNS = 'id, form_status, name, category, category_main, postal
  * 調査すると form_status / form_checked_at が変わって対象から外れるので、ループしても同じ行を繰り返さない。
  * needs_browser は retryNeedsBrowser のときだけ再試行する。
  * エラーの再試行: 一時的なもの等は errorRetryDays 日後、403・ドメインなし等(永続的)は permanentRetryDays(既定90)日後。
- * night: 統合済みの店を外す。priority: 電話番号ありだけにし、既定は ID 順(id > cursor.id)。order: 'reviews' のときだけ口コミ数の多い順に (review_count, id) で位置(cursor)を進める。
+ * night: 統合済みの店を外す。priority: 電話番号ありだけにし、既定は ID の大きい順(id < cursor.id)。order: 'reviews' のときだけ口コミ数の多い順に (review_count, id) で位置(cursor)を進める。
  */
 function buildWarehouseTargetQuery({ recheckDays, errorRetryDays, permanentRetryDays = 90, prefecture, limit, retryNeedsBrowser, category, night: isNight = false, priority = false, cursor = null, order = 'id' }) {
   const params = [];
@@ -321,9 +321,9 @@ WHERE website_url IS NOT NULL AND website_url <> ''`;
       if (cursor) { sql += '\n  AND (COALESCE(review_count, -1) < ? OR (COALESCE(review_count, -1) = ? AND id > ?))'; params.push(cursor.rc, cursor.rc, cursor.id); }
       sql += '\nORDER BY COALESCE(review_count, -1) DESC, id\nLIMIT ?';
     } else {
-      // ID順: 主キーで続きから読める(全件読み・filesort なし)
-      if (cursor) { sql += '\n  AND id > ?'; params.push(cursor.id); }
-      sql += '\nORDER BY id\nLIMIT ?';
+      // ID の大きい順: 主キーで続きから読める(全件読み・filesort なし)
+      if (cursor) { sql += '\n  AND id < ?'; params.push(cursor.id); }
+      sql += '\nORDER BY id DESC\nLIMIT ?';
     }
   } else {
     sql += '\nORDER BY review_count IS NULL, review_count DESC, id\nLIMIT ?';
@@ -586,7 +586,7 @@ function getRuleCheck() {
 
 /**
  * 優先順位つきの対象を limit 件。ルールを通らない店は読み飛ばし、state.cursor で前へ進める
- * (既定の ID 順は { id }、--order reviews は { rc, id })。
+ * (既定の ID 大きい順は { id }、--order reviews は { rc, id })。
  * 1回の取り出しで実行したクエリ回数と各所要ミリ秒を、時刻つきの1行でログに出す(opts.log で差し替え可)。
  */
 async function fetchPrioritized(pool, opts, limit, state) {
