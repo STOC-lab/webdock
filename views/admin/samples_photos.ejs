@@ -28,7 +28,7 @@
   Array.prototype.forEach.call(document.querySelectorAll('input[type=file][name=photo]'), function (input) {
     input.addEventListener('change', function () {
       var f = input.files && input.files[0];
-      if (!f || !/^image/(jpeg|png)$/.test(f.type) || typeof DataTransfer === 'undefined') return;
+      if (!f || !/^image\/(jpeg|png)$/.test(f.type) || typeof DataTransfer === 'undefined') return;
       var btn = input.form.querySelector('button[type=submit]');
       if (btn) btn.disabled = true;
       var done = function () { if (btn) btn.disabled = false; };
@@ -38,12 +38,14 @@
         var r = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
         var w = Math.max(1, Math.round(img.naturalWidth * r)), h = Math.max(1, Math.round(img.naturalHeight * r));
         var c = document.createElement('canvas'); c.width = w; c.height = h;
-        var x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(img, 0, 0, w, h);
+        var x = null;
+        try { x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(img, 0, 0, w, h); } catch (e) { x = null; }
+        if (!x) { done(); return; } // 縮小できなければ元のファイルを送る
         c.toBlob(function (b) {
           try {
             if (b) {
               var dt = new DataTransfer();
-              dt.items.add(new File([b], f.name.replace(/.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' }));
+              dt.items.add(new File([b], f.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' }));
               input.files = dt.files;
             }
           } catch (e) { /* 縮小できなければ元のファイルを送る */ }

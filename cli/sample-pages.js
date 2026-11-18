@@ -60,6 +60,7 @@ async function main() {
   if (parsed.error) { console.error('エラー: ' + parsed.error); process.exit(2); }
   const ids = [...new Set(parsed.rows.map((r) => r.id).filter(Boolean))];
   if (!ids.length) { console.error('エラー: 倉庫IDが1つも見つかりませんでした。'); process.exit(2); }
+  if (ids.length > SP.MAX_IDS) { console.error(`エラー: 一度に作れるのは${SP.MAX_IDS}件までです(今回 ${ids.length}件)。ファイルを分けてください。`); process.exit(2); }
   const pool = require('./warehouse-import').makePool();
   try {
     const r = await SP.createStore(pool).createForShops(ids, a.label);

@@ -306,6 +306,10 @@ function fakePool({ shops = [], dupFirst = 0 } = {}) {
     eq(SP.sampleUrl('12345', {}), 'https://webdock.stoc-plus.site/s/12345', 'URL: 既定は webdock');
     eq(SP.readCsvRows([['1001', 'a'], ['1002', 'b']]).rows.map((r) => r.id), ['1001', '1002'], 'CSV: 見出しなしで先頭列が数字ならそれを使う');
     ok(SP.readCsvRows([['店名', '電話'], ['a', 'b']]).error, 'CSV: 倉庫ID 列が無ければエラー');
+    { // CSVインジェクション対策
+      const line = SP.csvLine(['=SUM(1)', '+81 90-0000-0000', '-5', '@x', '普通', '079-000-1234']).trim();
+      eq(line, "'=SUM(1),+81 90-0000-0000,-5,'@x,普通,079-000-1234", 'CSV: 数式になる先頭は \' を付ける・電話番号や数値はそのまま');
+    }
     eq(SP.parseIdList('101, 102\n102 x 0103').ids, ['101', '102', '103'], '貼り付け: 重複を除く');
     eq(SP.parseIdList('101 x').ignored, 1, '貼り付け: 数字以外は数える');
     // CLI の引数
@@ -407,6 +411,13 @@ function fakePool({ shops = [], dupFirst = 0 } = {}) {
     ok(ph.includes('name="photo"') && ph.includes('seitai') && ph.includes('massage'), '管理: 写真画面');
     ok(ph.includes('name="slot" value="t_head"') && ph.includes('name="slot" value="f_room"'), '管理: 写真画面に9枠');
     ok(ph.includes('canvas') && ph.includes('image/jpeg') && ph.includes('1600'), '管理: ブラウザ側で長辺1600pxのJPEGに縮小する');
+    { // 縮小のスクリプトが構文エラーになっていないこと(正規表現のエスケープ抜けで動かなくなった実績あり)
+      const scripts = [...ph.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+      let syntaxOk = scripts.length > 0;
+      for (const sc of scripts) { try { new Function(sc); } catch { syntaxOk = false; } }
+      ok(syntaxOk, '管理: 写真画面のスクリプトは構文エラーなし');
+      ok(ph.includes('/^image\\/(jpeg|png)$/') && ph.includes('/\\.[^.]+$/'), '管理: 縮小スクリプトの正規表現のエスケープ');
+    }
     ok(ph.includes('ストック写真のモデルに限り') && !ph.includes('顔がはっきり写った'), '管理: 人物写真の文は新しい規則5');
     const pcsrf = csrfOf(ph);
     const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100, 1)]);

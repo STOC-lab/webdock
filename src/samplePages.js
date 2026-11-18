@@ -154,7 +154,12 @@ function readCsvRows(rows) {
   };
 }
 
-const csvCell = (v) => { const s = v === undefined || v === null ? '' : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+// 表計算ソフトで数式として扱われないよう、先頭が = + - @ のセルは先頭に ' を付ける(電話番号の +81… や -5 のような数値はそのまま)
+const csvCell = (v) => {
+  let s = v === undefined || v === null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s) && !/^[+-]?[0-9][0-9\-() ]*$/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
 const csvLine = (cells) => cells.map(csvCell).join(',') + '\r\n';
 
 /**
