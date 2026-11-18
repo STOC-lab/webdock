@@ -1,0 +1,61 @@
+<%- include('_head') %>
+<section class="adm-card">
+  <h1>見本の写真</h1>
+  <p class="adm-help">業種グループごとに、基本の3枚(ヒーロー・施術スペース・受付)と、任意の6枚(特徴カードの丸写真3枚・施術案内カードの写真3枚)をアップロードします。任意の写真が無いときは、代用の写真かアイコンで表示します。JPEG/PNG、1枚<%= maxMb %>MBまで。選んだ写真は、ブラウザの中で長辺1600pxのJPEGに縮小してから送ります。人物はストック写真のモデルに限り、院のスタッフや患者に見える使い方はしないでください。写真はサーバーの data/ 以下に保存され、git には入りません。見本には必ず「写真はイメージです」が付きます。</p>
+  <p><a class="adm-mini" href="<%= BASE %>/samples">一覧へ戻る</a></p>
+  <% groups.forEach(function (g) { %>
+  <h3><%= g.id === 'seitai' ? '整骨院・整体・鍼灸など(seitai)' : 'マッサージ・指圧(massage)' %></h3>
+  <% if (g.fallback) { %><p class="adm-help">この業種は、写真が未アップロードの枠には「<%= g.fallback %>」の写真を使います。</p><% } %>
+  <% slots.forEach(function (s) { const o = g.own[s]; %>
+  <div class="adm-sub">
+    <strong><%= SLOT_LABEL[s] %></strong>
+    <% if (o) { %>
+      <br><img src="/s/img/<%= g.id %>/<%= s %>?v=<%= o.mtime %>" alt="" style="max-width:160px;max-height:110px;border-radius:8px;vertical-align:middle"> <span class="adm-help"><%= fmtSize(o.size) %>(<%= fmtTime(o.mtime) %>)</span>
+      <form method="post" action="<%= BASE %>/samples/photos/delete" style="display:inline"><input type="hidden" name="_csrf" value="<%= csrf %>"><input type="hidden" name="group" value="<%= g.id %>"><input type="hidden" name="slot" value="<%= s %>"><button class="adm-mini" type="submit">削除</button></form>
+    <% } else { %><span class="adm-help"> 未アップロード</span><% } %>
+    <form method="post" action="<%= BASE %>/samples/photos" enctype="multipart/form-data">
+      <input type="hidden" name="_csrf" value="<%= csrf %>"><input type="hidden" name="group" value="<%= g.id %>"><input type="hidden" name="slot" value="<%= s %>">
+      <input type="file" name="photo" accept="image/jpeg,image/png" required> <button class="adm-mini" type="submit"><%= o ? '差し替える' : 'アップロード' %></button>
+    </form>
+  </div>
+  <% }) %>
+  <% }) %>
+</section>
+<script>
+// 写真を選んだら、ブラウザの中で長辺1600pxのJPEGに縮小してから送る(サーバーは受け取ったものをそのまま保存する)
+(function () {
+  var MAX = 1600;
+  Array.prototype.forEach.call(document.querySelectorAll('input[type=file][name=photo]'), function (input) {
+    input.addEventListener('change', function () {
+      var f = input.files && input.files[0];
+      if (!f || !/^image\/(jpeg|png)$/.test(f.type) || typeof DataTransfer === 'undefined') return;
+      var btn = input.form.querySelector('button[type=submit]');
+      if (btn) btn.disabled = true;
+      var done = function () { if (btn) btn.disabled = false; };
+      var img = new Image(), url = URL.createObjectURL(f);
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var r = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+        var w = Math.max(1, Math.round(img.naturalWidth * r)), h = Math.max(1, Math.round(img.naturalHeight * r));
+        var c = document.createElement('canvas'); c.width = w; c.height = h;
+        var x = null;
+        try { x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(img, 0, 0, w, h); } catch (e) { x = null; }
+        if (!x) { done(); return; } // 縮小できなければ元のファイルを送る
+        c.toBlob(function (b) {
+          try {
+            if (b) {
+              var dt = new DataTransfer();
+              dt.items.add(new File([b], f.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' }));
+              input.files = dt.files;
+            }
+          } catch (e) { /* 縮小できなければ元のファイルを送る */ }
+          done();
+        }, 'image/jpeg', 0.85);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); done(); };
+      img.src = url;
+    });
+  });
+})();
+</script>
+<%- include('_foot') %>

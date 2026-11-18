@@ -1,0 +1,119 @@
+<%
+  // 見本ページ(営業提案用)。参照実装 docs/sample-lp-reference/make_lp2.py の移植。
+  // 店の事実(v.name / v.address / v.phone / 営業時間)はデータをそのまま出力(必ずエスケープして出す)。文章は業種グループの定型文だけ。
+  const NOHOURS = '営業時間は院長様に伺って掲載します';
+  const FPOS = ['45% 40%', '60% 35%', '50% 55%'];
+  const TPOS = ['35% 45%', '35% 50%', '55% 45%'];
+  const hoursLine = v.hours ? v.openGroups.map(function (g) { return g[0] + ' ' + g[1]; }).join(' / ') + (v.closedGroups.length ? '　' + v.closedGroups[0][0] + '曜 定休' : '') : NOHOURS;
+  const telHref = v.tel ? 'tel:' + v.tel : '';
+%><!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title><%= v.title %></title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Noto+Serif+JP:wght@600;900&display=swap" rel="stylesheet">
+<style>
+<%- include('_lp_css') %>
+</style>
+</head>
+<body>
+<div class="sample"><b>営業提案用の見本です。</b><%= v.name %>様の公式サイトではありません（株式会社エストック作成）</div>
+<header><div class="logo"><%= v.initial %></div><div class="hname"><%= v.name %></div></header>
+
+<div class="banner<%= photos.hero ? '' : ' banner-empty' %>"<% if (photos.hero) { %> style="background-image:url('<%= photos.hero %>')"<% } %>>
+  <% if (photos.hero) { %><span class="bcap">写真はイメージです</span><% } %>
+  <div class="bin">
+    <p class="beyebrow"><%= v.area ? v.area + 'の' : '' %><%= v.category %></p>
+    <p class="bname"><%= v.name %></p>
+    <div class="bline"></div>
+    <p class="bcatch"><%= v.catchLines.join('') %></p>
+    <div class="bfeat"><% v.features.forEach(function (f) { %><span><%- ico(f[0], 18) %><%= f[1] %></span><% }) %></div>
+  </div>
+  <div class="binfo">
+    <% if (v.address) { %><div><%- ico('pin', 16) %><span><%= v.postal ? '〒' + v.postal + ' ' : '' %><%= v.address %></span></div><% } %>
+    <% if (v.phone) { %><div><%- ico('phone', 16) %><b><%= v.phone %></b></div><% } %>
+    <div><%- ico('clock', 16) %><span><%= hoursLine %></span></div>
+  </div>
+</div>
+<div class="hero-actions"><div class="wrap">
+  <p class="lead"><%= v.lead %></p>
+  <% if (telHref) { %><a class="btn p" href="<%= telHref %>"><%- ico('phone', 24) %>電話で問い合わせる</a><% } %>
+  <% if (v.address) { %><a class="btn o" href="#access"><%- ico('pin', 24) %>アクセスを見る</a><% } %>
+</div></div>
+
+<section class="about"><div class="wrap">
+  <p class="en">ABOUT</p><h2><%= v.name %>について</h2><span class="bar"></span>
+  <p class="txt"><%= v.about %></p>
+  <div class="feats"><% v.features.forEach(function (f, k) { const fp = [photos.f_explain, photos.f_counsel, photos.f_room][k]; %><div class="feat"><% if (fp) { %><div class="fph"><img src="<%= fp %>" alt="" style="object-position:<%= FPOS[k] %>"></div><% } else { %><div class="fic"><%- ico(f[0], 30) %></div><% } %><h3><%= f[1] %></h3><p><%= f[2] %></p></div><% }) %></div>
+</div></section>
+
+<section class="concerns"><div class="wrap">
+  <p class="en">CONCERNS</p><h2>このようなお悩みの方へ</h2><span class="bar"></span><p class="sub">こんなことでお困りではありませんか？</p>
+  <ul class="clist"><% v.concerns.forEach(function (c) { %><li><%- ico('check', 26) %><span><%= c %></span></li><% }) %></ul>
+</div></section>
+
+<section class="treatsec"><div class="wrap">
+  <p class="en">TREATMENTS</p><h2>施術案内</h2><span class="bar"></span><p class="sub">お身体の状態に合わせた施術をご案内いたします。</p>
+  <div class="treats"><% v.treatments.forEach(function (t, k) { const tp = [photos.t_back, photos.t_stretch, photos.t_head][k]; %><div class="treat"><% if (tp) { %><div class="tph"><img src="<%= tp %>" alt="" style="object-position:<%= TPOS[k] %>" loading="lazy"><span class="tbadge"><%- ico(t[0], 26) %></span><span class="tcap">写真はイメージです</span></div><% } else { %><div class="tic"><%- ico(t[0], 54) %></div><% } %><div class="tb"><h3><%= t[1] %></h3><p><%= t[2] %></p><p class="todo"><%- ico('info', 16) %><%= t[3] %></p></div></div><% }) %></div>
+  <div class="note-box">※ 施術内容・メニュー・料金等の詳細につきましては、お電話または来院時にお問い合わせください。</div>
+</div></section>
+
+<section class="first"><div class="wrap">
+  <p class="en">FIRST VISIT</p><h2>初めての方へ</h2><span class="bar"></span><p class="sub">初めてご来院の方も安心してお越しください。</p>
+  <ol class="steps"><% v.steps.forEach(function (s, i) { %><li><span class="sn"><%= i + 1 %></span><div class="sb"><h3><%- ico(s[0], 22) %><%= s[1] %></h3><p><%= s[2] %></p></div></li><% }) %></ol>
+</div></section>
+
+<% if (photos.room || photos.reception) { %>
+<section class="photos"><div class="wrap">
+  <% if (photos.room) { %><div class="pic"><img src="<%= photos.room %>" alt="施術スペースのイメージ写真"><span><%- ico('camera', 18) %>施術スペースイメージ</span></div><% } %>
+  <% if (photos.reception) { %><div class="pic"><img src="<%= photos.reception %>" alt="受付のイメージ写真"><span><%- ico('camera', 18) %>受付イメージ</span></div><% } %>
+  <div class="imgnote">写真はイメージです。実際の院内写真・スタッフ写真ではありません。</div>
+</div></section>
+<% } %>
+
+<section id="hours" class="hourssec"><div class="wrap">
+  <p class="en">HOURS</p><h2>営業時間</h2><span class="bar"></span><p class="sub">ご来院の際は営業時間をご確認ください。</p>
+  <% if (v.hours) { %>
+  <div class="htable"><% v.hours.forEach(function (r) { const off = r[1].includes('休'); %><div class="hrow<%= off ? ' off' : '' %>"><span class="d"><%- ico('clock', 20) %><%= r[0] %>曜日</span><span class="t"><%- r[1].split(' / ').map(function (x) { return esc(x); }).join('<br>') %></span></div><% }) %></div>
+  <p class="hnote">祝日・年末年始などは時間が変わることがあります。</p>
+  <% } else { %>
+  <div class="hnone"><%- ico('clock', 28) %><br><%= NOHOURS %></div>
+  <% } %>
+</div></section>
+
+<% if (v.address || v.phone) { %>
+<section class="access" id="access"><div class="wrap">
+  <p class="en">ACCESS</p><h2>アクセス</h2><span class="bar"></span><p class="sub"><%= v.area ? v.area + 'にございます。' : '' %>お気軽にお越しください。</p>
+  <% if (v.address) { %><div class="arow"><div class="aic"><%- ico('pin', 28) %></div><div><b>住所</b><span><%= v.postal ? '〒' + v.postal + ' ' : '' %><%= v.address %></span></div></div><% } %>
+  <% if (v.phone) { %><div class="arow"><div class="aic"><%- ico('phone', 28) %></div><div><b>電話番号</b><a href="<%= telHref %>"><%= v.phone %></a></div></div>
+  <a class="btn p" href="<%= telHref %>"><%- ico('phone', 24) %>電話で問い合わせる</a><% } %>
+  <% if (v.mapEmbed) { %><div class="map" style="margin-top:28px"><iframe src="<%= v.mapEmbed %>" loading="lazy" title="地図"></iframe>
+    <a href="<%= v.mapOpen %>" target="_blank" rel="noopener">マップで開く <%- ico('ext', 16) %></a></div><% } %>
+</div></section>
+<% } %>
+
+<section class="cta"><div class="wrap">
+  <h2><%- v.cta %></h2>
+  <p><%= v.ctaSub %></p>
+  <% if (v.phone) { %><a class="btn" href="<%= telHref %>"><%- ico('phone', 30) %><%= v.phone %></a><% } %>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="fl"><div class="logo"><%= v.initial %></div><div class="hname"><%= v.name %></div></div>
+  <p><%= v.footLead %></p>
+  <% if (v.address) { %><p class="fi"><%- ico('pin', 20) %><%= v.postal ? '〒' + v.postal + ' ' : '' %><%= v.address %></p><% } %>
+  <% if (v.phone) { %><p class="fi"><%- ico('phone', 20) %><%= v.phone %></p><% } %>
+  <h4><%- ico('clock', 24) %>営業時間</h4>
+  <% if (v.hours) { %><% v.openGroups.concat(v.closedGroups).forEach(function (g) { %><p><%= g[0] %>：<%= g[1] %></p><% }) %><% } else { %><p><%= NOHOURS %></p><% } %>
+  <% if (v.phone) { %><a class="btn" href="<%= telHref %>"><%- ico('phone', 20) %>電話する</a><% } %>
+  <div class="disc">※ 当サイトは営業提案用のサンプルサイトです。正式な公式サイトではありません。<br>
+  掲載情報はGoogleマップの掲載内容（<%= v.sourceDate %>時点）をもとにしています。<br>
+  作成：株式会社エストック（兵庫県姫路市）TEL 0120-830-046</div>
+</div></footer>
+
+<% if (v.phone) { %><div class="callbar"><a href="<%= telHref %>"><%- ico('phone', 24) %>電話で問い合わせる</a></div><% } %>
+</body>
+</html>

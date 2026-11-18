@@ -913,6 +913,9 @@ function registerAdminWarehouse(app, deps = {}) {
     await page(req, res, 'pages', { nav: 'pages', error, filter, rows: data.rows, counts: data.counts, variants: data.variants || [], pageBase: baseUrl });
   }));
 
+  // ===== 見本ページ(営業提案用。作成・一覧・編集・写真) =====
+  require('./adminSamples').register(router, { BASE, page, wrap, csrfOk, now, stamp, sampleStore: deps.sampleStore, sampleExportDir: deps.sampleExportDir });
+
   // ===== 夜間フォーム探し =====
   async function nightPage(req, res, extra = {}, status = 200) {
     let sched = null, error = extra.error || null;

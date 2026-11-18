@@ -1,0 +1,27 @@
+<%- include('_head') %>
+<%
+  var hmap = {}; hours.forEach(function (h) { hmap[h[0]] = h[1]; });
+%>
+<section class="adm-card">
+  <h1>見本の編集: <%= row.name %></h1>
+  <p>コード <code><%= row.code %></code> ／ <%= row.category_main || '' %> ／ <%= SP.areaOf(row) %> ／ 開いた回数 <%= row.open_count %> ／ リスト <%= row.batch_label || '-' %></p>
+  <p>URL: <code><%= baseUrl(row.code) %></code>
+    <% if (row.status !== 'deleted') { %> <a class="adm-mini" href="/s/<%= row.code %>" target="_blank" rel="noopener noreferrer">見本を開く</a><% } %></p>
+  <p class="adm-help">店名・住所・電話は倉庫のデータをそのまま表示します(ここでは変えられません)。</p>
+  <form method="post" action="<%= BASE %>/samples/<%= row.id %>">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <h3>状態</h3>
+    <% SP.STATUSES.forEach(function (s) { %>
+    <label class="adm-radio"><input type="radio" name="status" value="<%= s %>"<%= row.status === s ? ' checked' : '' %>><%= statusLabel[s] %><span class="adm-help"><%= { draft: '営業提案用の見本', approved: '掲載OKをもらった', deleted: '表示しない(開くと404)。断られた見本はここで削除' }[s] %></span></label>
+    <% }) %>
+    <h3>営業時間(院長様に伺った内容)</h3>
+    <p class="adm-help">曜日ごとに入力します。空欄の曜日は載せません。すべて空欄なら「営業時間は院長様に伺って掲載します」と表示します。休みは「定休日」、午前・午後に分かれるときは「8:00〜12:00 / 15:00〜19:15」のように書きます。</p>
+    <% SP.DAYS.forEach(function (d) { %>
+    <label><%= d %>曜日 <input class="adm-input adm-short" style="width:320px" type="text" name="hours_<%= d %>" maxlength="60" value="<%= hmap[d] || '' %>"></label><br>
+    <% }) %>
+    <h3>営業メモ</h3>
+    <textarea class="adm-input" name="note" rows="3" maxlength="500"><%= row.note || '' %></textarea>
+    <p class="adm-actions"><button class="adm-btn" type="submit">保存する</button> <a class="adm-btn adm-btn2" href="<%= BASE %>/samples">一覧へ戻る</a></p>
+  </form>
+</section>
+<%- include('_foot') %>
