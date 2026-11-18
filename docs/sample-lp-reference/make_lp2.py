@@ -114,9 +114,14 @@ def build(shop):
         f'<div class="hrow{" off" if "休" in h else ""}"><span class="d">{ico("clock", 20)}{esc(d)}曜日</span>'
         f'<span class="t">{"<br>".join(esc(x) for x in h.split(" / "))}</span></div>' for d, h in shop["hours"])
     foot_hours = "".join(f'<p>{esc(d)}：{esc(h)}</p>' for d, h in open_groups + closed)
+    feat_imgs = [(img_hero, "60% 40%"), (img_recep, "45% 50%"), (img_room, "50% 60%")]
     features = "".join(
-        f'<div class="feat"><div class="fic">{ico(i, 30)}</div><h3>{esc(t)}</h3><p>{esc(fmt(b))}</p></div>'
-        for i, t, b in c["features"])
+        f'<div class="feat"><div class="fph"><img src="{feat_imgs[k][0]}" alt="" style="object-position:{feat_imgs[k][1]}"></div>'
+        f'<h3>{esc(t)}</h3><p>{esc(fmt(b))}</p></div>'
+        for k, (i, t, b) in enumerate(c["features"]))
+    bfeat = "".join(f'<span>{ico(i, 18)}{esc(t)}</span>' for i, t, b in c["features"])
+    binfo_hours = " / ".join(f'{esc(d)} {esc(h)}' for d, h in open_groups)
+    binfo_closed = (esc(closed[0][0]) + "曜 定休") if closed else ""
     concerns = "".join(f'<li>{ico("check", 26)}<span>{esc(x)}</span></li>' for x in c["concerns"])
     treats = "".join(
         f'<div class="treat"><div class="tic">{ico(i, 54)}</div><div class="tb"><h3>{esc(t)}</h3>'
@@ -140,7 +145,7 @@ def build(shop):
 <meta name="robots" content="noindex, nofollow, noarchive">
 <title>【見本】{esc(name)}｜{esc(area)}の{esc(shop["category"])}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Noto+Serif+JP:wght@600;900&display=swap" rel="stylesheet">
 <style>
 :root{{--teal:#0d9488;--teal-d:#0f766e;--teal-l:#ccfbf1;--teal-xl:#f0fdfa;--ink:#1e293b;--sub:#64748b;--line:#e2e8f0;
 --orange:#ea580c;--orange-l:#fff7ed;--navy:#1e293b;--bg:#fff;}}
@@ -179,12 +184,33 @@ border-radius:16px;padding:17px;margin-top:14px}}
 .btn.o{{border:3px solid #5eead4;color:var(--teal-d);background:#fff}}
 .chips{{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;margin-top:22px;color:var(--sub);font-size:14px}}
 .chip{{display:inline-flex;align-items:center;gap:5px}}.chip svg{{color:#14b8a6}}.chip.off svg{{color:#94a3b8}}
+/* banner */
+.banner{{position:relative;min-height:640px;background:#1e293b center/cover no-repeat;color:#fff;display:flex;flex-direction:column;justify-content:flex-end}}
+.banner::before{{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(15,23,42,.15) 0%,rgba(15,23,42,.35) 40%,rgba(8,47,45,.92) 100%)}}
+.bcap{{position:absolute;top:12px;right:12px;font-size:11px;background:rgba(0,0,0,.45);padding:3px 9px;border-radius:6px;z-index:1}}
+.bin{{position:relative;padding:0 22px 26px;text-align:center}}
+.beyebrow{{font-family:"Noto Serif JP",serif;font-size:14px;letter-spacing:.18em;opacity:.95;margin:0 0 6px}}
+.bname{{font-family:"Noto Serif JP",serif;font-weight:900;font-size:46px;line-height:1.25;letter-spacing:.08em;margin:0;
+text-shadow:0 4px 18px rgba(0,0,0,.45)}}
+.bline{{width:120px;height:2px;margin:14px auto;background:linear-gradient(90deg,transparent,#fcd34d,transparent)}}
+.bcatch{{font-family:"Noto Serif JP",serif;font-size:21px;font-weight:600;line-height:1.7;margin:0 0 18px;text-shadow:0 2px 10px rgba(0,0,0,.5)}}
+.bfeat{{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}}
+.bfeat span{{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.45);
+backdrop-filter:blur(4px);padding:6px 12px;border-radius:999px;font-size:13.5px;font-weight:700}}
+.binfo{{position:relative;background:#0b2f2c;border-top:1px solid rgba(252,211,77,.4);padding:14px 20px;font-size:13.5px;line-height:1.7}}
+.binfo div{{display:flex;gap:8px;align-items:flex-start}}.binfo svg{{color:#fcd34d;flex:none;margin-top:3px}}
+.binfo b{{font-size:19px;letter-spacing:.04em}}
+.hero-actions{{padding:26px 0 34px;text-align:center;background:#fbf7f1}}
+.hero-actions .lead{{margin:0 0 6px}}
+/* section colors */
+.about{{background:#fbf7f1}}.treatsec{{background:#fff}}.photos{{background:#fbf7f1}}.hourssec{{background:#fff}}
 /* about */
 .about p.txt{{text-align:center;color:#475569;font-size:16.5px}}
-.feat{{background:linear-gradient(180deg,#f0fdfa,#fff);border:1.5px solid #ccfbf1;border-radius:24px;padding:30px 22px;
+.feat{{background:#fff;border:1.5px solid #ccfbf1;border-radius:24px;padding:30px 22px;
 text-align:center;margin-top:20px}}
-.fic{{width:84px;height:84px;border-radius:50%;background:var(--teal-l);color:var(--teal);display:flex;align-items:center;
-justify-content:center;margin:0 auto 14px}}
+.fph{{width:150px;height:150px;border-radius:50%;overflow:hidden;margin:0 auto 18px;border:6px solid #fff;
+box-shadow:0 0 0 3px #99f6e4,0 14px 28px -12px rgba(13,148,136,.55)}}
+.fph img{{width:100%;height:100%;object-fit:cover;display:block}}
 .feat h3{{font-size:21px;font-weight:900;margin:0 0 8px}}.feat p{{color:var(--sub);margin:0}}
 /* concerns */
 .concerns{{background:var(--teal-xl)}}
@@ -250,15 +276,25 @@ text-decoration:none;padding:16px}}
 <div class="sample"><b>営業提案用の見本です。</b>{esc(name)}様の公式サイトではありません（株式会社エストック作成）</div>
 <header><div class="logo">{esc(initial)}</div><div class="hname">{esc(name)}</div></header>
 
-<div class="hero"><div class="wrap">
-  <span class="pill">{ico("pin", 20)}{esc(area)}</span>
-  <h1>{catch_html}</h1>
-  <div class="himg"><img src="{img_hero}" alt="施術のイメージ写真">
-    <div class="cap">{esc(c["hero_cap"][0])}<b>{c["hero_cap"][1]}</b></div></div>
+<div class="banner" style="background-image:url('{img_hero}')">
+  <span class="bcap">写真はイメージです</span>
+  <div class="bin">
+    <p class="beyebrow">{esc(area)}の{esc(shop["category"])}</p>
+    <p class="bname">{esc(name)}</p>
+    <div class="bline"></div>
+    <p class="bcatch">{"".join(esc(x) for x in catch)}</p>
+    <div class="bfeat">{bfeat}</div>
+  </div>
+  <div class="binfo">
+    <div>{ico("pin", 16)}<span>〒{esc(shop["postal"])} {esc(shop["address"])}</span></div>
+    <div>{ico("phone", 16)}<b>{esc(shop["phone"])}</b></div>
+    <div>{ico("clock", 16)}<span>{binfo_hours}{("　" + binfo_closed) if binfo_closed else ""}</span></div>
+  </div>
+</div>
+<div class="hero-actions"><div class="wrap">
   <p class="lead">{esc(c["lead"])}</p>
   <a class="btn p" href="tel:{esc(tel)}">{ico("phone", 24)}電話で問い合わせる</a>
   <a class="btn o" href="#access">{ico("pin", 24)}アクセスを見る</a>
-  <div class="chips">{chips}</div>
 </div></div>
 
 <section class="about"><div class="wrap">
@@ -272,7 +308,7 @@ text-decoration:none;padding:16px}}
   <ul class="clist">{concerns}</ul>
 </div></section>
 
-<section><div class="wrap">
+<section class="treatsec"><div class="wrap">
   {sec_head("TREATMENTS", "施術案内", "お身体の状態に合わせた施術をご案内いたします。")}
   <div class="treats">{treats}</div>
   <div class="note-box">※ 施術内容・メニュー・料金等の詳細につきましては、お電話または来院時にお問い合わせください。</div>
@@ -283,13 +319,13 @@ text-decoration:none;padding:16px}}
   <ol class="steps">{steps}</ol>
 </div></section>
 
-<section><div class="wrap">
+<section class="photos"><div class="wrap">
   <div class="pic"><img src="{img_room}" alt="施術スペースのイメージ写真" ><span>{ico("camera", 18)}施術スペースイメージ</span></div>
   <div class="pic"><img src="{img_recep}" alt="受付のイメージ写真" ><span>{ico("camera", 18)}受付イメージ</span></div>
   <div class="imgnote">写真はイメージです。実際の院内写真・スタッフ写真ではありません。</div>
 </div></section>
 
-<section id="hours" style="padding-top:20px"><div class="wrap">
+<section id="hours" class="hourssec"><div class="wrap">
   {sec_head("HOURS", "営業時間", "ご来院の際は営業時間をご確認ください。")}
   <div class="htable">{hours_rows}</div>
   <p class="hnote">祝日・年末年始などは時間が変わることがあります。</p>
