@@ -1,0 +1,57 @@
+<%- include('_head') %>
+<%
+  function t(d) { return d ? fmtTime(new Date(d).getTime()) : ''; }
+  function qs(o) { const p = Object.assign({}, { batch: f.batch, status: f.status, q: f.q, stale: f.stale ? '1' : '' }, o); return Object.keys(p).filter(function (k) { return p[k]; }).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(p[k]); }).join('&'); }
+%>
+<section class="adm-card">
+  <h1>見本ページ</h1>
+  <p class="adm-help">ホームページがない店に電話で見てもらう、その店専用の見本です。一覧は管理画面の中だけで、公開されません。</p>
+  <p>
+    <a class="adm-btn" href="<%= BASE %>/samples/new">見本を作る</a>
+    <a class="adm-btn adm-btn2" href="<%= BASE %>/samples/photos">写真</a>
+  </p>
+  <form method="get" action="<%= BASE %>/samples">
+    <select class="adm-input adm-short" name="status">
+      <option value="">状態: すべて</option>
+      <% SP.STATUSES.forEach(function (s) { %><option value="<%= s %>"<%= f.status === s ? ' selected' : '' %>><%= statusLabel[s] %></option><% }) %>
+    </select>
+    <select class="adm-input adm-short" name="batch">
+      <option value="">リスト: すべて</option>
+      <% labels.forEach(function (l) { %><option value="<%= l %>"<%= f.batch === l ? ' selected' : '' %>><%= l %></option><% }) %>
+    </select>
+    <input class="adm-input adm-short" type="text" name="q" value="<%= f.q %>" placeholder="店名 または コード">
+    <label class="adm-check" style="display:inline-block"><input type="checkbox" name="stale" value="1"<%= f.stale ? ' checked' : '' %>>作成から30日・掲載OKでない</label>
+    <button class="adm-btn" type="submit">絞り込む</button>
+  </form>
+  <p>該当 <strong><%= data.total %></strong>件(新しい順に <%= data.limit %>件ずつ)</p>
+  <% if (!data.rows.length && !error) { %><p class="adm-help">該当する見本はありません。</p><% } %>
+  <% if (data.rows.length) { %>
+  <div class="adm-scroll"><table class="adm-table">
+    <thead><tr><th>コード</th><th>店名</th><th>業種</th><th>市区町村</th><th>状態</th><th>開いた回数</th><th>最後に開いた</th><th>リスト</th><th></th></tr></thead>
+    <tbody>
+    <% data.rows.forEach(function (r) { %>
+    <tr>
+      <td><code><%= r.code %></code></td>
+      <td><%= r.name %></td>
+      <td><%= r.category_main || '' %></td>
+      <td><%= r.area %></td>
+      <td><%= statusLabel[r.status] %></td>
+      <td><%= r.open_count %></td>
+      <td><%= t(r.last_opened_at) %></td>
+      <td><%= r.batch_label || '' %></td>
+      <td>
+        <% if (r.status !== 'deleted') { %><a class="adm-mini" href="/s/<%= r.code %>" target="_blank" rel="noopener noreferrer">見本を開く</a> <% } %>
+        <a class="adm-mini" href="<%= BASE %>/samples/<%= r.id %>">編集</a>
+      </td>
+    </tr>
+    <% }) %>
+    </tbody>
+  </table></div>
+  <p class="adm-help">「見本を開く」で開くと、開いた回数に数えられます。</p>
+  <p>
+    <% if (data.offset > 0) { %><a class="adm-mini" href="<%= BASE %>/samples?<%= qs({ offset: Math.max(data.offset - data.limit, 0) || '' }) %>">前へ</a><% } %>
+    <% if (data.offset + data.limit < data.total) { %><a class="adm-mini" href="<%= BASE %>/samples?<%= qs({ offset: data.offset + data.limit }) %>">次へ</a><% } %>
+  </p>
+  <% } %>
+</section>
+<%- include('_foot') %>

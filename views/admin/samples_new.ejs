@@ -1,0 +1,30 @@
+<%- include('_head') %>
+<section class="adm-card">
+  <h1>見本を作る</h1>
+  <p class="adm-help">倉庫の店ID(倉庫ID)の一覧から、店ごとの見本をまとめて作ります。同じ店の見本がすでにあれば作り直さず、いまのコードを使います。整骨院・整体・マッサージ系以外の店は作りません。</p>
+  <% if (result) { %>
+  <div class="adm-notice">
+    リスト「<%= result.label %>」: <strong><%= result.total %></strong>件のうち、新しく作成 <strong><%= result.created %></strong>件 ／ すでにあった <strong><%= result.existing %></strong>件 ／ 作らなかった <strong><%= result.skipped.length %></strong>件<% if (result.noId) { %> ／ 倉庫IDが読めない行 <strong><%= result.noId %></strong>行<% } %>
+  </div>
+  <p><a class="adm-btn" href="<%= BASE %>/samples/download/<%= encodeURIComponent(result.csv) %>">見本コード・見本URLを足したCSVをダウンロード</a></p>
+  <% if (result.skipped.length) { %>
+  <h3>作らなかった店</h3>
+  <div class="adm-scroll"><table class="adm-table"><thead><tr><th>倉庫ID</th><th>店名</th><th>理由</th></tr></thead><tbody>
+    <% result.skipped.slice(0, 200).forEach(function (s) { %><tr><td><%= s.id %></td><td><%= s.name || '' %></td><td><%= s.why %></td></tr><% }) %>
+  </tbody></table></div>
+  <% if (result.skipped.length > 200) { %><p class="adm-help">ほか <%= result.skipped.length - 200 %>件(CSVでは、作らなかった行は見本コード・見本URLが空です)。</p><% } %>
+  <% } %>
+  <p><a class="adm-mini" href="<%= BASE %>/samples?batch=<%= encodeURIComponent(result.label) %>">このリストの一覧を見る</a></p>
+  <% } %>
+  <form method="post" action="<%= BASE %>/samples/new" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <label>リストの名前<span class="adm-help">どのリストで作ったかの目印です(例: 兵庫_健康系_20261118)</span></label>
+    <input class="adm-input" type="text" name="label" maxlength="100" value="<%= form.label %>" required>
+    <label>倉庫IDを貼り付け<span class="adm-help">改行・カンマ・スペースで区切ります(数字だけ)</span></label>
+    <textarea class="adm-input" name="ids" rows="6"><%= form.ids %></textarea>
+    <label>または CSV<span class="adm-help">1行目に「倉庫ID」の見出しがある列を使います。この列の右に「見本コード」「見本URL」を足したCSVを出します(電話リストにそのまま使えます)。ファイルを選ぶと、貼り付けは使いません。</span></label>
+    <input class="adm-input" type="file" name="csv" accept=".csv,.txt">
+    <p class="adm-actions"><button class="adm-btn" type="submit">作成する</button></p>
+  </form>
+</section>
+<%- include('_foot') %>

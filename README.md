@@ -695,3 +695,15 @@ node cli/gbp-debug.js --jsonl exports/phone_list_xxxx.csv.jsonl --limit 5
 4. `.env` に `GOOGLE_PLACES_API_KEY=<キー>` を追記し、`pm2 restart webdock --update-env`。
 
 キー未設定のときは、この欄に「管理者がGoogleのAPIキーを設定してください」と出るだけで、ほかの機能は普通に動きます。1回の調査でAPI呼び出しは最大10回(店舗特定1回+キーワード3つ×最大3ページ)。結果は24時間メモリにキャッシュし、同じ接続元からの5秒以内の再実行は断ります。テスト: `npm run test:meorank`。
+
+## 見本ページ(ホームページがない店への営業提案用 / `/s/<5桁のコード>`)
+
+倉庫の店(整骨院・整体・マッサージ系)ごとに、その店専用の見本ページを自動で作り、電話で読み上げられる5桁のコードのURLで見てもらう。設計は `docs/plan-sample-lp.md`、デザインの正は `docs/sample-lp-reference/make_lp2.py`。
+
+- **適用**: `mysql --default-character-set=utf8mb4 < sql/warehouse_migrate_013.sql`(何度実行しても安全)→ webdock を再起動。`WH_DB_*` が設定されているときだけ `/s/` が有効(未設定なら404)。
+- **作る**: 管理画面「見本ページ」→「見本を作る」(倉庫IDの貼り付け または CSV。リストの名前が必要)。入力のCSVに「見本コード」「見本URL」の列を足したCSVをダウンロードできる。同じ店の見本がすでにあれば作り直さず、既存のコードを使う。業種が合わない店は作らない。CLI: `node cli/sample-pages.js --ids-file ids.txt --label 兵庫_健康系_20261118`(または `--csv`)。
+- **写真**: 管理画面「見本ページ」→「写真」で、業種グループごとに hero / room / reception を登録。`data/sample-photos/<group>/`(`SAMPLE_PHOTO_DIR` で変更可)に保存され、**git には入れない**。長辺1600pxのJPEGへの縮小は、アップロード画面のブラウザ側(canvas)で行い、サーバーは受け取ったものをそのまま保存する(JPEG/PNG・1枚5MBまで)。写真は hero / room / reception(必須)と f_explain / f_counsel / f_room / t_back / t_stretch / t_head(任意。無ければ代用・アイコン表示)の9枚。
+- **営業時間**: 倉庫にないので推測しない。管理画面の編集で入力した曜日だけ表示し、無ければ「営業時間は院長様に伺って掲載します」と出す。
+- **見本であることの表示**: 最上部の帯・フッターの注記・`noindex`(meta と `X-Robots-Tag`)。写真には「写真はイメージです」。状態を「削除」にすると404になる(断られた店は作り直さない)。
+- **URL**: 既定は `https://webdock.stoc-plus.site/s/12345`。`.env` の `SAMPLE_BASE_URL`(例 `https://stoc.jp`)を設定すると CSV の見本URLが `https://stoc.jp/12345` になる(短縮URLの向け先の設定は別)。
+- **開いた回数**: ボット・プレビュー・HEAD は数えない。テスト: `npm run test:samples`(`npm test` にも含む)。

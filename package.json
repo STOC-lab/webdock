@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node test/unit.js",
+    "test": "node test/unit.js && node test/sample.test.js",
+    "test:samples": "node test/sample.test.js",
     "batch": "node cli/batch-scan.js",
     "test:batch": "node test/batch.test.js",
     "find-forms": "node cli/find-forms.js",

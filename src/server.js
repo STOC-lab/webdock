@@ -302,6 +302,14 @@ if (process.env.WH_DB_USER) {
   app.use('/r', (req, res) => res.status(404).type('text/plain').send('Not Found'));
 }
 
+// 見本ページ(/s/<5桁のコード>。営業提案用・検索に載せない)。倉庫DB(WH_DB_*)が設定されているときだけ有効
+if (process.env.WH_DB_USER) {
+  const { registerSamples } = require('./sampleRoutes');
+  registerSamples(app, { store: require('./samplePages').createStore(require('./stocBatch').createStocPool()) });
+} else {
+  app.use('/s', (req, res) => res.status(404).type('text/plain').send('Not Found'));
+}
+
 // 倉庫の管理画面(WAREHOUSE_ADMIN_PASS と ADMIN_ALLOW_IPS の両方が設定されたときだけ有効。未設定なら /admin は404)
 registerAdminWarehouse(app, { autoRefresh: true });
 
