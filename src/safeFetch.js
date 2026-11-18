@@ -68,6 +68,10 @@ async function resolveSafely(hostname) {
   try {
     records = await dns.lookup(hostname, { all: true });
   } catch (e) {
+    // EAI_AGAIN(DNSの一時的な不調・タイムアウト)は直るかもしれないので、永続的な「ドメインなし」とは区別する
+    if (e && (e.code === 'EAI_AGAIN' || e.code === 'ETIMEOUT' || e.code === 'ECONNREFUSED')) {
+      throw Object.assign(new Error('サイトへ接続できませんでした。'), { userSafe: true, cause: e });
+    }
     const err = new Error('ドメインが見つかりませんでした。URLをご確認ください。');
     err.userSafe = true;
     throw err;
@@ -114,6 +118,18 @@ function validateUrl(raw) {
     throw err;
   }
   return u;
+}
+
+/**
+ * 接続エラーのメッセージ。当分直らないもの(接続拒否・DNSなし・証明書/ホスト名の不一致)は別の文言にして、
+ * 夜間の再試行(nightGuard.classifyError)の対象から外す。それ以外(ECONNRESET・タイムアウト等)は従来どおり。
+ */
+function connectErrorMessage(e) {
+  const c = e && e.code ? String(e.code) : '';
+  if (c === 'ENOTFOUND') return 'ドメインが見つかりませんでした。';
+  if (c === 'ECONNREFUSED') return 'サイトが接続を拒否しています。';
+  if (/^(CERT_|ERR_TLS_CERT|DEPTH_ZERO_SELF_SIGNED|SELF_SIGNED_CERT|UNABLE_TO_(VERIFY|GET)|HOSTNAME_MISMATCH)/.test(c)) return 'サイトの証明書に問題があります。';
+  return 'サイトへ接続できませんでした。';
 }
 
 /**
@@ -194,7 +210,7 @@ function fetchOneHop(u, pinnedIp, deadline, maxBytes) {
       reject(Object.assign(new Error('サイトの応答がありませんでした。'), { userSafe: true }));
     });
     req.on('error', (e) => {
-      reject(Object.assign(new Error('サイトへ接続できませんでした。'), { userSafe: true, cause: e }));
+      reject(Object.assign(new Error(connectErrorMessage(e)), { userSafe: true, cause: e }));
     });
     req.end();
   });
@@ -420,4 +436,4 @@ async function fetchHead(raw, maxBytes = 4096, timeoutMs = 5000) {
   });
 }
 
-module.exports = { fetchHomepage, fetchPassive, probeHttpRedirect, withHttpProbe, sameSiteHost, fetchHead, resolveSafely, isBlockedIp, validateUrl, USER_AGENT };
+module.exports = { fetchHomepage, fetchPassive, probeHttpRedirect, withHttpProbe, sameSiteHost, fetchHead, resolveSafely, connectErrorMessage, isBlockedIp, validateUrl, USER_AGENT };

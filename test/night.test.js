@@ -3,6 +3,7 @@
 const express = require('express');
 const ng = require('../src/nightGuard');
 const ff = require('../src/formFinder');
+const { connectErrorMessage } = require('../src/safeFetch');
 const fnd = require('../cli/find-forms');
 const { registerAdminWarehouse, parseNightForm } = require('../src/adminWarehouse');
 
@@ -105,6 +106,18 @@ const errResult = (note) => okResult({ status: 'error', note });
       const r = await gate.run('c.jp', async () => { calls++; return errResult(note); }, 'https://c.jp/');
       eq([calls, r.note], [1, note], `${note}は再試行しない・理由を残す`);
     }
+  }
+  { // 接続エラーの種類分け: 当分直らないもの(DNSなし・接続拒否・証明書)は再試行しない
+    const notes = ['ENOTFOUND', 'ECONNREFUSED', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID'].map((code) => connectErrorMessage({ code }));
+    eq(notes.map(ng.classifyError), Array(4).fill('permanent'), 'ENOTFOUND・ECONNREFUSED・証明書エラーは永続的');
+    for (const code of ['ECONNRESET', 'EAI_AGAIN', 'ETIMEDOUT', 'EPROTO', undefined]) eq(ng.classifyError(connectErrorMessage({ code })), 'transient', `${code}は一時的`);
+    const { gate, sleeps } = mk({ retryDelays: undefined }); let calls = 0;
+    const r = await gate.run('dead.jp', async () => { calls++; return errResult(connectErrorMessage({ code: 'ECONNREFUSED' })); }, 'https://dead.jp/');
+    eq([calls, r.retries, sleeps.filter((x) => x >= 10000)], [1, 0, []], '接続拒否は再試行も待ちもなし');
+    const g2 = mk({ retryDelays: undefined }); let c2 = 0;
+    const r2 = await g2.gate.run('flaky.jp', async () => { c2++; return errResult(connectErrorMessage({ code: 'ECONNRESET' })); }, 'https://flaky.jp/');
+    eq([c2, r2.retries, g2.sleeps.filter((x) => x >= 10000)], [2, 1, [15000]], 'ECONNRESETは15秒あけて1回だけ再試行');
+    eq(/サイトが接続を拒否しています/.test(ng.PERMANENT_NOTE_SQL), true, '永続的エラーのSQLに接続拒否を含む');
   }
   { // 404: トップで再試行(深いURLのとき)
     const { gate } = mk(); const urls = [];
