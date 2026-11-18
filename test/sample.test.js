@@ -200,6 +200,7 @@ function fakePool({ shops = [], dupFirst = 0 } = {}) {
     const html = await renderSample(page, SHOP(), env);
     ok(html.includes('/s/img/seitai/hero?v=') && html.includes('/s/img/seitai/reception?v='), '描画: 写真があれば出す');
     ok((html.match(/写真はイメージです/g) || []).length >= 2, '描画: 写真には「写真はイメージです」を付ける');
+    ok(/class="pic"><img [^>]*>/.test(html) && !/class="pic"><img [^>]*loading="lazy"/.test(html), '描画: 院内写真(.pic)の img に loading=lazy を付けない(高さ0で読まれて画面がずれるため)');
     ok(html.includes('class="bcap">写真はイメージです') && html.includes("background-image:url('/s/img/seitai/hero?v="), '描画: バナーの背景写真と注記');
         ok(!html.includes('class="tph"') && (html.match(/class="tic"/g) || []).length === 3, '描画: 施術案内は任意の写真が無ければアイコン');
     await Photos.save('seitai', 'room', jpg, env);

@@ -68,8 +68,8 @@
 
 <% if (photos.room || photos.reception) { %>
 <section class="photos"><div class="wrap">
-  <% if (photos.room) { %><div class="pic"><img src="<%= photos.room %>" alt="施術スペースのイメージ写真" loading="lazy"><span><%- ico('camera', 18) %>施術スペースイメージ</span></div><% } %>
-  <% if (photos.reception) { %><div class="pic"><img src="<%= photos.reception %>" alt="受付のイメージ写真" loading="lazy"><span><%- ico('camera', 18) %>受付イメージ</span></div><% } %>
+  <% if (photos.room) { %><div class="pic"><img src="<%= photos.room %>" alt="施術スペースのイメージ写真"><span><%- ico('camera', 18) %>施術スペースイメージ</span></div><% } %>
+  <% if (photos.reception) { %><div class="pic"><img src="<%= photos.reception %>" alt="受付のイメージ写真"><span><%- ico('camera', 18) %>受付イメージ</span></div><% } %>
   <div class="imgnote">写真はイメージです。実際の院内写真・スタッフ写真ではありません。</div>
 </div></section>
 <% } %>
