@@ -114,7 +114,11 @@ def build(shop):
         f'<div class="hrow{" off" if "休" in h else ""}"><span class="d">{ico("clock", 20)}{esc(d)}曜日</span>'
         f'<span class="t">{"<br>".join(esc(x) for x in h.split(" / "))}</span></div>' for d, h in shop["hours"])
     foot_hours = "".join(f'<p>{esc(d)}：{esc(h)}</p>' for d, h in open_groups + closed)
-    feat_imgs = [(img_hero, "60% 40%"), (img_recep, "45% 50%"), (img_room, "50% 60%")]
+    def ph(n, fallback):
+        return photo(c["photos"], n) or fallback
+    # 写真が無い業種は従来の3枚で代用する
+    feat_imgs = [(ph("f_explain.jpg", img_hero), "45% 40%"), (ph("f_counsel.jpg", img_recep), "60% 35%"), (ph("f_room.jpg", img_room), "50% 55%")]
+    treat_imgs = [(ph("t_back.jpg", ""), "35% 45%"), (ph("t_stretch.jpg", ""), "35% 50%"), (ph("t_head.jpg", ""), "55% 45%")]
     features = "".join(
         f'<div class="feat"><div class="fph"><img src="{feat_imgs[k][0]}" alt="" style="object-position:{feat_imgs[k][1]}"></div>'
         f'<h3>{esc(t)}</h3><p>{esc(fmt(b))}</p></div>'
@@ -124,9 +128,9 @@ def build(shop):
     binfo_closed = (esc(closed[0][0]) + "曜 定休") if closed else ""
     concerns = "".join(f'<li>{ico("check", 26)}<span>{esc(x)}</span></li>' for x in c["concerns"])
     treats = "".join(
-        f'<div class="treat"><div class="tic">{ico(i, 54)}</div><div class="tb"><h3>{esc(t)}</h3>'
+        (f'<div class="treat"><div class="tph"><img src="{treat_imgs[k][0]}" alt="" style="object-position:{treat_imgs[k][1]}"><span class="tbadge">{ico(i, 26)}</span><span class="tcap">写真はイメージです</span></div>' if treat_imgs[k][0] else f'<div class="treat"><div class="tic">{ico(i, 54)}</div>')+f'<div class="tb"><h3>{esc(t)}</h3>'
         f'<p>{esc(b)}</p><p class="todo">{ico("info", 16)}{esc(n)}</p></div></div>'
-        for i, t, b, n in c["treatments"])
+        for k, (i, t, b, n) in enumerate(c["treatments"]))
     steps = "".join(
         f'<li><span class="sn">{k}</span><div class="sb"><h3>{ico(i, 22)}{esc(t)}</h3><p>{esc(b)}</p></div></li>'
         for k, (i, t, b) in enumerate(c["steps"], 1))
@@ -220,6 +224,10 @@ box-shadow:0 0 0 3px #99f6e4,0 14px 28px -12px rgba(13,148,136,.55)}}
 /* treatments */
 .treat{{border:1px solid var(--line);border-radius:24px;overflow:hidden;margin-top:22px;background:#fff}}
 .tic{{background:linear-gradient(135deg,#14b8a6,#0f766e);color:#fff;display:flex;align-items:center;justify-content:center;height:140px}}
+.tph{{position:relative;height:200px}}.tph img{{width:100%;height:100%;object-fit:cover;display:block}}
+.tbadge{{position:absolute;left:20px;bottom:-24px;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#14b8a6,#0f766e);color:#fff;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 6px 16px rgba(15,118,110,.3)}}
+.tcap{{position:absolute;top:8px;right:10px;font-size:11px;color:#fff;background:rgba(0,0,0,.45);padding:2px 8px;border-radius:6px}}
+.tph+.tb{{padding-top:36px}}
 .tb{{padding:24px 26px}}.tb h3{{margin:0 0 6px;font-size:21px;font-weight:900}}.tb p{{margin:0;color:var(--sub)}}
 .todo{{display:flex;align-items:center;gap:6px;color:var(--orange)!important;font-size:14px;margin-top:10px!important}}
 .note-box{{background:#f8fafc;border-radius:20px;padding:20px 24px;color:var(--sub);font-size:15px;margin-top:24px}}
