@@ -129,7 +129,7 @@ function connectErrorMessage(e) {
   const c = e && e.code ? String(e.code) : '';
   if (c === 'ENOTFOUND') return 'ドメインが見つかりませんでした。';
   if (c === 'ECONNREFUSED') return 'サイトが接続を拒否しています。';
-  if (/^(CERT_|ERR_TLS_CERT|DEPTH_ZERO_SELF_SIGNED|SELF_SIGNED_CERT|UNABLE_TO_|INVALID_CA|HOSTNAME_MISMATCH)/.test(c)) return 'サイトの証明書に問題があります。';
+  if (/^(CERT_|ERR_TLS_CERT|DEPTH_ZERO_SELF_SIGNED|SELF_SIGNED_CERT|UNABLE_TO_|INVALID_CA|INVALID_PURPOSE|PATH_LENGTH_EXCEEDED|HOSTNAME_MISMATCH)/.test(c)) return 'サイトの証明書に問題があります。';
   return 'サイトへ接続できませんでした。';
 }
 

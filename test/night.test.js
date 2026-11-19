@@ -108,7 +108,7 @@ const errResult = (note) => okResult({ status: 'error', note });
     }
   }
   { // 接続エラーの種類分け: 当分直らないもの(DNSなし・証明書)は再試行しない。接続拒否はその場で再試行せず、通常の間隔で調べ直す
-    const permCodes = ['ENOTFOUND', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_CA', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'];
+    const permCodes = ['ENOTFOUND', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_CA', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'PATH_LENGTH_EXCEEDED', 'INVALID_PURPOSE'];
     const notes = permCodes.map((code) => connectErrorMessage({ code }));
     eq(notes.map(ng.classifyError), Array(permCodes.length).fill('permanent'), 'ENOTFOUND・証明書エラーは永続的');
     eq(ng.classifyError(connectErrorMessage({ code: 'ECONNREFUSED' })), 'refused', 'ECONNREFUSED は接続拒否(その場で再試行しない・90日扱いではない)');
