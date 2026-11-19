@@ -116,19 +116,21 @@ function createScheduleReader({ store, env = process.env, ttlMs = 30000, now = (
 }
 
 /* ---------- エラーの種類 ---------- */
-// 一時的: 間を置けば直るかもしれない / 永続的: 当分直らない(90日あける) / 404: トップを試す
+// 一時的: 間を置けば直るかもしれない / 永続的: 当分直らない(90日あける) / 接続拒否: その場では再試行せず通常の間隔で調べ直す / 404: トップを試す
 const TRANSIENT_RE = /^HTTP (?:500|502|503|504|429|408)$|サイトへ接続できませんでした|サイトの応答がありませんでした|タイムアウト|制限時間|取得に失敗しました|調査に失敗しました/;
-const PERMANENT_RE = /^HTTP (?:403|401|410)$|^ドメインが見つかりませんでした|^この宛先は診断できません|^IPアドレスの直接指定/;
+const PERMANENT_RE = /^HTTP (?:403|401|410)$|^ドメインが見つかりませんでした|^この宛先は診断できません|^IPアドレスの直接指定|^サイトの証明書に問題があります/;
 function classifyError(note) {
   const s = String(note || '');
   if (/^HTTP 404$/.test(s)) return 'notfound';
   if (PERMANENT_RE.test(s)) return 'permanent';
+  // 接続拒否: その場では再試行しない(待ちで枠をふさがない)。ただし再起動中などで直ることもあるので、90日ではなく通常の間隔(errorRetryDays)で調べ直す
+  if (/^サイトが接続を拒否しています/.test(s)) return 'refused';
   if (TRANSIENT_RE.test(s)) return 'transient';
   return 'other';
 }
 
 /** SQL: 永続的なエラー(再試行を90日あける)の form_note 条件。NULL でも真偽が決まるようにしてある */
-const PERMANENT_NOTE_SQL = "(COALESCE(form_note, '') IN ('HTTP 403', 'HTTP 401', 'HTTP 410') OR COALESCE(form_note, '') LIKE 'ドメインが見つかりませんでした%' OR COALESCE(form_note, '') LIKE 'この宛先は診断できません%' OR COALESCE(form_note, '') LIKE 'IPアドレスの直接指定%')";
+const PERMANENT_NOTE_SQL = "(COALESCE(form_note, '') IN ('HTTP 403', 'HTTP 401', 'HTTP 410') OR COALESCE(form_note, '') LIKE 'ドメインが見つかりませんでした%' OR COALESCE(form_note, '') LIKE 'この宛先は診断できません%' OR COALESCE(form_note, '') LIKE 'IPアドレスの直接指定%' OR COALESCE(form_note, '') LIKE 'サイトの証明書に問題があります%')";
 
 const rootUrlOf = (url) => { try { const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : 'http://' + url); return u.origin + '/'; } catch { return null; } };
 const sameUrl = (a, b) => String(a).replace(/\/+$/, '') === String(b).replace(/\/+$/, '');
@@ -178,11 +180,11 @@ const MAX_RESULT_JSON = 60000;
 /**
  * 門番を作る。
  *  run(host, visit, url, {needSize}): visit(url) は1回の調査(結果オブジェクトを返す。例外は投げない)。
- *     使い回し(7日以内の結果)があればそれを返す / なければホストの順番待ち→調査→一時的エラーは2回まで再試行→404はトップで再試行。
+ *     使い回し(7日以内の結果)があればそれを返す / なければホストの順番待ち→調査→一時的エラーは1回だけ(15秒後)再試行→404はトップで再試行。
  *     待ち切れなかったときは { deferred: true } を返す(呼び出し側は何も書かず、次の機会に回す)。
  *  exclusive(host, fn): 使い回し・再試行なしで、順番待ちと間隔だけ守って fn() を実行する(営業お断り判定用)。
  */
-function createHostGate({ store, sleep = sleepDefault, gapMs = 10000, lockMs = 150000, reuseMs = 7 * 86400e3, maxWaitMs = 600000, retryDelays = [30000, 90000], pollMs = 5000, log = () => {} } = {}) {
+function createHostGate({ store, sleep = sleepDefault, gapMs = 10000, lockMs = 150000, reuseMs = 7 * 86400e3, maxWaitMs = 600000, retryDelays = [15000], pollMs = 5000, log = () => {} } = {}) {
   async function acquire(host, { reuse = true, needSize = false } = {}) {
     const holder = newToken();
     const t0 = Date.now();
