@@ -108,8 +108,16 @@ const errResult = (note) => okResult({ status: 'error', note });
     }
   }
   { // 接続エラーの種類分け: 当分直らないもの(DNSなし・接続拒否・証明書)は再試行しない
-    const notes = ['ENOTFOUND', 'ECONNREFUSED', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID'].map((code) => connectErrorMessage({ code }));
-    eq(notes.map(ng.classifyError), Array(4).fill('permanent'), 'ENOTFOUND・ECONNREFUSED・証明書エラーは永続的');
+    const permCodes = ['ENOTFOUND', 'ECONNREFUSED', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_CA', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'];
+    const notes = permCodes.map((code) => connectErrorMessage({ code }));
+    eq(notes.map(ng.classifyError), Array(permCodes.length).fill('permanent'), 'ENOTFOUND・ECONNREFUSED・証明書エラーは永続的');
+    { // resolveSafely: DNSの一時不調(EAI_AGAIN)は「接続できませんでした」(一時的)、名前なし(ENOTFOUND)は「ドメインが見つかりません」(永続的)
+      const dnsP = require('dns').promises; const orig = dnsP.lookup;
+      const { resolveSafely } = require('../src/safeFetch');
+      const msgOf = async (code) => { dnsP.lookup = async () => { throw Object.assign(new Error(code), { code }); }; try { await resolveSafely('example.invalid'); return null; } catch (e) { return e.message; } finally { dnsP.lookup = orig; } };
+      eq(ng.classifyError(await msgOf('EAI_AGAIN')), 'transient', 'resolveSafely: EAI_AGAIN は一時的');
+      eq(ng.classifyError(await msgOf('ENOTFOUND')), 'permanent', 'resolveSafely: ENOTFOUND は永続的');
+    }
     for (const code of ['ECONNRESET', 'EAI_AGAIN', 'ETIMEDOUT', 'EPROTO', undefined]) eq(ng.classifyError(connectErrorMessage({ code })), 'transient', `${code}は一時的`);
     const { gate, sleeps } = mk({ retryDelays: undefined }); let calls = 0;
     const r = await gate.run('dead.jp', async () => { calls++; return errResult(connectErrorMessage({ code: 'ECONNREFUSED' })); }, 'https://dead.jp/');
