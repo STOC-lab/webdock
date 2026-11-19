@@ -107,16 +107,19 @@ const errResult = (note) => okResult({ status: 'error', note });
       eq([calls, r.note], [1, note], `${note}は再試行しない・理由を残す`);
     }
   }
-  { // 接続エラーの種類分け: 当分直らないもの(DNSなし・接続拒否・証明書)は再試行しない
-    const permCodes = ['ENOTFOUND', 'ECONNREFUSED', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_CA', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'];
+  { // 接続エラーの種類分け: 当分直らないもの(DNSなし・証明書)は再試行しない。接続拒否はその場で再試行せず、通常の間隔で調べ直す
+    const permCodes = ['ENOTFOUND', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_CA', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'];
     const notes = permCodes.map((code) => connectErrorMessage({ code }));
-    eq(notes.map(ng.classifyError), Array(permCodes.length).fill('permanent'), 'ENOTFOUND・ECONNREFUSED・証明書エラーは永続的');
+    eq(notes.map(ng.classifyError), Array(permCodes.length).fill('permanent'), 'ENOTFOUND・証明書エラーは永続的');
+    eq(ng.classifyError(connectErrorMessage({ code: 'ECONNREFUSED' })), 'refused', 'ECONNREFUSED は接続拒否(その場で再試行しない・90日扱いではない)');
     { // resolveSafely: DNSの一時不調(EAI_AGAIN)は「接続できませんでした」(一時的)、名前なし(ENOTFOUND)は「ドメインが見つかりません」(永続的)
       const dnsP = require('dns').promises; const orig = dnsP.lookup;
       const { resolveSafely } = require('../src/safeFetch');
       const msgOf = async (code) => { dnsP.lookup = async () => { throw Object.assign(new Error(code), { code }); }; try { await resolveSafely('example.invalid'); return null; } catch (e) { return e.message; } finally { dnsP.lookup = orig; } };
       eq(ng.classifyError(await msgOf('EAI_AGAIN')), 'transient', 'resolveSafely: EAI_AGAIN は一時的');
       eq(ng.classifyError(await msgOf('ENOTFOUND')), 'permanent', 'resolveSafely: ENOTFOUND は永続的');
+      eq(ng.classifyError(await msgOf('ENODATA')), 'permanent', 'resolveSafely: ENODATA は永続的');
+      for (const code of ['ETIMEDOUT', 'ESERVFAIL', 'ETIMEOUT', 'ECONNREFUSED']) eq(ng.classifyError(await msgOf(code)), 'transient', `resolveSafely: ${code} は一時的`);
     }
     for (const code of ['ECONNRESET', 'EAI_AGAIN', 'ETIMEDOUT', 'EPROTO', undefined]) eq(ng.classifyError(connectErrorMessage({ code })), 'transient', `${code}は一時的`);
     const { gate, sleeps } = mk({ retryDelays: undefined }); let calls = 0;
@@ -125,7 +128,7 @@ const errResult = (note) => okResult({ status: 'error', note });
     const g2 = mk({ retryDelays: undefined }); let c2 = 0;
     const r2 = await g2.gate.run('flaky.jp', async () => { c2++; return errResult(connectErrorMessage({ code: 'ECONNRESET' })); }, 'https://flaky.jp/');
     eq([c2, r2.retries, g2.sleeps.filter((x) => x >= 10000)], [2, 1, [15000]], 'ECONNRESETは15秒あけて1回だけ再試行');
-    eq(/サイトが接続を拒否しています/.test(ng.PERMANENT_NOTE_SQL), true, '永続的エラーのSQLに接続拒否を含む');
+    eq(/サイトが接続を拒否しています/.test(ng.PERMANENT_NOTE_SQL), false, '接続拒否は90日扱いのSQLに含めない(通常の間隔で調べ直す)');
   }
   { // 404: トップで再試行(深いURLのとき)
     const { gate } = mk(); const urls = [];

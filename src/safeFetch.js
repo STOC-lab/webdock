@@ -68,8 +68,9 @@ async function resolveSafely(hostname) {
   try {
     records = await dns.lookup(hostname, { all: true });
   } catch (e) {
-    // EAI_AGAIN(DNSの一時的な不調・タイムアウト)は直るかもしれないので、永続的な「ドメインなし」とは区別する
-    if (e && (e.code === 'EAI_AGAIN' || e.code === 'ETIMEOUT' || e.code === 'ECONNREFUSED')) {
+    // 「ドメインなし」(永続)にするのは、名前が無いと確定したとき(ENOTFOUND / ENODATA)だけ。
+    // EAI_AGAIN・ETIMEOUT・ESERVFAIL などDNS側の不調は直るかもしれないので「接続できませんでした」(一時的)にする
+    if (!e || (e.code !== 'ENOTFOUND' && e.code !== 'ENODATA')) {
       throw Object.assign(new Error('サイトへ接続できませんでした。'), { userSafe: true, cause: e });
     }
     const err = new Error('ドメインが見つかりませんでした。URLをご確認ください。');

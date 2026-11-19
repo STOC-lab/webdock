@@ -116,19 +116,21 @@ function createScheduleReader({ store, env = process.env, ttlMs = 30000, now = (
 }
 
 /* ---------- エラーの種類 ---------- */
-// 一時的: 間を置けば直るかもしれない / 永続的: 当分直らない(90日あける) / 404: トップを試す
+// 一時的: 間を置けば直るかもしれない / 永続的: 当分直らない(90日あける) / 接続拒否: その場では再試行せず通常の間隔で調べ直す / 404: トップを試す
 const TRANSIENT_RE = /^HTTP (?:500|502|503|504|429|408)$|サイトへ接続できませんでした|サイトの応答がありませんでした|タイムアウト|制限時間|取得に失敗しました|調査に失敗しました/;
-const PERMANENT_RE = /^HTTP (?:403|401|410)$|^ドメインが見つかりませんでした|^この宛先は診断できません|^IPアドレスの直接指定|^サイトが接続を拒否しています|^サイトの証明書に問題があります/;
+const PERMANENT_RE = /^HTTP (?:403|401|410)$|^ドメインが見つかりませんでした|^この宛先は診断できません|^IPアドレスの直接指定|^サイトの証明書に問題があります/;
 function classifyError(note) {
   const s = String(note || '');
   if (/^HTTP 404$/.test(s)) return 'notfound';
   if (PERMANENT_RE.test(s)) return 'permanent';
+  // 接続拒否: その場では再試行しない(待ちで枠をふさがない)。ただし再起動中などで直ることもあるので、90日ではなく通常の間隔(errorRetryDays)で調べ直す
+  if (/^サイトが接続を拒否しています/.test(s)) return 'refused';
   if (TRANSIENT_RE.test(s)) return 'transient';
   return 'other';
 }
 
 /** SQL: 永続的なエラー(再試行を90日あける)の form_note 条件。NULL でも真偽が決まるようにしてある */
-const PERMANENT_NOTE_SQL = "(COALESCE(form_note, '') IN ('HTTP 403', 'HTTP 401', 'HTTP 410') OR COALESCE(form_note, '') LIKE 'ドメインが見つかりませんでした%' OR COALESCE(form_note, '') LIKE 'この宛先は診断できません%' OR COALESCE(form_note, '') LIKE 'IPアドレスの直接指定%' OR COALESCE(form_note, '') LIKE 'サイトが接続を拒否しています%' OR COALESCE(form_note, '') LIKE 'サイトの証明書に問題があります%')";
+const PERMANENT_NOTE_SQL = "(COALESCE(form_note, '') IN ('HTTP 403', 'HTTP 401', 'HTTP 410') OR COALESCE(form_note, '') LIKE 'ドメインが見つかりませんでした%' OR COALESCE(form_note, '') LIKE 'この宛先は診断できません%' OR COALESCE(form_note, '') LIKE 'IPアドレスの直接指定%' OR COALESCE(form_note, '') LIKE 'サイトの証明書に問題があります%')";
 
 const rootUrlOf = (url) => { try { const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : 'http://' + url); return u.origin + '/'; } catch { return null; } };
 const sameUrl = (a, b) => String(a).replace(/\/+$/, '') === String(b).replace(/\/+$/, '');
