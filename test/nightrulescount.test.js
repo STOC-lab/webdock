@@ -39,6 +39,9 @@ const eq = (a, b, m) => { if (JSON.stringify(a) === JSON.stringify(b)) pass++; e
   t2 += 60000; eq(slow.due(), false, '15分かかって失敗した直後(1分後)は再試行しない');
   t2 += 10 * 60000; eq(slow.due(), true, '失敗から10分たてば再試行');
 
+  // 画面の「○分に1回」は実際の間隔(ADMIN_RULES_COUNT_MINUTES)に合わせる
+  eq(createRulesCounter({ getPool: () => ({}), scan: async () => ({}), intervalMs: 30 * 60000 }).get().intervalMin, 30, '集計間隔(分)を画面に渡す');
+
   // 保存・再起動後の読み込み
   const rows = {};
   const store = { async readAll() { return rows; }, async write(k, v, at) { rows[k] = { value: v, at }; return true; } };

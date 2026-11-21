@@ -565,9 +565,11 @@ function registerAdminWarehouse(app, deps = {}) {
         const P = require('../cli/warehouse-promote');
         const base = F.parseArgs(['--source', 'warehouse', '--night']);
         const rules = P.loadRules(undefined);
+        // ルールが読めないときは数えない(全件が「通る」と表示されて誤解を招くため)。失敗扱いにして前回の結果を残す
+        if (!rules) throw new Error('業種ルール(rules/問い合わせ営業.json)が見つかりません');
         return scanRules({
           pool, pageSize: PAGE, isNoPhone: P.isNoPhone,
-          check: rules ? require('./rules').compileRules(rules) : null,
+          check: require('./rules').compileRules(rules),
           buildQuery: ({ cursor, limit }) => F.buildWarehouseTargetQuery({ ...base, night: true, priority: true, order: 'id', limit, cursor }),
         });
       },

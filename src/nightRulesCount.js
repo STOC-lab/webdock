@@ -79,7 +79,7 @@ function createRulesCounter({ getPool, store = null, scan, now = () => Date.now(
   return {
     refresh,
     due,
-    get: () => ({ value, at, error, running }),
+    get: () => ({ value, at, error, running, intervalMin: Math.round(intervalMs / 60000) }),
     async start() {
       if (timer) return;
       await load();
