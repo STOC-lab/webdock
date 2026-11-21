@@ -39,7 +39,7 @@ async function scanRules({ pool, buildQuery, check, isNoPhone, pageSize = PAGE, 
 }
 
 function createRulesCounter({ getPool, store = null, scan, now = () => Date.now(), intervalMs = HOUR_MS, retryMs = RETRY_MS, tickMs = TICK_MS, onError = () => {} }) {
-  let value = null, at = null, error = null, running = false, lastAttempt = 0, timer = null;
+  let value = null, at = null, error = null, running = false, lastAttempt = 0, timer = null, starting = false;
 
   async function load() {
     if (!store) return;
@@ -81,8 +81,10 @@ function createRulesCounter({ getPool, store = null, scan, now = () => Date.now(
     due,
     get: () => ({ value, at, error, running, intervalMin: Math.round(intervalMs / 60000) }),
     async start() {
-      if (timer) return;
+      if (timer || starting) return; // 二重に呼ばれてもタイマーは1つだけ
+      starting = true;
       await load();
+      starting = false;
       const tick = () => { if (due()) refresh(); };
       timer = setInterval(tick, tickMs);
       if (timer.unref) timer.unref();

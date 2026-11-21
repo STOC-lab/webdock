@@ -1,0 +1,7 @@
+<%# 「業種ルールを通る残り」(夜間統計とは別に裏で数えた結果。夜間統計が読めないときも出す) %>
+<% if (typeof rulesCount !== 'undefined' && rulesCount) { const n = (v) => Number(v || 0).toLocaleString('ja-JP'); %>
+  <p class="adm-big">
+    <% if (rulesCount.value) { var rc = rulesCount.value; %>業種ルールを通る残り: <strong><%= n(rc.passing) %></strong> 件（ルールで外れる <%= n(rc.excluded) %> 件）
+      <span class="adm-help">(<%= fmtAt(rulesCount.at) %> に集計。<%= rulesCount.intervalMin || 60 %>分に1回、裏で数えています<%= rulesCount.error ? '。直近の集計は失敗したため前回の結果です' : '' %><%= rulesCount.running ? '。いま再集計中' : '' %>)</span>
+    <% } else { %>業種ルールを通る残り: <span class="adm-help"><%= rulesCount.running ? '集計中' : rulesCount.error ? '集計に失敗しました(10分後に再試行します)' : '未集計(次の集計をお待ちください)' %></span><% } %></p>
+<% } %>

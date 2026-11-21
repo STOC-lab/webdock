@@ -42,6 +42,12 @@ const eq = (a, b, m) => { if (JSON.stringify(a) === JSON.stringify(b)) pass++; e
   // 画面の「○分に1回」は実際の間隔(ADMIN_RULES_COUNT_MINUTES)に合わせる
   eq(createRulesCounter({ getPool: () => ({}), scan: async () => ({}), intervalMs: 30 * 60000 }).get().intervalMin, 30, '集計間隔(分)を画面に渡す');
 
+  // start() を同時に2回呼んでもタイマーは1つ(stop() で全部止まる)
+  { let scans = 0; const st = { async readAll() { await new Promise((r) => setTimeout(r, 20)); return {}; }, async write() { return true; } };
+    const d = createRulesCounter({ getPool: () => ({}), store: st, scan: async () => { scans++; return { passing: 1, excluded: 0, scanned: 1 }; }, tickMs: 1e9 });
+    await Promise.all([d.start(), d.start()]); await new Promise((r) => setTimeout(r, 10)); d.stop();
+    eq(scans, 1, 'start() の二重呼び出しでも集計は1回'); }
+
   // 保存・再起動後の読み込み
   const rows = {};
   const store = { async readAll() { return rows; }, async write(k, v, at) { rows[k] = { value: v, at }; return true; } };
