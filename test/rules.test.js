@@ -84,5 +84,30 @@ eq(globToRegExp('a?.csv').test('ab.csv') && !globToRegExp('a?.csv').test('a.csv'
   eq((c2({ name: 'ダイワハウス 神戸営業所', category_main: '住宅', phone: '078' }) || {}).column, '屋号', '営業所は引き続き除外');
 }
 
+// ---- 完全一致(=)と例外(keep) ----
+{
+  const { compileRules: cr, applyOverrides: ao } = require('../src/rules');
+  const c = cr({ exclude: { category: ['=イン', 'バー'] }, keep: { category: ['動物病院'] } });
+  const k = (o) => c({ name: 'a', category_main: 'x', phone: '1', ...o });
+  eq([k({ category_main: 'イン' }).keyword, k({ category_main: ' イン ' }).keyword], ['=イン', '=イン'], '=イン は全体一致(前後の空白は無視)');
+  eq(k({ category_main: 'インド料理店' }), null, '=イン は部分一致しない');
+  eq(k({ category_main: 'ビアバー' }).keyword, 'バー', '=なしは従来どおり部分一致');
+  eq(cr({ exclude: { category: ['病院'] }, keep: { category: ['動物病院'] } })({ category_main: '動物病院', phone: '1' }), null, 'keep: 動物病院は通る');
+  eq(cr({ exclude: { category: ['病院'] }, keep: { category: ['動物病院'] } })({ category_main: '総合病院', phone: '1' }).keyword, '病院', 'keep: 病院は除外のまま');
+  eq(cr({ exclude: { category: ['病院'], name: ['市役所'] }, keep: { category: ['動物病院'] } })({ category_main: '動物病院', name: '市役所前', phone: '1' }).column, '屋号', 'keep は他の列の判定に影響しない');
+  const merged = ao({ exclude: { category: ['病院'] }, keep: { category: ['a'] } }, { keep: { category: ['動物病院', 'a'] }, add: { category: ['=イン'] } });
+  eq([merged.keep.category, merged.exclude.category], [['a', '動物病院'], ['病院', '=イン']], 'applyOverrides: keep と add(=)を反映');
+  eq(ao({ exclude: {} }, { remove: {} }).keep, {}, 'applyOverrides: keep なしでも動く');
+
+  // 社内判断ファイルを反映した実際のルール
+  const real = cr(require('../cli/warehouse-promote').loadRules(undefined));
+  const r = (o) => real({ name: '山田', category_main: '美容院', phone: '078-000-0000', ...o });
+  for (const [o, label] of [[{ category_main: 'インテリア用品店' }, 'インテリア用品店'], [{ category_main: 'インド料理店' }, 'インド料理店'], [{ category_main: 'ハンバーガー' }, 'ハンバーガー'],
+    [{ category_main: '動物病院' }, '動物病院'], [{ category_main: 'クリニック・医院・診療所' }, 'クリニック'], [{ category_main: '内科医' }, '内科医'], [{ category_main: '企業のオフィス' }, '企業のオフィス'],
+    [{ name: '○○料理教室' }, '教室'], [{ name: '○○工場' }, '工場'], [{ name: '○○市場' }, '市場']]) eq(r(o), null, '通る: ' + label);
+  for (const [o, label] of [[{ category_main: 'イン' }, 'イン'], [{ category_main: 'バー' }, 'バー'], [{ category_main: '病院' }, '病院'], [{ name: '姫路市役所' }, '市役所'], [{ name: '○○市立中学' }, '市立'],
+    [{ name: '兵庫県庁' }, '県庁'], [{ name: '○○営業所' }, '営業所']]) ok(r(o) !== null, '除外のまま: ' + label);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

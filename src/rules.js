@@ -4,6 +4,8 @@
  * リスツール設定(.listt)の除外ルールを読み、JSで同じ判定をする。
  * 除外は「その列に filter の文字列が含まれていたら除外」(完全一致の部分文字列・大文字小文字を区別)。
  * 業種は置換(`、.*` → 空)後に判定される=先頭の1つだけで判定する。
+ * キーワードの先頭が「=」のときは完全一致(前後の空白を除いた値全体がそのキーワードと等しいときだけ該当)。例: '=イン'
+ * rules.keep(列 → キーワード配列)は例外: その列の値が keep のキーワードに該当すれば、その列では除外しない(他の列の判定は続く)。
  */
 
 const COLUMN_MAP = { '屋号': 'name', '業種': 'category', '登録URL': 'website', '電話番号': 'phone' };
@@ -74,6 +76,12 @@ function parseListt(xmlText) {
   return out;
 }
 
+/** キーワード1つが値に該当するか。先頭「=」は完全一致(前後の空白は無視)、それ以外は部分一致 */
+function kwMatches(s, kw) {
+  if (kw.length > 1 && kw[0] === '=') return s.trim() === kw.slice(1);
+  return s.includes(kw);
+}
+
 /** rules(parseListtの結果 または 保存JSON)から判定関数を作る。keep→null / 除外→{column, keyword} */
 function compileRules(rules) {
   const ex = rules.exclude || {};
@@ -84,6 +92,7 @@ function compileRules(rules) {
     ['phone', '電話番号', (r) => r.phone],
   ];
   const empty = rules.excludeEmpty || {};
+  const keep = rules.keep || {};
   return function check(row) {
     for (const [key, column, get] of spec) {
       const v = get(row);
@@ -92,7 +101,8 @@ function compileRules(rules) {
         continue;
       }
       const s = String(v);
-      for (const kw of ex[key] || []) if (s.includes(kw)) return { column, keyword: kw };
+      if ((keep[key] || []).some((kw) => kwMatches(s, kw))) continue; // 例外: この列では除外しない
+      for (const kw of ex[key] || []) if (kwMatches(s, kw)) return { column, keyword: kw };
     }
     return null;
   };
@@ -100,7 +110,8 @@ function compileRules(rules) {
 
 /**
  * 上書き設定(rules/<名前>.overrides.json)を反映する。.listt から作り直しても消えない社内判断をここに置く。
- * 形式: { "remove": { "name": ["店"] }, "add": { "name": ["…"] }, "excludeEmpty": { "phone": true } }
+ * 形式: { "remove": { "name": ["店"] }, "add": { "name": ["…"] }, "keep": { "category": ["動物病院"] }, "excludeEmpty": { "phone": true } }
+ *   add のキーワードの先頭「=」は完全一致。keep は例外(その列に含まれていれば、その列では除外しない)。
  */
 function applyOverrides(rules, ov) {
   if (!ov) return rules;
@@ -108,6 +119,8 @@ function applyOverrides(rules, ov) {
   r.exclude = r.exclude || {};
   for (const [k, list] of Object.entries(ov.remove || {})) r.exclude[k] = (r.exclude[k] || []).filter((x) => !list.includes(x));
   for (const [k, list] of Object.entries(ov.add || {})) { r.exclude[k] = r.exclude[k] || []; for (const x of list) if (!r.exclude[k].includes(x)) r.exclude[k].push(x); }
+  r.keep = r.keep || {};
+  for (const [k, list] of Object.entries(ov.keep || {})) { r.keep[k] = r.keep[k] || []; for (const x of list) if (!r.keep[k].includes(x)) r.keep[k].push(x); }
   r.excludeEmpty = Object.assign({}, r.excludeEmpty || {}, ov.excludeEmpty || {});
   return r;
 }

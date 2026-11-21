@@ -419,6 +419,7 @@ function createDefaultNightStore() {
     async schedule() { const rows = await night.makeSettingsStore(get()).read(); return { ...night.scheduleFromRows(rows, process.env), tableReady: rows !== null }; },
     async save(map) { await night.makeSettingsStore(get()).write(map); },
     async stats(sched, now) { return night.queryNightStats(get(), sched, now); },
+    pool: get,
   };
 }
 
@@ -534,13 +535,14 @@ function registerAdminWarehouse(app, deps = {}) {
   }
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+  const defaultStatsStore = deps.statsStore !== undefined ? deps.statsStore : createDefaultStatsStore();
   // --- 集計の裏実行と保存結果(画面は保存結果を読むだけ。集計は同時に1つ、既定5分・夜間10分おき) ---
   const statsRefresher = deps.statsRefresher || createStatsRefresher({
     jobs: {
       status: () => queryStats(),
       night: async () => nightStore.stats(await nightStore.schedule(), now()),
     },
-    store: deps.statsStore !== undefined ? deps.statsStore : createDefaultStatsStore(),
+    store: deps.statsStore !== undefined ? deps.statsStore : defaultStatsStore,
     getSchedule: () => nightStore.schedule(),
     validate: statsValidators,
     now: () => now().getTime(),
@@ -550,6 +552,32 @@ function registerAdminWarehouse(app, deps = {}) {
   });
   // 裏実行は server.js が autoRefresh: true で明示したときだけ始める(テストなどでは勝手にDBへ接続しない)
   if (deps.autoRefresh === true && !deps.statsRefresher) statsRefresher.start().catch((e) => console.error('[admin] stats start error:', e && e.message));
+
+  // --- 「業種ルールを通る残り」: 60分に1回だけ裏で数える(画面は保存済みの結果を読むだけ)。server.js が autoRefresh: true のときだけ始める ---
+  const rulesCounter = deps.rulesCounter || (() => {
+    const { createRulesCounter, scanRules, PAGE } = require('./nightRulesCount');
+    return createRulesCounter({
+      getPool: () => nightStore.pool(),
+      store: deps.statsStore !== undefined ? deps.statsStore : defaultStatsStore,
+      scan: async (pool) => {
+        // 夜間フォーム探し(fetchPrioritized)と同じ対象クエリ・同じ判定
+        const F = require('../cli/find-forms');
+        const P = require('../cli/warehouse-promote');
+        const base = F.parseArgs(['--source', 'warehouse', '--night']);
+        const rules = P.loadRules(undefined);
+        // ルールが読めないときは数えない(全件が「通る」と表示されて誤解を招くため)。失敗扱いにして前回の結果を残す
+        if (!rules) throw new Error('業種ルール(rules/問い合わせ営業.json)が見つかりません');
+        return scanRules({
+          pool, pageSize: PAGE, isNoPhone: P.isNoPhone,
+          check: require('./rules').compileRules(rules),
+          buildQuery: ({ cursor, limit }) => F.buildWarehouseTargetQuery({ ...base, night: true, priority: true, order: 'id', limit, cursor }),
+        });
+      },
+      intervalMs: envMinutes(process.env.ADMIN_RULES_COUNT_MINUTES, 60) * 60000,
+      onError: (e) => console.error('[admin] rulesCount error:', e && e.message),
+    });
+  })();
+  if (deps.autoRefresh === true && !deps.rulesCounter && nightStore.pool) rulesCounter.start().catch((e) => console.error('[admin] rulesCount start error:', e && e.message));
 
   /** 画面用: 保存済みの集計。{ stats(画面の値。無ければ ok:false+message), info(「○時○分時点」用) } */
   let loadWaitGaveUp = false;
@@ -926,7 +954,7 @@ function registerAdminWarehouse(app, deps = {}) {
       if (!error) error = '夜間フォーム探しの設定を読み込めませんでした。sql/warehouse_migrate_009.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。';
     }
     const snap = await readSnapshot('night', '夜間フォーム探しの件数を読み込めませんでした。sql/warehouse_migrate_009.sql を適用したか、倉庫のデータベース接続(WH_DB_*)を確認してください。');
-    await page(req, res, 'night', { nav: 'night', sched, stats: snap.stats.ok ? snap.stats : null, statsMessage: snap.stats.ok ? null : snap.stats.message, statsInfo: { ...snap.info, back: 'night' }, ...extra, error }, status);
+    await page(req, res, 'night', { nav: 'night', sched, stats: snap.stats.ok ? snap.stats : null, statsMessage: snap.stats.ok ? null : snap.stats.message, statsInfo: { ...snap.info, back: 'night' }, rulesCount: rulesCounter.get(), ...extra, error }, status);
   }
   router.get('/night', wrap((req, res) => nightPage(req, res)));
   router.post('/night/settings', wrap(async (req, res) => {
