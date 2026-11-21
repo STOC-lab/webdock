@@ -41,6 +41,10 @@
   <p class="adm-big">今夜(<%= stats.since.slice(5, 16) %> 以降)の処理: <strong><%= n(stats.totals.tonight) %></strong> 件 /
     残りの対象: <strong><%= n(stats.totals.remaining) %></strong> 件
     <span class="adm-help">(残りはURLと電話番号があって未調査の店。業種ルールで外れる店も含みます)</span></p>
+  <p class="adm-big">
+    <% if (rulesCount && rulesCount.value) { var rc = rulesCount.value; %>業種ルールを通る残り: <strong><%= n(rc.passing) %></strong> 件（ルールで外れる <%= n(rc.excluded) %> 件）
+      <span class="adm-help">(<%= fmtAt(rulesCount.at) %> に集計。60分に1回、裏で数えています<%= rulesCount.error ? '。直近の集計は失敗したため前回の結果です' : '' %><%= rulesCount.running ? '。いま再集計中' : '' %>)</span>
+    <% } else { %>業種ルールを通る残り: <span class="adm-help">集計中</span><% } %></p>
   <p>あり <strong><%= n(stats.totals.found) %></strong> / なし <strong><%= n(stats.totals.none) %></strong> /
     要確認 <strong><%= n(stats.totals.needs) %></strong> / エラー <strong><%= n(stats.totals.err) %></strong></p>
   <div class="adm-scroll">
