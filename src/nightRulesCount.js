@@ -63,6 +63,7 @@ function createRulesCounter({ getPool, store = null, scan, now = () => Date.now(
         if (store) { try { await store.write(KEY, v, at); } catch (e) { onError(e); } }
       } catch (e) {
         error = String((e && e.message) || e);
+        lastAttempt = now(); // 再試行の10分は「失敗した時刻」から数える(時間のかかった集計が失敗しても、すぐ全件を数え直さない)
         onError(e);
       } finally { running = false; }
     })();

@@ -31,6 +31,14 @@ const eq = (a, b, m) => { if (JSON.stringify(a) === JSON.stringify(b)) pass++; e
   t += 5 * 60000; eq(rc.due(), false, '失敗後10分は再試行しない');
   t += 6 * 60000; eq(rc.due(), true, '失敗後10分たてば再試行');
 
+  // 時間のかかった集計が失敗したとき: 10分は「失敗した時刻」から数える(開始時刻からではない)
+  let t2 = 5000000;
+  const slow = createRulesCounter({ getPool: () => ({}), scan: async () => { t2 += 15 * 60000; throw new Error('timeout'); }, now: () => t2, onError: () => {} });
+  await slow.refresh().done;
+  eq(slow.get().running, false, '失敗後は実行中ではない');
+  t2 += 60000; eq(slow.due(), false, '15分かかって失敗した直後(1分後)は再試行しない');
+  t2 += 10 * 60000; eq(slow.due(), true, '失敗から10分たてば再試行');
+
   // 保存・再起動後の読み込み
   const rows = {};
   const store = { async readAll() { return rows; }, async write(k, v, at) { rows[k] = { value: v, at }; return true; } };
