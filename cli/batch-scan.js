@@ -576,7 +576,8 @@ async function main() {
         optOutSet: await require('../src/pages').loadOptOutSet(stocPool),
       });
       Object.assign(preExcluded, mx.counts);
-      rows = a.limit > 0 ? mx.rows.slice(0, a.limit) : mx.rows;
+      // 診断なし(--no-scan)の上限は、画像認証などで送れない店を外したあと(src/listOnly.js)で数えるので、ここでは切らない
+      rows = (a.limit > 0 && !a.noScan) ? mx.rows.slice(0, a.limit) : mx.rows;
       directInfo = { matchedByShop: mx.matchedByShop, reviewRows: mx.review, days };
     } else {
       if (stocPool) {
@@ -593,14 +594,14 @@ async function main() {
       Object.assign(preExcluded, sel.counts);
     }
   } catch (e) { if (stocPool) await stocPool.end(); throw e; }
-  console.error('診断前に除外: ' + (Object.entries(preExcluded).map(([k, n]) => `${k} ${n}`).join(' / ') || 'なし') + (a.noScan ? ` → 送信候補 ${rows.length}社(診断なし)` : ` → 診断対象 ${rows.length}社`));
+  console.error('診断前に除外: ' + (Object.entries(preExcluded).map(([k, n]) => `${k} ${n}`).join(' / ') || 'なし') + (a.noScan ? ` → 送信候補の元 ${rows.length}社(診断なし。上限${a.limit > 0 ? ' ' + a.limit + '社' : 'なし'}は画像認証などを外したあとで数えます)` : ` → 診断対象 ${rows.length}社`));
   if (a.noScan) {
     // 診断なし: 診断・専用ページを飛ばして、倉庫の店から送信リストだけ作る
     try {
       const WS = require('../src/warehouseSends');
       const dry = !!a.dryRun;
       const res = await require('../src/listOnly').buildListOnlyFiles({
-        rows, outDir: a.singleOut, now: new Date(), dryRun: dry,
+        rows, outDir: a.singleOut, now: new Date(), dryRun: dry, limit: a.limit || 0,
         filter: { prefecture: a.prefecture || '', main_category: a.mainCategory || '', exclude_large: !!a.excludeLarge, small_only: !!a.smallOnly, form_found: !!a.formFound, limit: a.limit || 0, min_days_since_sent_wh: directInfo.days },
         preExcluded, matchedByShop: directInfo.matchedByShop, reviewRows: directInfo.reviewRows,
         wh: { fetchShops: (ids) => WS.fetchWarehouseShops(stocPool, ids), createBatch: (o) => WS.createBatch(stocPool, o) },

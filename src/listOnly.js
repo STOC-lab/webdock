@@ -38,14 +38,20 @@ function pickListCandidates(rows) {
   return { candidates, excluded };
 }
 
-function summaryText({ batches, items, excluded, dryRun, now, preExcluded = {}, reviewCount = 0, loaded = 0 }) {
+function summaryText({ batches, items, excluded, dryRun, now, preExcluded = {}, reviewCount = 0, loaded = 0, limit = 0, pickedCount = 0, cutCount = 0 }) {
   const L = [];
   L.push('【送信リストだけ作る(診断なし・倉庫から直接) まとめ】', '');
   L.push(dryRun
     ? `*** 試し(--dry-run) ***  倉庫の送信履歴に何も書いていません。バッチコードは仮です。${NOTE}。`
     : `${NOTE}。倉庫の送信履歴(stoc_master.webdock_sends)には、結果の取り込みまで「送信前(pending)」として記録しました。`);
   L.push('WEBドックの診断も御社専用ページも作っていません。本文は送信ツール側で決めた固定の文面です(このCSVの3列目は空欄)。', '');
-  L.push(`候補にした店: ${loaded}社 / 送信対象: ${items.length}社 / 送らない: ${loaded - items.length}社`, '');
+  // 上限で区切った分は「送らない理由」ではなく、今回は選ばなかっただけ(記録もしていない)なので、送らない店には数えない
+  L.push(`候補にした店: ${loaded}社 / 送信対象: ${items.length}社 / 送らない: ${loaded - items.length - cutCount}社`);
+  if (limit > 0) {
+    L.push(`上限件数: ${limit}社(画像認証・営業お断り・URL重複などを外したあとで数えています)`);
+    L.push(`選んだ店: ${loaded}社 → 送れない店を外して ${pickedCount}社 → 上限 ${limit}社で区切って 送信対象 ${items.length}社` + (cutCount ? `(区切りで外れた ${cutCount}社は今回は送らず、送信履歴にも記録していません)` : ''));
+  }
+  L.push('');
   L.push('バッチ(送信ツールに読み込ませるCSV)');
   for (const b of batches) L.push(`  ${b.code} / ${b.count}社 / ${b.file}`);
   if (!batches.length) L.push('  (送信対象がありません)');
@@ -74,12 +80,18 @@ function summaryText({ batches, items, excluded, dryRun, now, preExcluded = {}, 
  */
 async function buildListOnlyFiles(opts) {
   const { rows, outDir, now = new Date(), dryRun = false, filter = {}, preExcluded = {}, matchedByShop, reviewRows = [], wh } = opts;
+  const limit = opts.limit > 0 ? opts.limit : 0; // 上限件数。送れない店を外したあとで数える(0なら上限なし)
   if (!wh) throw new Error('倉庫の店と送信履歴の読み書き(wh)が必要です');
   fs.mkdirSync(outDir, { recursive: true });
   for (const n of fs.readdirSync(outDir)) {
     if (/^send_.+\.csv$/.test(n) || ['まとめ.txt', 'result.json', '要確認_freedial.csv'].includes(n)) fs.unlinkSync(path.join(outDir, n));
   }
-  const { candidates, excluded } = pickListCandidates(rows);
+  const picked = pickListCandidates(rows);
+  const { excluded } = picked;
+  // 画像認証などで送れない店は送信履歴に残らず毎回上位に並ぶので、上限は送れない店を外したあと(順序は保つ)に適用する
+  const candidates = limit > 0 ? picked.candidates.slice(0, limit) : picked.candidates;
+  const pickedCount = picked.candidates.length;
+  const cutCount = pickedCount - candidates.length;
   const storeMap = candidates.length ? await wh.fetchShops(candidates.map((c) => c.shopId)) : new Map();
   const items = [];
   for (const c of candidates) {
@@ -124,9 +136,9 @@ async function buildListOnlyFiles(opts) {
     batches.push({ code, count: parts[i].length, file });
   }
   if (reviewRows.length) put('要確認_freedial.csv', reviewCsvText(reviewRows));
-  put('まとめ.txt', summaryText({ batches, items, excluded, dryRun, now, preExcluded, reviewCount: reviewRows.length, loaded: rows.length }));
-  put('result.json', JSON.stringify({ dryRun, withPage: false, direct: true, listOnly: true, note: NOTE, batches, count: items.length, excluded, preExcluded, reviewCount: reviewRows.length }, null, 2) + '\n');
-  return { batches, items, excluded, files };
+  put('まとめ.txt', summaryText({ batches, items, excluded, dryRun, now, preExcluded, reviewCount: reviewRows.length, loaded: rows.length, limit, pickedCount, cutCount }));
+  put('result.json', JSON.stringify({ dryRun, withPage: false, direct: true, listOnly: true, note: NOTE, batches, count: items.length, limit, pickedCount, cutCount, excluded, preExcluded, reviewCount: reviewRows.length }, null, 2) + '\n');
+  return { batches, items, excluded, files, pickedCount, cutCount };
 }
 
 module.exports = { buildListOnlyFiles, pickListCandidates, NOTE };
