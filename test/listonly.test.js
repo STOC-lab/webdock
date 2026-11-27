@@ -50,7 +50,7 @@ async function run(rows, over = {}) {
   let error = null, res = null;
   try {
     res = await L.buildListOnlyFiles({
-      rows, outDir: dir, now: NOW, dryRun: !!over.dryRun,
+      rows, outDir: dir, now: NOW, dryRun: !!over.dryRun, limit: over.limit || 0,
       filter: { prefecture: '大阪府', main_category: '美容', limit: 0 },
       preExcluded: { '倉庫の送信履歴で送信済み(日数以内)': 4 },
       matchedByShop: over.matchedByShop || new Map([['1', 900]]),
@@ -109,6 +109,23 @@ async function run(rows, over = {}) {
     ok(!('要確認_freedial.csv' in r.files) && !('本文.txt' in r.files) && !('確認用.csv' in r.files), '要確認なし・本文なし');
     const js = JSON.parse(r.files['result.json']);
     eq([js.listOnly, js.direct, js.count, js.batches.length, js.withPage], [true, true, 2, 1, false], 'result.json');
+  }
+  // ---- 上限件数は、送れない店を外したあとで数える ----
+  {
+    const r = await run([row(1, { captcha: 'あり' }), row(2), row(3, { captcha: 'あり' }), row(4), row(5)], { limit: 2 });
+    ok(!r.error, '上限: エラーなし');
+    eq(r.res.items.map((i) => i.shopId), [2, 4], '上限2: 画像認証を外したあとの先頭2社(順序そのまま)');
+    eq(r.calls.fetch[0], [2, 4], '上限: 倉庫の店は区切った分だけ引く');
+    eq(r.calls.create[0].items.map((i) => i.shopId), [2, 4], '上限: 送信履歴に記録するのも区切った分だけ');
+    eq([r.res.pickedCount, r.res.cutCount], [3, 1], '上限: 外した後3社・区切りで1社');
+    const sm = r.files['まとめ.txt'];
+    ok(sm.includes('上限件数: 2社') && sm.includes('上限 2社で区切って 送信対象 2社') && sm.includes('送れない店を外して 3社'), 'まとめ: 上限の説明');
+    ok(!sm.includes('上限件数を超えた'), 'まとめ: 送らない理由には並べない');
+    ok(sm.includes('送らない: 2社'), 'まとめ: 送らない社数は区切り分を含めない');
+    const js = JSON.parse(r.files['result.json']);
+    eq([js.limit, js.pickedCount, js.cutCount, js.count], [2, 3, 1, 2], 'result.json: 上限');
+    const n = await run([row(1), row(2)], { limit: 5 });
+    eq([n.res.items.length, n.res.cutCount], [2, 0], '上限が多ければ区切らない');
   }
   // ---- 要確認_freedial ----
   {
