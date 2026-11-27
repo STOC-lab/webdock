@@ -25,6 +25,15 @@ const RECENT_MS = 10 * 60 * 1000;
 const STALE_LOCK_MS = 2 * 3600 * 1000;
 const LOCK_PATH = path.join(os.tmpdir(), 'webdock-import-send-results.lock');
 
+/** YYYY-MM-DD が実在する日付か(2026-02-31 などは、日付を作り直して年月日が一致するかで弾く) */
+function validDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+}
+
 function parseArgs(argv) {
   const o = { since: null, dir: DEFAULT_DIR, dryRun: false, limit: 0 };
   for (const a of argv) {
@@ -35,7 +44,7 @@ function parseArgs(argv) {
     else if ((m = /^--limit=(.*)$/.exec(a))) { o.limit = Number(m[1]); if (!Number.isInteger(o.limit) || o.limit < 1) throw new Error('--limit は1以上の整数にしてください'); }
     else throw new Error('不明なオプション: ' + a);
   }
-  if (!o.since || !/^\d{4}-\d{2}-\d{2}$/.test(o.since) || Number.isNaN(Date.parse(o.since + 'T00:00:00+09:00'))) throw new Error('--since=YYYY-MM-DD を指定してください');
+  if (!o.since || !validDate(o.since)) throw new Error('--since=YYYY-MM-DD を指定してください');
   return o;
 }
 
@@ -100,8 +109,7 @@ async function run(pool, opts, { now = Date.now(), out = log } = {}) {
       done++;
       const rowsPath = path.join(opts.dir, 'rows', f.name);
       const items = SR.parseSendResults(wh.decodeBuffer(fs.readFileSync(f.full)), fs.existsSync(rowsPath) ? wh.decodeBuffer(fs.readFileSync(rowsPath)) : null);
-      const st = await SR.applyResults(pool, items, { fileMtime: f.mtime, fileName: f.name, dryRun: opts.dryRun });
-      if (!opts.dryRun) await SR.recordImported(pool, f, st);
+      const st = await SR.applyResults(pool, items, { fileMtime: f.mtime, fileName: f.name, dryRun: opts.dryRun, track: f }); // 取り込み済みの記録も同じトランザクションで書く
       for (const k of Object.keys(total)) total[k] += st[k];
       out(`${f.name}: 行${st.rows} 倉庫${st.warehouseRows} 一致${st.matched} 成功${st.success} 失敗${st.failed} スキップ${st.skipped} 変更なし${st.unchanged} 不一致${st.unmatched} 営業お断り${st.refusal}`);
     } catch (e) {

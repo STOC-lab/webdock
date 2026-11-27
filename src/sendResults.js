@@ -10,7 +10,9 @@
  *   - バッチコード・専用ページのトークンは、rows ファイルの行を「正規化した送信先URLのSHA1(formUrlKey)」で結果行に結びつけて得る(同じキーが複数行なら最初の空でない値)。
  *   - バッチコードが whd_ で始まるものだけが倉庫の分。sender_ / exp_ は営業管理(STOC)が自分で取り込むので無視する。
  *   - バッチコードがない行(rows ファイルがない・その行にコードがない)は「代替の照合」: webdock_sends のうち
- *     send_status='pending' かつ created_at <= 結果ファイルの更新時刻 の行から、form_url_key が同じ最新の1行(created_at, id の新しい順)を選ぶ。当たらなければ無視(STOCの分かもしれない)。
+ *     created_at <= 結果ファイルの更新時刻 の行(send_status は問わない)から、form_url_key が同じ最新の行(created_at, id の新しい順)のバッチを選び、
+ *     そのバッチの同じキーの全行(同じフォームURLの店が1バッチに複数ありうる)に当てる。当たらなければ無視(STOCの分かもしれない)。
+ *     pending を条件にしないので、書き直したファイルの再処理も同じ行に当たる(success は後退せず、同じ結果は変更なしになる)。
  * 更新のルール:
  *   - success は後退させない。pending/failed/skipped → success はよい。pending → failed/skipped はよい。failed ↔ skipped は後のファイルが勝つ。
  *   - send_result = 備考(なければ「成功」)を100文字まで。sent_at = ファイルの更新時刻(success/failed のとき)。
@@ -64,7 +66,7 @@ function parseRowsText(text) {
     for (const cell of r) {
       const c = String(cell || '').trim();
       if (!batchCode && BATCH_RE.test(c)) batchCode = c.toLowerCase();
-      if (!pageToken) { const m = TOKEN_RE.exec(c); if (m) pageToken = m[1]; }
+      if (!pageToken && /webdock/i.test(c)) { const m = TOKEN_RE.exec(c); if (m) pageToken = m[1]; } // WEBドックのURLのセルだけ
     }
     const key = WS.formUrlKey(url);
     const cur = map.get(key) || { batchCode: null, pageToken: null };
@@ -95,12 +97,13 @@ const chunks = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += 
 
 /**
  * 結果を倉庫の送信履歴へ反映する。
- * opts: { fileMtime(Date), fileName, dryRun }
+ * opts: { fileMtime(Date), fileName, dryRun, track: { name, mtime, size } }
+ *   track があり dryRun でなければ、取り込み済みの記録を同じトランザクションの commit の直前に書く(更新と記録が一緒に成功/失敗する)
  * 戻り: { rows, warehouseRows, matched, success, failed, skipped, unchanged, unmatched, refusal }
  *   rows=結果の行数 / warehouseRows=倉庫の分(whd_ のコードの行 + 代替の照合で当たった行) / matched=送信履歴に当たった行
  *   success・failed・skipped=実際に更新した行 / unchanged=当たったが変えなかった行 / unmatched=whd_ のコードなのに送信履歴にない行 / refusal=営業お断りで form_no_sales にした店
  */
-async function applyResults(pool, items, { fileMtime, fileName, dryRun = false } = {}) {
+async function applyResults(pool, items, { fileMtime, fileName, dryRun = false, track = null } = {}) {
   const st = { rows: items.length, warehouseRows: 0, matched: 0, success: 0, failed: 0, skipped: 0, unchanged: 0, unmatched: 0, refusal: 0 };
   const mtime = fileMtime instanceof Date ? fileMtime : new Date(fileMtime);
   const cols = 'id, shop_id, batch_code, form_url_key, send_status, send_result';
@@ -134,18 +137,24 @@ async function applyResults(pool, items, { fileMtime, fileName, dryRun = false }
         }
       }
     }
-    const byKeyFallback = new Map(); // key → 最新の pending 1行
+    const byKeyFallback = new Map(); // key → 最新の行のバッチにある、同じキーの全行
     const plainKeys = [...new Set(plain.map((it) => it.key))];
     for (const part of chunks(plainKeys, IN_CHUNK)) {
       const [rows] = await q.query(
-        `SELECT ${cols} FROM ${SENDS} WHERE form_url_key IN (?) AND send_status = 'pending' AND created_at <= ? ORDER BY created_at DESC, id DESC`, [part, mtime]);
-      for (const r of rows) if (!byKeyFallback.has(r.form_url_key)) byKeyFallback.set(r.form_url_key, r); // 先頭 = 最新
+        `SELECT ${cols} FROM ${SENDS} WHERE form_url_key IN (?) AND created_at <= ? ORDER BY created_at DESC, id DESC`, [part, mtime]);
+      const newestBatch = new Map(); // key → 最新の行のバッチコード(先頭 = 最新)
+      for (const r of rows) if (!newestBatch.has(r.form_url_key)) newestBatch.set(r.form_url_key, r.batch_code);
+      for (const r of rows) {
+        if (r.batch_code !== newestBatch.get(r.form_url_key)) continue;
+        if (!byKeyFallback.has(r.form_url_key)) byKeyFallback.set(r.form_url_key, []);
+        byKeyFallback.get(r.form_url_key).push(r);
+      }
     }
 
     // 判定(同じ行に複数の結果が来たら、順に当てる)
     const state = new Map(); // id → { status, result }
     const cur = (r) => state.get(r.id) || { status: r.send_status, result: r.send_result };
-    const planned = new Map(); // `${status}\t${result}` → [id]
+    const planned = new Map(); // status → (result → Set(id)) 備考にタブが入っても区切りに依らない
     const touchedBatches = new Set();
     const refusalShops = new Set();
     const process1 = (it, rows, isFallback) => {
@@ -158,23 +167,23 @@ async function applyResults(pool, items, { fileMtime, fileName, dryRun = false }
         const c = cur(r);
         if (!shouldUpdate(c.status, it.result, c.result, result)) continue;
         state.set(r.id, { status: it.result, result });
-        const k = `${it.result}\t${result}`;
-        if (!planned.has(k)) planned.set(k, new Map());
-        planned.get(k).set(r.id, true);
+        if (!planned.has(it.result)) planned.set(it.result, new Map());
+        const byResult = planned.get(it.result);
+        if (!byResult.has(result)) byResult.set(result, new Set());
+        byResult.get(result).add(r.id);
         changed = true;
         if (it.result === 'failed' && REFUSAL_RE.test(it.note || '') && r.shop_id) refusalShops.add(r.shop_id);
       }
       if (changed) st[it.result]++; else st.unchanged++;
     };
     for (const it of coded) process1(it, byBatchKey.get(`${it.batchCode.toLowerCase()}\t${it.key}`) || [], false);
-    for (const it of plain) { const r = byKeyFallback.get(it.key); process1(it, r ? [r] : [], true); }
+    for (const it of plain) process1(it, byKeyFallback.get(it.key) || [], true);
     st.refusal = refusalShops.size;
 
     if (!dryRun) {
-      for (const [k, idMap] of planned) {
-        const [status, result] = k.split('\t');
+      for (const [status, byResult] of planned) for (const [result, idSet] of byResult) {
         // 同じ id が後から別の結果に変わっていたら、最後の結果だけを書く
-        const ids = [...idMap.keys()].filter((id) => state.get(id).status === status && state.get(id).result === result);
+        const ids = [...idSet].filter((id) => state.get(id).status === status && state.get(id).result === result);
         for (const part of chunks(ids, IN_CHUNK)) {
           if (status === 'skipped') {
             await conn.query(`UPDATE ${SENDS} SET send_status = ?, send_result = ? WHERE id IN (?) AND send_status <> 'success'`, [status, result, part]);
@@ -191,6 +200,7 @@ async function applyResults(pool, items, { fileMtime, fileName, dryRun = false }
       for (const part of chunks([...touchedBatches], IN_CHUNK)) {
         await conn.query(`UPDATE ${BATCHES} SET result_imported_at = NOW(), result_file = ? WHERE batch_code IN (?)`, [clip(fileName, 255), part]);
       }
+      if (track) await insertTrack(conn, track, st); // 更新と同じトランザクション(commit の直前)
       await conn.commit();
     }
   } catch (e) {
@@ -210,14 +220,14 @@ async function isImported(pool, { name, mtime, size }) {
   return r.length > 0;
 }
 
-/** 取り込んだ結果を記録する(二重に呼んでも IGNORE で安全) */
-async function recordImported(pool, { name, mtime, size }, st) {
-  await pool.query(
+/** 取り込んだ結果を記録する(二重に呼んでも IGNORE で安全)。applyResults が同じ接続のトランザクション内で呼ぶ */
+async function insertTrack(q, { name, mtime, size }, st) {
+  await q.query(
     `INSERT IGNORE INTO ${TRACK} (file_name, file_mtime, file_size, warehouse_rows, matched, success, failed, skipped, unmatched) VALUES (?,?,?,?,?,?,?,?,?)`,
     [clip(name, 255), mtime, size, st.warehouseRows, st.matched, st.success, st.failed, st.skipped, st.unmatched]);
 }
 
 module.exports = {
   TRACK, BATCH_RE, TOKEN_RE, REFUSAL_RE,
-  parseResultText, parseRowsText, parseSendResults, shouldUpdate, applyResults, isImported, recordImported,
+  parseResultText, parseRowsText, parseSendResults, shouldUpdate, applyResults, isImported,
 };
