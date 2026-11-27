@@ -207,6 +207,11 @@ allowed.forEach(ip => ok(isBlockedIp(ip)===false, 'should allow '+ip));
   c = await itemOf('https_redirect', { httpToHttps: false, finalUrl: 'http://a.example.jp/' });
   ok(c.summary==='このサイトは https に対応していません' && /保護されていない通信/.test(c.why), 'https_redirect: bad 文言');
 
+  // ---- 送信結果CSVの取り込み(PR-4)。別ファイルのテストを子プロセスで走らせる ----
+  const sr = require('child_process').spawnSync(process.execPath, [require('path').join(__dirname, 'sendresults.test.js')], { encoding: 'utf8' });
+  process.stdout.write(sr.stdout || '');
+  ok(sr.status === 0, 'sendresults.test.js が通る');
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail?1:0);
 })();

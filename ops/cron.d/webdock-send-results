@@ -1,0 +1,4 @@
+# WEBドック: 送信ツールの結果CSVを、倉庫の送信履歴へ毎時20分に取り込む(PR-4。倉庫から直接送った分)
+# 設置: sudo cp ops/cron.d/webdock-send-results /etc/cron.d/webdock-send-results   (先に sql/warehouse_migrate_014.sql を適用しておく)
+# --since より前のファイルは読まない。ログは /var/log/webdock-send-results.log
+20 * * * * root cd /var/www/webdock && /usr/bin/node cli/import-send-results.js --since=2026-11-11 >> /var/log/webdock-send-results.log 2>&1

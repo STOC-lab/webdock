@@ -4,7 +4,7 @@
  * 表は sql/warehouse_migrate_010.sql。営業管理(stoc_sales)へは書き込まない。読むだけ(SELECT)。
  *
  *  - バッチコード: whd_YYYYMMDD_HHmmss_xxxx(STOCの sender_… と頭が違うので、STOCの結果の戻しや送信済みの判定と混ざらない)
- *  - 送信履歴で外す日数の既定は 60日。送信結果の取り込み(PR-4)ができるまでは pending も「送信済み」に数える(取り込み前に重ねて送らない)
+ *  - 送信履歴で外す日数の既定は 60日。pending(結果の取り込み前)も「送信済み」に数える(取り込み前に重ねて送らない)。結果は cli/import-send-results.js(PR-4)が毎時取り込む
  *  - 直接送信の対象外の県(兵庫・岡山・徳島・香川・愛媛・高知)は営業管理経由に限る
  * プールは引数で受ける(テストでは偽物を渡す)。
  */
@@ -20,7 +20,7 @@ const SHOPS = 'stoc_master.shops';
 const DIRECT_EXCLUDED_PREFECTURES = ['兵庫県', '岡山県', '徳島県', '香川県', '愛媛県', '高知県'];
 /** 倉庫の送信履歴で外す日数の既定 */
 const DEFAULT_MIN_DAYS_WH = 60;
-/** 「送信済み」に数える状態。failed・skipped は数えない(失敗した店は次回また送ってよい。PR-4 で営業お断りが理由の失敗だけ別に除外する予定) */
+/** 「送信済み」に数える状態。failed・skipped は数えない(失敗した店は次回また送ってよい。営業お断りが理由の失敗は PR-4 の取り込みが shops.form_no_sales=1 にするので、warehouseWhere が外す) */
 const COUNTED_SEND_STATUS = ['pending', 'success'];
 const MAX_DAYS = 3650;
 
@@ -50,7 +50,7 @@ function newBatchCode(now = new Date(), rand) {
 
 /**
  * 送信先URLの正規化: スキーム・ホストは小文字、既定のポート・「#」以降・パス末尾の「/」は落とす(パスの大文字小文字と「?」以降は残す)。
- * URLとして読めなければ前後の空白だけ取る。結果CSV(PR-4)も同じ関数で「バッチコード + 送信先URL」を照合する。
+ * URLとして読めなければ前後の空白だけ取る。結果CSVの取り込み(src/sendResults.js)も同じ関数で「バッチコード + 送信先URL」を照合する。
  */
 function normalizeFormUrl(url) {
   const s = String(url === undefined || url === null ? '' : url).trim();
