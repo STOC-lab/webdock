@@ -212,6 +212,11 @@ allowed.forEach(ip => ok(isBlockedIp(ip)===false, 'should allow '+ip));
   process.stdout.write(sr.stdout || '');
   ok(sr.status === 0, 'sendresults.test.js が通る');
 
+  // ---- 診断なしで送信リストだけ(--direct --no-scan)。別ファイルのテストを子プロセスで走らせる ----
+  const lo = require('child_process').spawnSync(process.execPath, [require('path').join(__dirname, 'listonly.test.js')], { encoding: 'utf8' });
+  process.stdout.write(lo.stdout || '');
+  ok(lo.status === 0, 'listonly.test.js が通る');
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail?1:0);
 })();

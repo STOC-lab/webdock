@@ -459,10 +459,11 @@ function parseArgs(argv) {
     else if (k === '--exclude-category-like') a.excludeCategoryLike = argv[++i];
     else if (k === '--min-days-since-sent') a.minDaysSinceSent = parseInt(argv[++i], 10);
     else if (k === '--direct') a.direct = true;
+    else if (k === '--no-scan') a.noScan = true;
     else if (k === '--min-days-since-sent-wh') a.minDaysSinceSentWh = parseInt(argv[++i], 10);
     else if (k === '--dry-run') a.dryRun = true;
   }
-  if (a.direct) a.withPage = true; // 倉庫から直接は専用ページ付きだけ
+  if (a.direct && !a.noScan) a.withPage = true; // 倉庫から直接は専用ページ付きだけ(--no-scan の送信リストだけは診断も専用ページもなし)
   return a;
 }
 
@@ -473,6 +474,11 @@ function parseArgs(argv) {
 function directArgsError(a) {
   if (!String(a.prefecture || '').trim()) return '--direct には --prefecture が必要です(県を指定しないと対象外の県が含まれます)。';
   return require('../src/warehouseSends').directPrefectureError(a.prefecture);
+}
+
+/** --no-scan(診断なし・送信リストだけ)は --direct と一緒のときだけ。問題があればメッセージ、なければ null */
+function noScanArgsError(a) {
+  return a.noScan && !a.direct ? '--no-scan は --direct と一緒のときだけ使えます。' : null;
 }
 
 async function main() {
@@ -492,11 +498,13 @@ async function main() {
     // 倉庫の送信履歴で外す日数(--min-days-since-sent-wh)は --direct と、営業管理経由の --single-out で使う
     || (a.direct && (!fromWh || a.template !== 'b2b' || !a.singleOut || a.groupOut || a.dryRunStoc))
     || (a.dryRun && !a.direct)
+    || noScanArgsError(a)
     || (a.minDaysSinceSentWh !== undefined && (!(a.direct || a.singleOut) || !(Number.isInteger(a.minDaysSinceSentWh) && a.minDaysSinceSentWh >= 0 && a.minDaysSinceSentWh <= 3650)))) {
     console.error('使い方: node cli/batch-scan.js (--in list.tsv | --source warehouse --prefecture 兵庫県 [--main-category 製造,建設] [--exclude-large|--small-only] [--form-found])\n'
       + '        --out result.csv [--group-out dir | --single-out dir [--dry-run-stoc] [--with-page] (b2bのみ。--outは省略可)] [--concurrency 5] [--limit N] [--template west|east|auto|b2b] [--subject 1-3] [--max-chars N] [--resume]\n'
       + '        営業管理の送信成功済みの店から: --source stoc-sent --template b2b --single-out dir (--prefecture 兵庫県,大阪府 | --nationwide) [--category-like a,b] [--exclude-category-like 病院] [--min-days-since-sent 14] [--limit N]\n'
-      + '        倉庫から直接(営業管理に入れない): --source warehouse --template b2b --single-out dir --direct --prefecture 大阪府,京都府 [--min-days-since-sent-wh 60] [--dry-run] [--limit N]');
+      + '        倉庫から直接(営業管理に入れない): --source warehouse --template b2b --single-out dir --direct --prefecture 大阪府,京都府 [--min-days-since-sent-wh 60] [--dry-run] [--limit N]\n'
+      + '        診断なしで送信リストだけ(倉庫から直接。無料掲載の案内など): 上の倉庫から直接に --no-scan を付ける(--direct 必須。専用ページは作らない)');
     process.exit(2);
   }
   const directErr = a.direct ? directArgsError(a) : null;
@@ -519,7 +527,7 @@ async function main() {
     try {
       if (a.direct) {
         // 倉庫から直接: 営業管理は読み取りだけ。倉庫の送信履歴・専用ページへの書き込みを確認する(--dry-run は倉庫にも書かないので読み取りだけ)
-        await require('../src/warehouseSends').checkDirectAccess(stocPool, { dryRun: !!a.dryRun, checkPages: require('../src/pages').checkWarehousePageAccess });
+        await require('../src/warehouseSends').checkDirectAccess(stocPool, { dryRun: !!a.dryRun, checkPages: a.noScan ? undefined : require('../src/pages').checkWarehousePageAccess });
       } else {
         await require('../src/stocBatch').checkStocAccess(stocPool, { readOnly: !!a.dryRunStoc });
         // 専用ページ版: ページの表と、STOCの見込み客・閲覧への書き込み権限も、診断の前に確認する(試しのときはページを作らないので確認しない)
@@ -585,7 +593,22 @@ async function main() {
       Object.assign(preExcluded, sel.counts);
     }
   } catch (e) { if (stocPool) await stocPool.end(); throw e; }
-  console.error('診断前に除外: ' + (Object.entries(preExcluded).map(([k, n]) => `${k} ${n}`).join(' / ') || 'なし') + ` → 診断対象 ${rows.length}社`);
+  console.error('診断前に除外: ' + (Object.entries(preExcluded).map(([k, n]) => `${k} ${n}`).join(' / ') || 'なし') + (a.noScan ? ` → 送信候補 ${rows.length}社(診断なし)` : ` → 診断対象 ${rows.length}社`));
+  if (a.noScan) {
+    // 診断なし: 診断・専用ページを飛ばして、倉庫の店から送信リストだけ作る
+    try {
+      const WS = require('../src/warehouseSends');
+      const dry = !!a.dryRun;
+      const res = await require('../src/listOnly').buildListOnlyFiles({
+        rows, outDir: a.singleOut, now: new Date(), dryRun: dry,
+        filter: { prefecture: a.prefecture || '', main_category: a.mainCategory || '', exclude_large: !!a.excludeLarge, small_only: !!a.smallOnly, form_found: !!a.formFound, limit: a.limit || 0, min_days_since_sent_wh: directInfo.days },
+        preExcluded, matchedByShop: directInfo.matchedByShop, reviewRows: directInfo.reviewRows,
+        wh: { fetchShops: (ids) => WS.fetchWarehouseShops(stocPool, ids), createBatch: (o) => WS.createBatch(stocPool, o) },
+      });
+      console.error(`送信リスト出力: ${a.singleOut} に ${res.files.length}ファイル / 送信対象 ${res.items.length}社 / バッチ ${res.batches.map((b) => b.code + '(' + b.count + ')').join(', ') || 'なし'}${dry ? ' [倉庫から直接・診断なし・試し(何も書いていない)]' : ' [倉庫から直接・診断なし・倉庫の送信履歴に記録済み・営業管理には登録していない]'}。まとめ.txt を確認してください。`);
+    } finally { await stocPool.end(); }
+    return;
+  }
   fs.mkdirSync(path.dirname(path.resolve(a.out)), { recursive: true });
   process.on('SIGINT', () => {
     if (stopRequested) process.exit(130);
@@ -635,6 +658,6 @@ async function main() {
   console.error(`完了: ${stats.done}件処理 / 送信推奨 ${stats.send}件 / エラー ${stats.errors}件 / 再開でスキップ ${stats.skipped}件`);
 }
 
-module.exports = { directArgsError, loadResultsByStore, selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, PHP_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
+module.exports = { directArgsError, noScanArgsError, loadResultsByStore, selectForScan, loadWarehouseRows, runBatch, parseInput, parseInputBuffer, buildWarehouseQuery, buildClaimExcludedCountQuery, checkClaimAccess, claimConditions, grantStatements, parseArgs, main, B2B_COLUMNS, PHP_COLUMNS, parseDelimited, csvField, csvLine, scanOne, COLUMNS };
 
 if (require.main === module) main().catch((e) => { console.error(e && (e.claimCheck || e.stocCheck || e.pageCheck) ? 'エラー: ' + e.message : e); process.exit(1); });

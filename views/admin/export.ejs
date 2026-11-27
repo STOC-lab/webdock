@@ -67,7 +67,9 @@
       <button class="adm-btn adm-btn2" type="submit" name="action" value="report">件数を確認(CSVは作らない)</button>
       <button class="adm-btn" type="submit" name="action" value="make" id="makebtn">CSVを作る</button>
       <button class="adm-btn adm-btn2" type="submit" name="action" value="scan" id="scanbtn">診断して文面も作る</button>
+      <button class="adm-btn adm-btn2" type="submit" name="action" value="listonly" id="listonlybtn">送信リストだけ作る(診断なし・倉庫から直接)</button>
     </div>
+    <p class="adm-help" id="listonlyhelp">「送信リストだけ作る」は工場・建設用だけです。無料掲載の案内など、文面を送信ツール側で決める送信用です。診断・専用ページはなく、倉庫のフォームが見つかった店から送信用CSVだけを作り、送ったことは倉庫の送信履歴に記録します(営業管理には登録しません。結果は毎時自動で取り込まれます)。<%= directNg.join('・') %> は選べません。使う欄: 県・主業種キーワード・規模・上限件数・「倉庫の送信履歴で外す日数」。</p>
     <p class="adm-help" id="scanhelp">「診断して文面も作る」は工場・建設用と、送信成功済みの店だけです。各サイトを診断し、問い合わせ用の文面(件名・本文)つきのCSV(UTF-8)を作ります。出力済みの印は付きません。1サイト1〜3秒ほどかかり、2,000サイトでおよそ1時間前後です(この間、他の作業は始められません)。</p>
     <div class="adm-warn">「CSVを作る」を押すと、出した店には「出力済み」の印が付き、次回からは出ません。作ったCSVは必ずダウンロードしてから画面を離れてください(下の一覧からあとでもダウンロードできます)。</div>
   </form>
@@ -132,6 +134,8 @@
     document.getElementById('filterbox').style.display = st ? 'none' : '';
     document.getElementById('scanbtn').style.display = b || st ? '' : 'none';
     document.getElementById('scanhelp').style.display = b || st ? '' : 'none';
+    document.getElementById('listonlybtn').style.display = b ? '' : 'none';
+    document.getElementById('listonlyhelp').style.display = b ? '' : 'none';
     document.getElementById('makebtn').style.display = st ? 'none' : '';
     document.querySelector('button[value=report]').style.display = st ? 'none' : '';
     // 送り方「倉庫から直接」(工場・建設用だけ): 対象外の県を選べなくし、日数の欄を出し、専用ページは常に付ける
@@ -161,6 +165,11 @@
   document.getElementById('selnone').onclick = function () { all(false); };
   document.getElementById('scanbtn').addEventListener('click', function (e) {
     if (!confirm('選んだ条件の店をすべて診断します。時間がかかります(2,000サイトで1時間前後)。始めますか?')) e.preventDefault();
+  });
+  document.getElementById('listonlybtn').addEventListener('click', function (e) {
+    var ng = Array.prototype.some.call(form.querySelectorAll('input[name=pref]:checked'), function (c) { return DIRECT_NG.indexOf(c.value) >= 0; });
+    if (ng) { alert('兵庫・岡山・徳島・香川・愛媛・高知は選べません。県の選択を外してください。'); e.preventDefault(); return; }
+    if (!confirm('選んだ条件の店の送信リストを作り、倉庫の送信履歴に記録します(診断はしません)。始めますか?')) e.preventDefault();
   });
   document.getElementById('phonebtn').addEventListener('click', function (e) {
     if (!confirm('選んだ条件の店をすべて診断し、点数が範囲内のサイトの更新日を調べます。時間がかかります(2,000件で1時間前後)。始めますか?')) e.preventDefault();

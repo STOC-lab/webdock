@@ -115,6 +115,13 @@ function buildItems(candidates, storeMap, templates, excluded, { withPage = fals
   return items;
 }
 
+/** 要確認_freedial.csv の中身(BOM付き)。フリーダイヤルだけで営業管理の店と一致した店(送らない) */
+function reviewCsvText(reviewRows) {
+  return '﻿' + csvLine(REVIEW_HEADER) + reviewRows.map((x) => csvLine([
+    x.row.store_id, x.row.name, x.row.address, x.row.phone, (x.free || []).map((f) => f.number).join(' / '),
+    (x.free || []).map((f) => f.stores).join(' / '), (x.freeIds || []).join(' / ')])).join('');
+}
+
 /** 送信ツール用の1行(9列・位置固定)。col3=[name]=指摘の一文、col4=[param1]=ドメイン(専用ページ版はページのURL)、col6 は STOC と同じ書式 */
 function senderRow(it, code) {
   return [it.formUrl, it.company, it.sentence, it.pageUrl || it.domain, it.audience, S.ratingInfo(it.store), code, S.contactPhone(it.store), it.store.address || ''];
@@ -274,9 +281,7 @@ async function buildSingleFiles(opts) {
     it.rec['store_id'], it.stocId || '', it.company, it.domain, it.industry, GROUP_LABEL[it.key], it.sentence, it.formUrl,
     S.contactPhone(it.store), it.store.address || '', it.batchCode, ...(withPage ? [it.pageUrl] : [])])).join(''));
   if (direct) {
-    put('要確認_freedial.csv', '﻿' + csvLine(REVIEW_HEADER) + reviewRows.map((x) => csvLine([
-      x.row.store_id, x.row.name, x.row.address, x.row.phone, (x.free || []).map((f) => f.number).join(' / '),
-      (x.free || []).map((f) => f.stores).join(' / '), (x.freeIds || []).join(' / ')])).join(''));
+    put('要確認_freedial.csv', reviewCsvText(reviewRows));
   }
   put('本文.txt', body + '\n');
   put('まとめ.txt', summaryText({ batches, items, excluded, body, dryRun, now, scanned: rows.length, preExcluded, withPage, direct, reviewCount: reviewRows.length }));
@@ -285,4 +290,4 @@ async function buildSingleFiles(opts) {
   return { batches, items, excluded, files, body };
 }
 
-module.exports = { SENDER_HEADER, CHECK_HEADER, CHECK_HEADER_PAGE, pageSentence, renderBody, pickCandidates, buildItems, senderRow, bodyLengths, summaryText, buildSingleFiles, csvLine };
+module.exports = { SENDER_HEADER, CHECK_HEADER, CHECK_HEADER_PAGE, pageSentence, renderBody, pickCandidates, buildItems, senderRow, bodyLengths, summaryText, buildSingleFiles, csvLine, reviewCsvText };
