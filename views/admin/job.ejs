@@ -4,6 +4,7 @@
   <p>状態: <span class="adm-badge adm-<%= job.status %>" id="status"><%= job.status === 'running' ? '実行中…' : job.status === 'success' ? '成功' : '失敗' %></span>
     <span class="adm-help" id="times">開始 <%= fmtTime(job.startedAt) %><%= job.endedAt ? ' ／ 終了 ' + fmtTime(job.endedAt) : '' %></span></p>
   <% if (job.meta && job.meta.direct) { %><p class="adm-help">送り方: 倉庫から直接(営業管理には登録しません)</p><% } %>
+  <% if (job.meta && job.meta.listOnly) { %><p class="adm-help">診断なし・倉庫から直接。営業管理には登録していません。送信結果は毎時自動で倉庫に取り込まれます</p><% } %>
   <div id="dl"><% if (job.downloadUrl) { %>
     <a class="adm-btn adm-link" href="<%= job.downloadUrl %>">CSVをダウンロード(<%= job.exportFile %>)</a>
     <% if (/^phone_list_/.test(job.exportFile || '')) { %><div class="adm-help">電話営業リスト(UTF-8)です。倉庫に「出力済み」の印は付けていません。途中経過は同じ名前に .jsonl を付けた記録ファイルに残ります。</div>
@@ -25,7 +26,12 @@
   <% } %>
   <% if (typeof singleView !== 'undefined' && singleView) { %>
   <h3>送信用ファイル(全社共通の本文・1つの宛先CSV)</h3>
-  <% if (singleView.direct) { %>
+  <% if (singleView.listOnly) { %>
+  <div class="adm-help">送り方: <strong>診断なし・倉庫から直接</strong>(専用ページなし。送信用CSVの3列目は空欄で、本文は送信ツール側で決めます)。営業管理には登録していません。送信結果は毎時自動で倉庫に取り込まれます。</div>
+  <% if (singleView.dryRun) { %><div class="adm-warn">試し(--dry-run)です。倉庫の送信履歴に何も書いていません。バッチコードは仮です。</div>
+  <% } else { %><div class="adm-help">倉庫の送信履歴に記録したバッチコード:</div>
+  <% } %>
+  <% } else if (singleView.direct) { %>
   <div class="adm-help">送り方: <strong>倉庫から直接</strong>(御社専用ページ付き。送信用CSVの4列目が専用ページのURL。閲覧・申込は <a href="<%= BASE %>/pages">専用ページの一覧</a> に出ます。営業管理の見込み客には届きません)<% if (singleView.dryRun) { %>。試しのためページは作っていません<% } %></div>
   <% if (singleView.dryRun) { %><div class="adm-warn">試し(--dry-run)です。倉庫の送信履歴にも専用ページにも何も書いていません。バッチコードは仮です。営業管理には登録していません。</div>
   <% } else { %><div class="adm-help">営業管理には登録していません。送信結果の取り込みは今後の機能で対応します。倉庫の送信履歴に記録したバッチコード:</div>

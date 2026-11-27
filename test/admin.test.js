@@ -343,6 +343,25 @@ function multipart(fields, files) {
       ok(!ctx.jobs.started[ctx.jobs.started.length - 1].args.includes('--direct') && !ctx.jobs.started[ctx.jobs.started.length - 1].meta.direct, '営業管理経由の引数・metaは今までどおり');
     }
 
+    // 送信リストだけ作る(診断なし・倉庫から直接)
+    {
+      const page = await (await ctx.req(BASE + '/export', { headers: { cookie } })).text();
+      ok(page.includes('value="listonly"') && page.includes('送信リストだけ作る(診断なし・倉庫から直接)'), '画面: 送信リストだけ作るボタン');
+      const before = ctx.jobs.started.length;
+      const post = (o) => ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ preset: 'b2b', action: 'listonly', _csrf: csrf, ...o }) });
+      const ng = await post({ pref: ['大阪府', '兵庫県'] });
+      eq([ng.status, ctx.jobs.started.length], [400, before], '送信リスト: 兵庫県はサーバー側で拒否(jobは始まらない)');
+      const sp = await post({ pref: ['大阪府'], preset: 'stocsent' });
+      eq([sp.status, ctx.jobs.started.length], [400, before], '送信リスト: 送信成功済みの店は拒否');
+      const okp = await post({ pref: ['大阪府'], direct_days: '30' });
+      eq(okp.status, 303, '送信リスト: 開始');
+      const spec = ctx.jobs.started[ctx.jobs.started.length - 1];
+      ok(spec.args.includes('--direct') && spec.args.includes('--no-scan') && !spec.args.includes('--with-page') && spec.args.includes('--form-found'), '送信リスト: 引数');
+      eq([spec.meta.direct, spec.meta.listOnly, spec.meta.withPage], [true, true, false], '送信リスト: job の meta');
+      const lj = await (await ctx.req(BASE + '/jobs/' + ctx.jobs.started.length, { headers: { cookie } })).text();
+      ok(lj.includes('診断なし・倉庫から直接。営業管理には登録していません。送信結果は毎時自動で倉庫に取り込まれます'), '送信リスト: 作業画面の文言');
+    }
+
     // グループ別ファイル(診断して文面も作る)
     const scanPost =await ctx.req(BASE + '/export', { method: 'POST', headers: { ...URLENC, cookie }, body: form({ pref: ['兵庫県'], preset: 'b2b', action: 'scan', _csrf: csrf }) });
     eq(scanPost.status, 303, '診断開始');

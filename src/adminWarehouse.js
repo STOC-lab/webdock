@@ -256,6 +256,42 @@ function buildB2bScanArgs(body, { exportDir, now }) {
 }
 
 /**
+ * 「送信リストだけ作る(診断なし・倉庫から直接)」: 工場・建設用の絞り込みを batch-scan.js(--direct --no-scan)に渡す引数にする。
+ * 診断も専用ページも作らず、送信用CSVだけを作る(送ったことは倉庫の送信履歴に記録)。フォームが見つかった店だけが対象(--form-found は常に付く)。
+ * 兵庫・岡山・徳島・香川・愛媛・高知は選べない。body.direct_days = 倉庫の送信履歴で外す日数、既定60。
+ */
+function buildListOnlyArgs(body, { exportDir, now }) {
+  if (body.preset === 'stocsent') return { error: '「送信リストだけ作る」は工場・建設用だけです(送信成功済みの店では使えません)。' };
+  const prefs = toList(body.pref).filter((p, i, a) => a.indexOf(p) === i);
+  if (!prefs.length) return { error: '都道府県を1つ以上選んでください。' };
+  if (prefs.some((p) => !PREFECTURES.includes(p))) return { error: '都道府県の指定が正しくありません。' };
+  const pe = WS.directPrefectureError(prefs);
+  if (pe) return { error: pe };
+  let days = WS.DEFAULT_MIN_DAYS_WH;
+  if (body.direct_days !== undefined && String(body.direct_days).trim() !== '') {
+    days = Number(String(body.direct_days).trim());
+    if (!Number.isInteger(days) || days < 0 || days > 3650) return { error: '倉庫の送信履歴で外す日数は0以上3650以下の整数で入力してください。' };
+  }
+  const size = ['exclude_large', 'small_only', 'none'].includes(body.size) ? body.size : 'none';
+  let limit = 5000;
+  if (body.limit !== undefined && String(body.limit).trim() !== '') {
+    limit = Number(String(body.limit).trim());
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000000) return { error: '上限件数は1以上の整数で入力してください。' };
+  }
+  const raw = String(body.main_category || '').trim() || DEFAULT_MAIN_CATEGORY;
+  const cats = raw.split(/[,、，\s]+/).map((x) => x.trim()).filter(Boolean);
+  if (!cats.length || cats.length > 60 || cats.some((c) => c.length > 20 || /[\u0000-\u001f]/.test(c))) {
+    return { error: '業種キーワードの入力が正しくありません(カンマ区切り・1語20文字まで)。' };
+  }
+  const args = ['cli/batch-scan.js', '--source', 'warehouse', '--template', 'b2b', '--prefecture', prefs.join(','), '--main-category', cats.join(','), '--form-found'];
+  if (size === 'exclude_large') args.push('--exclude-large');
+  else if (size === 'small_only') args.push('--small-only');
+  const singleDir = `b2b_${stamp(now)}`;
+  args.push('--limit', String(limit), '--single-out', path.join(exportDir, singleDir), '--direct', '--no-scan', '--min-days-since-sent-wh', String(days));
+  return { args, singleDir, withPage: false, preset: 'b2b', estimateHours: 1, direct: true, listOnly: true, days };
+}
+
+/**
  * 「電話営業リストを作る」: cli/phone-list.js に渡す引数にする。
  * 点数が範囲内のサイトだけ更新日を調べ、直近N日以内に更新があった会社を phone_list_<日時>.csv(UTF-8・BOM付き)に出す。
  * 業種キーワードは空なら絞らない。倉庫には「出力済み」の印を付けない。
@@ -672,7 +708,7 @@ function registerAdminWarehouse(app, deps = {}) {
       .map((b) => ({ code: b.code, count: Number(b.count) || 0, file: `send_${b.code}.csv`, url: url(`send_${b.code}.csv`) }));
     const link = (n) => (g.names.includes(n) ? { name: n, url: url(n) } : null);
     return {
-      dirName, dryRun: !!r.dryRun, withPage: !!r.withPage, direct: !!r.direct, count: Number(r.count) || 0, batches,
+      dirName, dryRun: !!r.dryRun, withPage: !!r.withPage, direct: !!r.direct, listOnly: !!r.listOnly, count: Number(r.count) || 0, batches,
       freedial: link('要確認_freedial.csv'), reviewCount: Number(r.reviewCount) || 0,
       body: g.names.includes('本文.txt') ? { ...link('本文.txt'), text: readText(g.dir, '本文.txt') } : null,
       check: link('確認用.csv'),
@@ -845,6 +881,16 @@ function registerAdminWarehouse(app, deps = {}) {
     }
     if (req.body.preset === 'stocsent' && req.body.action !== 'scan') {
       return exportPage(req, res, { error: '「送信成功済みの店」は「診断して文面も作る」だけです(CSVの書き出しはありません)。', form: req.body }, 400);
+    }
+    if (req.body.action === 'listonly') {
+      const lb = buildListOnlyArgs(req.body, { exportDir, now: now() });
+      if (lb.error) return exportPage(req, res, { error: lb.error, form: req.body }, 400);
+      const lr = jobs.start({
+        title: '送信リストだけ作る(診断なし・倉庫から直接)',
+        args: lb.args, meta: { singleDir: lb.singleDir, withPage: false, direct: true, listOnly: true },
+      });
+      if (!lr.ok) return exportPage(req, res, { error: lr.message, runningId: lr.runningId, form: req.body }, 409);
+      return res.redirect(303, `${BASE}/jobs/${lr.id}`);
     }
     if (req.body.action === 'scan') {
       // 「送信成功済みの店」は営業管理の店が対象なので、倉庫から直接は選べない
@@ -1048,4 +1094,4 @@ function registerAdminWarehouse(app, deps = {}) {
 }
 
 module.exports = {
-  parseNightForm, parseImportSummary, registerAdminWarehouse, clientIp, buildScoreScanArgs, buildPromoteArgs, buildB2bScanArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
+  parseNightForm, parseImportSummary, registerAdminWarehouse, clientIp, buildScoreScanArgs, buildPromoteArgs, buildB2bScanArgs, buildListOnlyArgs, buildPhoneListArgs, buildStocSentScanArgs, sanitizeFileName, extractZip, assertSafeEntryName, EXPORT_NAME, GROUP_DIR, GROUP_FILE, SINGLE_FILE, DEFAULT_MAIN_CATEGORY, IMPORT_PATTERN };
